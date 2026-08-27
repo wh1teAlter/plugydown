@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plugydown.dev/schemas/context/task-envelope/v1.json",
+  "title": "Plugydown Context internal role task envelope",
+  "description": "Identical across platforms except for how the role body is carried.",
+  "type": "object",
+  "required": ["role", "goal", "scope", "allowedReads", "allowedWrites", "outputContract", "budget"],
+  "additionalProperties": false,
+  "properties": {
+    "role": { "enum": ["investigator", "reflector", "recorder"] },
+    "goal": { "type": "string", "minLength": 1 },
+    "scope": { "type": "object" },
+    "runId": { "type": "string", "minLength": 1 },
+    "sourceState": { "type": "string", "minLength": 1 },
+    "inputs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "allowedReads": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "allowedWrites": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "outputContract": { "type": "string", "minLength": 1 },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "items": { "type": "integer", "minimum": 1 },
+        "files": { "type": "integer", "minimum": 1 },
+        "estimatedTokens": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "stopConditions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "roleBody": {
+      "type": "string",
+      "description": "Present only where the host cannot dispatch a native agent. Carries the same authoritative role text."
+    }
+  }
+}

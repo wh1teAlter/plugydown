@@ -1,0 +1,28 @@
+{
+  "name": "plugydown-workspace",
+  "type": "module",
+  "version": "0.0.0-private",
+  "private": true,
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=23.5.0"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "pnpm -r --if-present run test",
+    "build": "pnpm -r --if-present run build",
+    "validate": "pnpm -r --if-present run validate",
+    "inspect": "pnpm -r --if-present run inspect",
+    "dev": "pnpm --filter @plugydown/context run dev",
+    "verify": "pnpm -r --if-present run verify",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:"
+  }
+}

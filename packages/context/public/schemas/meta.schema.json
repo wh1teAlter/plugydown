@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plugydown.dev/schemas/context/meta/v1.json",
+  "title": "Plugydown Context validity ledger",
+  "type": "object",
+  "required": ["$schema", "toolVersion", "fingerprintVersion", "documents"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "const": "plugydown.context.meta/v1" },
+    "toolVersion": { "type": "string", "minLength": 1 },
+    "fingerprintVersion": { "type": "string", "minLength": 1 },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {
+          "type": "object",
+          "required": ["revision", "treeFingerprint"],
+          "additionalProperties": false,
+          "properties": {
+            "revision": { "type": "string", "minLength": 1 },
+            "treeFingerprint": { "type": "string", "minLength": 1 },
+            "verifiedAt": { "type": "string", "description": "Audit only. Never an equality input." }
+          }
+        }
+      }
+    },
+    "documents": {
+      "type": "object",
+      "description": "Keyed by stable document ID. Never by path.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["frontMatterFingerprint", "bodyFingerprint", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "frontMatterFingerprint": { "type": "string", "minLength": 1 },
+          "bodyFingerprint": { "type": "string", "minLength": 1 },
+          "sourceFingerprint": { "type": "string", "minLength": 1 },
+          "validatedSourceState": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["valid", "stale", "unverified"] }
+        }
+      }
+    },
+    "convergence": {
+      "type": "object",
+      "required": ["source", "documentCount", "estimatedTokens"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "enum": ["init", "prune"] },
+        "documentCount": { "type": "integer", "minimum": 0 },
+        "frontMatterBytes": { "type": "integer", "minimum": 0 },
+        "bodyBytes": { "type": "integer", "minimum": 0 },
+        "estimatedTokens": { "type": "integer", "minimum": 0 },
+        "perDomain": { "type": "object", "additionalProperties": { "type": "object" } }
+      }
+    }
+  }
+}

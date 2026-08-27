@@ -1,0 +1,38 @@
+{
+  "name": "@plugydown/context",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Persistent repository knowledge and engineering workflows for AI coding assistants.",
+  "license": "MIT",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=23.5.0"
+  },
+  "scripts": {
+    "dev": "aaplugin dev",
+    "build": "aaplugin build",
+    "validate": "aaplugin validate",
+    "inspect": "aaplugin inspect --json",
+    "verify:forbidden": "node scripts/verify/forbidden.mjs",
+    "verify:compatibility": "node scripts/verify/compatibility.mjs",
+    "verify:determinism": "node scripts/verify/determinism.mjs",
+    "verify:archive": "node scripts/verify/archive.mjs",
+    "smoke:install": "node scripts/smoke/install.mjs",
+    "verify": "pnpm verify:forbidden && pnpm verify:compatibility && pnpm verify:determinism && pnpm verify:archive",
+    "typecheck": "tsc --noEmit",
+    "pretest": "aaplugin build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "yaml": "catalog:"
+  },
+  "devDependencies": {
+    "@aaplugin/extension-hooks": "catalog:",
+    "@aaplugin/kit": "catalog:",
+    "@aaplugin/platform-claude-code": "catalog:",
+    "@aaplugin/platform-codex": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
