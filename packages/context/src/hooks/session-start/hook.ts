@@ -2,28 +2,22 @@ import type { Hook } from '@aaplugin/extension-hooks'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
-/** Returns a short, path-free cold-start signal for the Operating Skill. */
+/** Best-effort discovery hint; Runtime inspection remains authoritative. */
 export default {
   event: 'SessionStart',
   async run(input, _context) {
     try {
-      let recognized = false
-      try {
-        const raw = JSON.parse(await fs.readFile(path.join(input.cwd, 'context', 'meta.json'), 'utf8')) as Record<string, unknown>
-        recognized = raw.$schema === 'plugydown.context.meta/v1' && typeof raw.toolVersion === 'string'
-      }
-      catch {
-        recognized = false
-      }
-      return {
-        decision: 'continue' as const,
-        additionalContext: recognized
-          ? 'Plugydown Context is available; formal knowledge is recognized. Continue with a targeted cold-start read.'
-          : 'Plugydown Context is available; formal knowledge is not recognized. Continue with a cold-start inventory.',
+      const info = await fs.lstat(path.join(input.cwd, 'context', 'meta.json'))
+      if (info.isFile()) {
+        return {
+          decision: 'continue' as const,
+          additionalContext: 'Plugydown Context may be available. Load the Context Operating Skill and call repository.inspect before using formal knowledge.',
+        }
       }
     }
     catch {
-      return { decision: 'continue' as const, reason: 'Plugydown Context status signal unavailable; continue normally.' }
+      // SessionStart is fail-open; absence and inspection errors do not affect the host session.
     }
+    return { decision: 'continue' as const }
   },
 } satisfies Hook<'SessionStart'>

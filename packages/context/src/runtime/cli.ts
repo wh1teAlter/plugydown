@@ -1,74 +1,46 @@
-import type { JsonValue } from './types.js'
+import type { JsonValue } from './stable-json.js'
 import { Buffer } from 'node:buffer'
 import process from 'node:process'
-import { PROTOCOL } from './constants.js'
-import { CODES, diagnostic } from './errors.js'
-import { failureResponse } from './protocol.js'
-import { run } from './runner.js'
+import { handleRequest } from './handler.js'
 import { stableJson } from './stable-json.js'
 
-/** Largest request the runtime will accept, guarding against an unbounded pipe. */
-const MAX_REQUEST_BYTES = 4 * 1024 * 1024
+const MAX_REQUEST_BYTES = 1024 * 1024
 
-/**
- * Reads the whole request from stdin.
- *
- * @returns the raw request text.
- * @throws RuntimeError when the request exceeds the size limit.
- */
-async function readStdin(): Promise<string> {
+async function readRequest(): Promise<unknown> {
   const chunks: Buffer[] = []
   let size = 0
-
-  for await (const chunk of process.stdin) {
-    const buffer = chunk as Buffer
-    size += buffer.byteLength
+  for await (const value of process.stdin) {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value as Uint8Array)
+    size += chunk.length
     if (size > MAX_REQUEST_BYTES)
-      throw new Error('request too large')
-    chunks.push(buffer)
+      throw new Error('REQUEST_SIZE_EXCEEDED')
+    chunks.push(chunk)
   }
-  return Buffer.concat(chunks).toString('utf8')
+  const bytes = Buffer.concat(chunks)
+  const source = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  return JSON.parse(source) as unknown
 }
 
-/** Writes a response and exits with the code its status implies. */
-function emit(response: JsonValue, status: string): never {
-  process.stdout.write(stableJson(response))
-  process.exit(status === 'success' ? 0 : 1)
+function transportFailure(code: string): JsonValue {
+  return {
+    transport: 'plugydown.context.runtime.transport/v1',
+    status: 'failed',
+    diagnostics: [{ code, severity: 'error', message: 'The Runtime request could not be transported safely.' }],
+  }
 }
 
-/**
- * Entry point.
- *
- * `--help` and `--version` answer without touching the repository, which makes the delivered
- * bundle checkable in a build test without constructing a fixture repository.
- */
 async function main(): Promise<void> {
-  const argv = process.argv.slice(2)
-
-  if (argv.includes('--help') || argv.includes('-h')) {
-    process.stdout.write(stableJson({
-      protocol: PROTOCOL,
-      usage: 'Reads one JSON request on stdin and writes one JSON response on stdout.',
-    }))
-    process.exit(0)
-  }
-
-  if (argv.includes('--version')) {
-    process.stdout.write(stableJson({ protocol: PROTOCOL }))
-    process.exit(0)
-  }
-
-  let raw: unknown
   try {
-    raw = JSON.parse(await readStdin())
+    const response = await handleRequest(process.cwd(), await readRequest())
+    process.stdout.write(stableJson(response as unknown as JsonValue))
   }
-  catch {
-    const response = failureResponse('unknown', diagnostic(CODES.REQUEST_MALFORMED, 'A runtime request must be readable JSON within the size limit.'))
-    emit(response as unknown as JsonValue, response.status)
+  catch (error) {
+    const code = error instanceof Error && error.message === 'REQUEST_SIZE_EXCEEDED'
+      ? 'REQUEST_SIZE_EXCEEDED'
+      : 'TRANSPORT_INVALID'
+    process.stdout.write(stableJson(transportFailure(code)))
+    process.exitCode = 1
   }
-
-  const response = await run(process.cwd(), raw)
-  emit(response as unknown as JsonValue, response.status)
 }
 
 await main()

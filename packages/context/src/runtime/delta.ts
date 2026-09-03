@@ -1,214 +1,184 @@
-import type { Change, GitState } from './git.js'
 import type { KnowledgeGraph } from './graph.js'
-import type { Ledger } from './meta.js'
-import type { JsonObject } from './types.js'
+import type { DeltaComputeInput, RuntimeRequest, RuntimeResponse, Scope } from './protocol.js'
+import type { GitChange } from './repository.js'
+import type { JsonObject, JsonValue } from './stable-json.js'
+import { impactClosure, loadKnowledge } from './graph.js'
+import { decodeCursor, encodeCursor, paginate, resolvedBudget, RuntimeFault, runtimeResponse, sha256 } from './protocol.js'
+import { assertGitEvidencePath, assertSourcePattern, controlledGlobMatches, readGitEvidence } from './repository.js'
 import { compareCodeUnits } from './stable-json.js'
 
-/** One document the delta believes needs attention, with the reason it was included. */
-export interface ImpactedDocument {
-  readonly id: string
-  readonly reason: string
-  readonly direct: boolean
+function declarationMatches(declaration: string, changedPath: string): boolean {
+  return declaration === changedPath || (declaration.includes('*') && controlledGlobMatches(declaration, changedPath))
 }
 
-/** Whether a Light update is defensible, and why not when it is not. */
-export interface ModeSignals {
-  readonly lightEligible: boolean
-  readonly blockers: readonly string[]
-}
-
-/** The complete delta report. */
-export interface Delta {
-  readonly requestedScope: readonly string[]
-  readonly resolvedScope: readonly string[]
-  readonly baselineRevision?: string
-  readonly currentRevision?: string
-  readonly worktreeDirty: boolean
-  readonly changes: readonly Change[]
-  readonly directImpact: readonly ImpactedDocument[]
-  readonly expandedClosure: readonly ImpactedDocument[]
-  readonly unmappedPaths: readonly string[]
-  readonly brokenRelations: readonly string[]
-  readonly signals: ModeSignals
-  readonly baselineEligible: boolean
-}
-
-/** @returns the concrete directory prefix a declared path or glob constrains. */
-function prefixOf(declared: string): string {
-  const wildcard = declared.search(/[*?[{]/)
-  if (wildcard < 0)
-    return declared
-  const cut = declared.lastIndexOf('/', wildcard)
-  return cut < 0 ? '' : declared.slice(0, cut)
-}
-
-/** @returns whether a changed path falls under a declared path or bounded glob. */
-export function pathMatches(declared: string, changed: string): boolean {
-  if (declared === changed)
-    return true
-  const prefix = prefixOf(declared)
-  return prefix.length > 0 && changed.startsWith(`${prefix}/`)
-}
-
-/**
- * Projects source changes onto the documents that claim them.
- *
- * @param graph the document graph.
- * @param changes the changed paths.
- * @returns impacted documents and the changed paths no document claims.
- */
-function projectChanges(graph: KnowledgeGraph, changes: readonly Change[]): {
-  readonly impacted: readonly ImpactedDocument[]
-  readonly unmapped: readonly string[]
-} {
-  const impacted = new Map<string, string>()
-  const unmapped: string[] = []
-
+function changedPaths(changes: readonly GitChange[]): readonly string[] {
+  const paths = new Set<string>()
   for (const change of changes) {
-    let claimed = false
-    for (const [declared, owners] of graph.codeIndex) {
-      if (!pathMatches(declared, change.path))
-        continue
-      claimed = true
-      for (const id of owners) {
-        if (!impacted.has(id))
-          impacted.set(id, `code.paths "${declared}" matches changed "${change.path}"`)
-      }
-    }
-    if (!claimed && !change.path.startsWith('context/'))
-      unmapped.push(change.path)
+    paths.add(change.path)
+    if (change.previousPath !== undefined)
+      paths.add(change.previousPath)
   }
+  return [...paths].sort(compareCodeUnits)
+}
 
-  return {
-    impacted: [...impacted.entries()]
-      .sort(([left], [right]) => compareCodeUnits(left, right))
-      .map(([id, reason]) => ({ id, reason, direct: true })),
-    unmapped: [...new Set(unmapped)].sort(compareCodeUnits),
+function scopeContainsDocument(scope: Scope, graph: KnowledgeGraph, documentId: string): boolean {
+  const document = graph.documents.get(documentId)
+  if (document === undefined)
+    return false
+  if (scope.kind === 'repository')
+    return true
+  if (scope.kind === 'domains')
+    return scope.ids.includes(document.domain)
+  if (scope.kind === 'documents')
+    return scope.ids.includes(documentId)
+  return document.codePaths.some(declaration => scope.paths.some(pattern => declaration === pattern
+    || (pattern.includes('*') && controlledGlobMatches(pattern, declaration))
+    || (declaration.includes('*') && controlledGlobMatches(declaration, pattern))))
+}
+
+function validateScope(scope: Scope, graph: KnowledgeGraph): void {
+  if (scope.kind === 'domains') {
+    const unknown = scope.ids.find(id => !graph.domains.has(id))
+    if (unknown !== undefined)
+      throw new RuntimeFault('SCOPE_DOMAIN_UNKNOWN', 'Delta scope contains an unknown Domain.')
+  }
+  else if (scope.kind === 'documents') {
+    const unknown = scope.ids.find(id => !graph.documents.has(id))
+    if (unknown !== undefined)
+      throw new RuntimeFault('SCOPE_DOCUMENT_UNKNOWN', 'Delta scope contains an unknown Document.')
+  }
+  else if (scope.kind === 'paths') {
+    for (const pattern of scope.paths)
+      assertSourcePattern(pattern)
   }
 }
 
-/**
- * Expands direct impact along `requires` and Domain membership.
- *
- * Every expansion records why it happened. An impact set the caller cannot explain is one
- * they cannot review, which defeats the point of computing it.
- *
- * @param graph the document graph.
- * @param direct the directly impacted documents.
- * @returns the direct set plus everything reached from it.
- */
-function expand(graph: KnowledgeGraph, direct: readonly ImpactedDocument[]): readonly ImpactedDocument[] {
-  const closure = new Map<string, ImpactedDocument>()
-  for (const item of direct)
-    closure.set(item.id, item)
-
-  const pending = direct.map(item => item.id)
-  while (pending.length > 0) {
-    const id = pending.pop()
-    if (id === undefined)
-      continue
-
-    for (const [candidateId, candidate] of graph.documents) {
-      if (closure.has(candidateId))
-        continue
-      if (candidate.relations.requires.includes(id)) {
-        closure.set(candidateId, { id: candidateId, reason: `requires impacted document "${id}"`, direct: false })
-        pending.push(candidateId)
-      }
-    }
-  }
-
-  const domainDocument = (domain: string): string | undefined =>
-    [...graph.documents.values()].find(document => document.domain === domain && document.kind === 'domain')?.id
-
-  for (const item of [...closure.values()]) {
-    const document = graph.documents.get(item.id)
-    if (document === undefined)
-      continue
-    const anchor = domainDocument(document.domain)
-    if (anchor !== undefined && !closure.has(anchor))
-      closure.set(anchor, { id: anchor, reason: `owns Domain "${document.domain}" of an impacted document`, direct: false })
-  }
-
-  return [...closure.values()].sort((left, right) => compareCodeUnits(left.id, right.id))
+interface SectionItem extends JsonObject {
+  section: 'changedPaths' | 'directImpact' | 'expandedImpact' | 'unmappedPaths' | 'brokenEvidence'
+  value: JsonValue
 }
 
-/**
- * Computes the delta between recorded knowledge and the repository as it is now.
- *
- * @param graph the current document graph.
- * @param ledger the recorded ledger, when one exists.
- * @param git the current repository state.
- * @param requestedScope Domain or document IDs the caller declared.
- * @returns the delta report.
- */
-export function computeDelta(
-  graph: KnowledgeGraph,
-  ledger: Ledger | undefined,
-  git: GitState,
-  requestedScope: readonly string[] = [],
-): Delta {
-  const { impacted, unmapped } = projectChanges(graph, git.changes)
-  const closure = expand(graph, impacted)
+function pageData(items: readonly SectionItem[]): {
+  readonly changedPaths: readonly JsonValue[]
+  readonly directImpact: readonly JsonValue[]
+  readonly expandedImpact: readonly JsonValue[]
+  readonly unmappedPaths: readonly JsonValue[]
+  readonly brokenEvidence: readonly JsonValue[]
+} {
+  const result: Record<SectionItem['section'], JsonValue[]> = {
+    changedPaths: [],
+    directImpact: [],
+    expandedImpact: [],
+    unmappedPaths: [],
+    brokenEvidence: [],
+  }
+  for (const item of items)
+    result[item.section].push(item.value)
+  return result
+}
 
-  const brokenRelations = graph.issues
-    .filter(issue => issue.code === 'DOCUMENT_RELATION_DANGLING' || issue.code === 'DOCUMENT_REQUIRES_CYCLE')
-    .map(issue => issue.message)
-
-  const worktreeDirty = git.changes.some(change => !change.staged || change.kind === 'untracked')
-  const knownIds = new Set(Object.keys(ledger?.documents ?? {}))
-  const newDocuments = [...graph.documents.keys()].filter(id => !knownIds.has(id))
+export async function deltaCompute(root: string, request: RuntimeRequest): Promise<RuntimeResponse> {
+  const input = request.input as DeltaComputeInput
+  assertGitEvidencePath(input.gitEvidencePath)
+  if (input.scope.kind === 'paths')
+    input.scope.paths.forEach(assertSourcePattern)
+  const graph = await loadKnowledge(root)
+  if (graph.contextState !== 'ready') {
+    const first = graph.issues[0]
+    throw new RuntimeFault(first?.code ?? 'CONTEXT_NOT_READY', first?.message ?? 'Delta requires ready formal Context.', first?.path ?? 'context')
+  }
+  validateScope(input.scope, graph)
+  const evidence = await readGitEvidence(root, input.gitEvidencePath)
+  const paths = changedPaths(evidence.changes)
+  const direct = new Map<string, string[]>()
+  const unmapped: string[] = []
+  for (const changedPath of paths) {
+    if (changedPath.startsWith('context/') || changedPath.startsWith('.scratch/'))
+      continue
+    let mapped = false
+    for (const document of graph.documents.values()) {
+      for (const declaration of document.codePaths) {
+        if (!declarationMatches(declaration, changedPath))
+          continue
+        mapped = true
+        const current = graph.ledgers.get(document.id)
+        const recorded = graph.meta?.documents[document.id]
+        if (current !== undefined && recorded !== undefined && current.sourceFingerprint === recorded.sourceFingerprint)
+          continue
+        const reasons = direct.get(document.id) ?? []
+        reasons.push(`code.paths ${declaration} matches ${changedPath}`)
+        direct.set(document.id, reasons)
+      }
+    }
+    if (!mapped)
+      unmapped.push(changedPath)
+  }
+  for (const [id, reasons] of direct)
+    direct.set(id, [...new Set(reasons)].sort(compareCodeUnits))
+  const closure = impactClosure(graph, direct)
+  const brokenEvidence: string[] = []
+  const baseline = graph.meta?.repository?.baseline
+  if (baseline !== undefined && baseline.revision !== evidence.currentRevision && !evidence.hasDiff)
+    brokenEvidence.push('repository baseline differs from HEAD but diff.bin is missing')
 
   const blockers: string[] = []
-  if (ledger === undefined)
-    blockers.push('No ledger has been recorded yet.')
-  if (graph.issues.some(issue => issue.code !== 'DOCUMENT_RELATION_DANGLING'))
-    blockers.push('The document graph has structural issues.')
-  if (brokenRelations.length > 0)
-    blockers.push('The document graph has broken relations.')
+  if (baseline === undefined)
+    blockers.push('repository baseline is absent')
+  if (!input.taskEvidence.intentKnown)
+    blockers.push('task intent is not known')
+  if (!input.taskEvidence.scopeComplete)
+    blockers.push('task scope is incomplete')
+  if (input.taskEvidence.newCapabilitySuspected)
+    blockers.push('a new capability is suspected')
+  if (input.taskEvidence.crossDomainContractUncertain)
+    blockers.push('a cross-Domain contract is uncertain')
+  if (evidence.midOperation)
+    blockers.push('Git is in a mid-operation state')
   if (unmapped.length > 0)
-    blockers.push('Changed paths are not claimed by any document.')
-  if (newDocuments.length > 0)
-    blockers.push('The graph contains documents the ledger has never validated.')
-  if (closure.length === 0 && git.changes.length > 0)
-    blockers.push('No document could be mapped to the observed changes.')
+    blockers.push('changed paths are unmapped')
+  if (brokenEvidence.length > 0)
+    blockers.push('evidence is incomplete')
+  const outsideScope = closure.filter(item => !scopeContainsDocument(input.scope, graph, item.documentId))
+  if (outsideScope.length > 0)
+    blockers.push('impact closure extends outside authorized scope')
+  const uniqueBlockers = [...new Set(blockers)].sort(compareCodeUnits)
+  const baselineEligible = input.scope.kind === 'repository'
+    && !evidence.midOperation
+    && brokenEvidence.length === 0
+    && unmapped.length === 0
+    && input.taskEvidence.scopeComplete
 
-  const baselineEligible = git.available
-    && !git.midOperation
-    && !worktreeDirty
-    && requestedScope.length === 0
-    && graph.issues.length === 0
-
-  return {
-    requestedScope: [...requestedScope].sort(compareCodeUnits),
-    resolvedScope: closure.map(item => item.id),
-    ...(ledger?.repository?.baseline?.revision === undefined ? {} : { baselineRevision: ledger.repository.baseline.revision }),
-    ...(git.revision === undefined ? {} : { currentRevision: git.revision }),
-    worktreeDirty,
-    changes: git.changes,
-    directImpact: impacted,
-    expandedClosure: closure,
-    unmappedPaths: unmapped,
-    brokenRelations,
-    signals: { lightEligible: blockers.length === 0, blockers },
-    baselineEligible,
+  const stream: SectionItem[] = [
+    ...evidence.changes.map(change => ({ section: 'changedPaths' as const, value: { ...change } })),
+    ...[...direct.entries()].sort(([left], [right]) => compareCodeUnits(left, right)).map(([documentId, reasons]) => ({
+      section: 'directImpact' as const,
+      value: { documentId, changedPaths: paths.filter(changedPath => reasons.some(reason => reason.endsWith(` ${changedPath}`))), reasons },
+    })),
+    ...closure.map(item => ({ section: 'expandedImpact' as const, value: { documentId: item.documentId, reasons: [...item.reasons] } })),
+    ...unmapped.sort(compareCodeUnits).map(value => ({ section: 'unmappedPaths' as const, value })),
+    ...brokenEvidence.sort(compareCodeUnits).map(value => ({ section: 'brokenEvidence' as const, value })),
+  ]
+  const cursorFingerprint = sha256(`${graph.contextFingerprint as string}:${evidence.fingerprint}`)
+  const offset = decodeCursor(request.cursor, request.capability, request.input, cursorFingerprint)
+  const cursorFor = (nextOffset: number): string => encodeCursor(request.capability, request.input, cursorFingerprint, nextOffset)
+  const response = (pageItems: readonly SectionItem[], cursor?: string): RuntimeResponse => {
+    const sections = pageData(pageItems)
+    return runtimeResponse('delta.compute', cursor === undefined ? 'success' : 'incomplete', {
+      data: {
+        ...(baseline === undefined ? {} : { repositoryBaseline: baseline.revision }),
+        currentRevision: evidence.currentRevision,
+        changedPaths: [...sections.changedPaths],
+        directImpact: [...sections.directImpact],
+        expandedImpact: [...sections.expandedImpact],
+        unmappedPaths: [...sections.unmappedPaths],
+        brokenEvidence: [...sections.brokenEvidence],
+        light: { eligible: uniqueBlockers.length === 0, blockers: uniqueBlockers },
+        repositoryBaselineEligible: baselineEligible,
+      },
+      ...(cursor === undefined ? {} : { cursor }),
+    })
   }
-}
-
-/** @returns a delta report as a JSON payload. */
-export function deltaToJson(delta: Delta): JsonObject {
-  return {
-    requestedScope: [...delta.requestedScope],
-    resolvedScope: [...delta.resolvedScope],
-    ...(delta.baselineRevision === undefined ? {} : { baselineRevision: delta.baselineRevision }),
-    ...(delta.currentRevision === undefined ? {} : { currentRevision: delta.currentRevision }),
-    worktreeDirty: delta.worktreeDirty,
-    changes: delta.changes.map(change => ({ path: change.path, kind: change.kind, staged: change.staged })),
-    directImpact: delta.directImpact.map(item => ({ id: item.id, reason: item.reason })),
-    expandedClosure: delta.expandedClosure.map(item => ({ id: item.id, reason: item.reason, direct: item.direct })),
-    unmappedPaths: [...delta.unmappedPaths],
-    brokenRelations: [...delta.brokenRelations],
-    signals: { lightEligible: delta.signals.lightEligible, blockers: [...delta.signals.blockers] },
-    baselineEligible: delta.baselineEligible,
-  }
+  const page = paginate(stream, offset, resolvedBudget(request), { response, cursor: cursorFor })
+  const cursor = page.nextOffset === undefined ? undefined : cursorFor(page.nextOffset)
+  return response(page.items, cursor)
 }

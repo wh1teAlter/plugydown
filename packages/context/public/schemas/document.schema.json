@@ -1,56 +1,60 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://plugydown.dev/schemas/context/document/v1.json",
-  "title": "Plugydown Context document front matter",
+  "title": "Plugydown Context Document v1 front matter",
   "type": "object",
   "required": ["schema", "id", "description", "kind", "domain"],
   "additionalProperties": false,
   "properties": {
     "schema": { "const": "plugydown.context.document/v1" },
-    "id": {
-      "type": "string",
-      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)*$",
-      "description": "Repository-stable unique ID. Unchanged when the file moves."
-    },
+    "id": { "$ref": "#/$defs/documentId" },
     "description": { "type": "string", "minLength": 1 },
     "kind": { "enum": ["domain", "architecture", "decision", "guide", "reference", "reflection"] },
-    "domain": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "domain": { "$ref": "#/$defs/domainId" },
     "relations": {
       "type": "object",
+      "minProperties": 1,
       "additionalProperties": false,
       "properties": {
-        "requires": { "$ref": "#/$defs/idList" },
-        "related": { "$ref": "#/$defs/idList" },
-        "supersedes": { "$ref": "#/$defs/idList" }
+        "requires": { "$ref": "#/$defs/documentIdList" },
+        "related": { "$ref": "#/$defs/documentIdList" },
+        "supersedes": { "$ref": "#/$defs/documentIdList" }
       }
     },
     "code": {
       "type": "object",
+      "required": ["paths"],
       "additionalProperties": false,
       "properties": {
         "paths": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1 },
-          "description": "Repository-relative paths or bounded globs. Hard impact and fingerprint contract."
-        },
-        "symbols": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1 },
-          "description": "Routing hint only. Never a hard fingerprint input."
+          "items": { "$ref": "#/$defs/sourcePattern" }
         }
       }
-    },
-    "loading": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": { "priority": { "type": "integer" } }
     }
   },
   "$defs": {
-    "idList": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+    "domainId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "documentId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)*$"
+    },
+    "documentIdList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/documentId" }
+    },
+    "sourcePattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)(?:\\.{1,2}|\\.git|\\.scratch|context|node_modules)(?:/|$))(?!.*[~$?\\[\\]{}!\\u0000-\\u001f\\u007f])(?!.*%[A-Za-z_]\\w*%)(?![^/]*\\*)(?!.*(?:^|/)(?!\\*\\*(?:/|$))[^/]*\\*\\*[^/]*(?:/|$))(?!.*(?:^|/)\\*\\*(?:/.*)?/(?:\\*\\*)(?:/|$))[^/]+(?:/[^/]+)*$"
+    }
   }
 }

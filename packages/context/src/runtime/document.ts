@@ -1,252 +1,429 @@
-import type { DocumentKind } from './types.js'
+import type { SourceFile } from './repository.js'
+import type { JsonObject, JsonValue } from './stable-json.js'
+import { Buffer } from 'node:buffer'
 import { parse as parseYaml } from 'yaml'
-import { DOCUMENT_KINDS, DOCUMENT_SCHEMA, DOMAIN_CATEGORIES } from './constants.js'
-import { assertBoundedGlob, assertSafeRelativePath } from './repository.js'
+import { PROTOCOL, sha256 } from './protocol.js'
+import { aggregateSourceFingerprint, assertSourcePattern, MAX_FRONT_MATTER_BYTES, MAX_MARKDOWN_BYTES } from './repository.js'
+import { compactJson, compareCodeUnits, stableJson } from './stable-json.js'
 
-/** Lowercase kebab-case, optionally dotted, used for Domain and document IDs. */
-const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$/
+export const DOCUMENT_SCHEMA = 'plugydown.context.document/v1'
+export const META_SCHEMA = 'plugydown.context.meta/v1'
+export const FINGERPRINT_VERSION = '1'
+export const TOOL_VERSION = '0.1.0'
 
-/** A single Domain segment, which may not contain a dot. */
+export const DOCUMENT_KINDS = ['domain', 'architecture', 'decision', 'guide', 'reference', 'reflection'] as const
+export type DocumentKind = typeof DOCUMENT_KINDS[number]
+
 const DOMAIN_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const DOCUMENT_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$/
+const FILE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*\.md$/
+const SHA256 = /^[a-f0-9]{64}$/
+const FRONT_MATTER = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/
 
-/** Front matter delimiters, tolerating a leading BOM and CRLF line endings. */
-const FRONT_MATTER = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/
-
-/** Fields that may never be persisted in front matter. */
-const FORBIDDEN = new Set([
-  'commit',
-  'hash',
-  'validated_at',
-  'validatedAt',
-  'fingerprint',
-  'fingerprints',
-  'catalog',
-  'paths',
-  'backlinks',
-  'batch',
-  'cursor',
-  'state',
-  'session',
-  'task',
-  'score',
-  'plan',
-  'log',
-])
-
-/** Recognised top-level front matter fields. */
-const ALLOWED = new Set(['schema', 'id', 'description', 'kind', 'domain', 'relations', 'code', 'loading'])
-
-/** Declared relations between documents. */
 export interface Relations {
   readonly requires: readonly string[]
   readonly related: readonly string[]
   readonly supersedes: readonly string[]
 }
 
-/** Declared association with source code. */
-export interface CodeLinks {
-  readonly paths: readonly string[]
-  readonly symbols: readonly string[]
-}
-
-/** A parsed and validated formal document. */
 export interface ContextDocument {
+  readonly schema: typeof DOCUMENT_SCHEMA
   readonly id: string
   readonly description: string
   readonly kind: DocumentKind
   readonly domain: string
   readonly relations: Relations
-  readonly code: CodeLinks
+  readonly codePaths: readonly string[]
   readonly path: string
-  readonly frontMatter: string
   readonly body: string
+  readonly frontMatterBytes: number
+  readonly bodyBytes: number
 }
 
-/** One structural problem found while parsing or validating a document. */
-export interface DocumentIssue {
+export interface KnowledgeIssue {
   readonly code: string
   readonly message: string
   readonly path: string
 }
 
-/** Outcome of parsing one document. */
-export type ParseResult
+export type DocumentResult
   = | { readonly ok: true, readonly document: ContextDocument }
-    | { readonly ok: false, readonly issues: readonly DocumentIssue[] }
+    | { readonly ok: false, readonly issues: readonly KnowledgeIssue[] }
 
-/** @returns a unique, ordered list of non-empty strings, or undefined when invalid. */
-function stringList(value: unknown): readonly string[] | undefined {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function unknownKeys(value: Record<string, unknown>, allowed: readonly string[]): readonly string[] {
+  const known = new Set(allowed)
+  return Object.keys(value).filter(key => !known.has(key)).sort(compareCodeUnits)
+}
+
+function parseNonEmptyList(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.some(item => typeof item !== 'string' || item.length === 0))
+    return undefined
+  if (new Set(value).size !== value.length)
+    return undefined
+  return [...value].sort(compareCodeUnits) as string[]
+}
+
+export function normalizeBody(body: string): string {
+  const normalized = body
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n*$/, '')
+  return `${normalized}\n`
+}
+
+function parseRelations(value: unknown, sourcePath: string, issues: KnowledgeIssue[]): Relations {
+  const empty: Relations = { requires: [], related: [], supersedes: [] }
+  if (value === undefined)
+    return empty
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    issues.push({ code: 'DOCUMENT_RELATIONS_INVALID', message: 'relations must be a non-empty object.', path: sourcePath })
+    return empty
+  }
+  for (const _key of unknownKeys(value, ['requires', 'related', 'supersedes']))
+    issues.push({ code: 'DOCUMENT_RELATION_FIELD_UNKNOWN', message: 'relations contains an unknown field.', path: sourcePath })
+  const parsed: Record<keyof Relations, readonly string[]> = { requires: [], related: [], supersedes: [] }
+  for (const key of ['requires', 'related', 'supersedes'] as const) {
+    if (value[key] === undefined)
+      continue
+    const list = parseNonEmptyList(value[key])
+    if (list === undefined || list.some(id => !DOCUMENT_ID.test(id)))
+      issues.push({ code: 'DOCUMENT_RELATION_INVALID', message: `${key} must contain unique valid Document IDs.`, path: sourcePath })
+    else
+      parsed[key] = list
+  }
+  return parsed
+}
+
+function parseCode(value: unknown, sourcePath: string, issues: KnowledgeIssue[]): readonly string[] {
   if (value === undefined)
     return []
-  if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || item.length === 0))
-    return undefined
-  const list = value as string[]
-  return new Set(list).size === list.length ? [...list] : undefined
+  if (!isRecord(value) || Object.keys(value).length !== 1 || !('paths' in value)) {
+    issues.push({ code: 'DOCUMENT_CODE_INVALID', message: 'code must contain only a non-empty paths list.', path: sourcePath })
+    return []
+  }
+  const paths = parseNonEmptyList(value.paths)
+  if (paths === undefined) {
+    issues.push({ code: 'DOCUMENT_CODE_PATHS_INVALID', message: 'code.paths must contain unique non-empty patterns.', path: sourcePath })
+    return []
+  }
+  for (const candidate of paths) {
+    try {
+      assertSourcePattern(candidate)
+    }
+    catch {
+      issues.push({ code: 'DOCUMENT_CODE_PATH_UNSAFE', message: 'code.paths contains an unsafe source pattern.', path: sourcePath })
+    }
+  }
+  return paths
 }
 
-/**
- * Splits a Markdown file into its front matter and body.
- *
- * @param source the raw file contents.
- * @returns the two halves, or undefined when the file has no front matter block.
- */
-export function splitFrontMatter(source: string): { readonly frontMatter: string, readonly body: string } | undefined {
+/** Strictly parses a v1 formal Markdown document. */
+export function parseDocument(sourcePath: string, source: string): DocumentResult {
+  const issues: KnowledgeIssue[] = []
+  if (Buffer.byteLength(source, 'utf8') > MAX_MARKDOWN_BYTES)
+    return { ok: false, issues: [{ code: 'DOCUMENT_SIZE_EXCEEDED', message: 'The Markdown document exceeds 1 MiB.', path: sourcePath }] }
   const match = FRONT_MATTER.exec(source)
   if (match === null)
-    return undefined
-  return { frontMatter: match[1] ?? '', body: match[2] ?? '' }
-}
+    return { ok: false, issues: [{ code: 'DOCUMENT_FRONT_MATTER_MISSING', message: 'A document must start with YAML front matter.', path: sourcePath }] }
+  const frontMatter = match[1] as string
+  const body = match[2] as string
+  if (Buffer.byteLength(frontMatter, 'utf8') > MAX_FRONT_MATTER_BYTES)
+    return { ok: false, issues: [{ code: 'DOCUMENT_FRONT_MATTER_SIZE_EXCEEDED', message: 'Document front matter exceeds 64 KiB.', path: sourcePath }] }
 
-/**
- * Parses and validates one formal document.
- *
- * Validation is structural only. Whether the content is *true* is a semantic question that
- * belongs to the roles, not to the runtime.
- *
- * @param path repository-relative path of the document.
- * @param source raw file contents.
- * @returns the parsed document, or the issues that prevented it.
- */
-export function parseDocument(path: string, source: string): ParseResult {
-  const issues: DocumentIssue[] = []
-  const fail = (code: string, message: string): void => void issues.push({ code, message, path })
-
-  const split = splitFrontMatter(source)
-  if (split === undefined)
-    return { ok: false, issues: [{ code: 'DOCUMENT_FRONT_MATTER_MISSING', message: 'A document must begin with a YAML front matter block.', path }] }
-
-  let parsed: unknown
+  let raw: unknown
   try {
-    parsed = parseYaml(split.frontMatter) ?? {}
+    raw = parseYaml(frontMatter)
   }
   catch {
-    return { ok: false, issues: [{ code: 'DOCUMENT_FRONT_MATTER_INVALID', message: 'Front matter must be valid YAML.', path }] }
+    return { ok: false, issues: [{ code: 'DOCUMENT_FRONT_MATTER_INVALID', message: 'Document front matter must be valid YAML.', path: sourcePath }] }
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
-    return { ok: false, issues: [{ code: 'DOCUMENT_FRONT_MATTER_INVALID', message: 'Front matter must be a mapping.', path }] }
+  if (!isRecord(raw))
+    return { ok: false, issues: [{ code: 'DOCUMENT_FRONT_MATTER_INVALID', message: 'Document front matter must be an object.', path: sourcePath }] }
+  for (const _key of unknownKeys(raw, ['schema', 'id', 'description', 'kind', 'domain', 'relations', 'code']))
+    issues.push({ code: 'DOCUMENT_FIELD_UNKNOWN', message: 'Document front matter contains an unknown field.', path: sourcePath })
+  for (const key of ['schema', 'id', 'description', 'kind', 'domain']) {
+    if (!(key in raw))
+      issues.push({ code: 'DOCUMENT_FIELD_MISSING', message: `Document field "${key}" is required.`, path: sourcePath })
+  }
+  if (raw.schema !== DOCUMENT_SCHEMA)
+    issues.push({ code: 'DOCUMENT_SCHEMA_INVALID', message: `Document schema must be ${DOCUMENT_SCHEMA}.`, path: sourcePath })
+  if (typeof raw.id !== 'string' || !DOCUMENT_ID.test(raw.id))
+    issues.push({ code: 'DOCUMENT_ID_INVALID', message: 'Document id must use dotted lowercase kebab-case.', path: sourcePath })
+  if (typeof raw.description !== 'string' || raw.description.trim().length === 0)
+    issues.push({ code: 'DOCUMENT_DESCRIPTION_INVALID', message: 'Document description must be non-empty.', path: sourcePath })
+  if (typeof raw.kind !== 'string' || !(DOCUMENT_KINDS as readonly string[]).includes(raw.kind))
+    issues.push({ code: 'DOCUMENT_KIND_INVALID', message: 'Document kind is unknown.', path: sourcePath })
+  if (typeof raw.domain !== 'string' || !DOMAIN_ID.test(raw.domain))
+    issues.push({ code: 'DOCUMENT_DOMAIN_INVALID', message: 'Document domain must use lowercase kebab-case.', path: sourcePath })
+  if (body.trim().length === 0)
+    issues.push({ code: 'DOCUMENT_BODY_EMPTY', message: 'Document body must be non-empty.', path: sourcePath })
 
-  const fields = parsed as Record<string, unknown>
-  if (split.body.trim().length === 0)
-    fail('DOCUMENT_BODY_EMPTY', 'A document must have a non-empty body.')
+  const relations = parseRelations(raw.relations, sourcePath, issues)
+  const codePaths = parseCode(raw.code, sourcePath, issues)
+  if (issues.length > 0)
+    return { ok: false, issues }
+  const normalized = normalizeBody(body)
+  return {
+    ok: true,
+    document: {
+      schema: DOCUMENT_SCHEMA,
+      id: raw.id as string,
+      description: (raw.description as string).trim(),
+      kind: raw.kind as DocumentKind,
+      domain: raw.domain as string,
+      relations,
+      codePaths,
+      path: sourcePath,
+      body: normalized,
+      frontMatterBytes: Buffer.byteLength(frontMatter, 'utf8'),
+      bodyBytes: Buffer.byteLength(normalized, 'utf8'),
+    },
+  }
+}
 
-  for (const field of Object.keys(fields)) {
-    if (FORBIDDEN.has(field))
-      fail('DOCUMENT_FIELD_FORBIDDEN', `Front matter must not persist "${field}".`)
-    else if (!ALLOWED.has(field))
-      fail('DOCUMENT_FIELD_UNKNOWN', `Unknown front matter field "${field}".`)
+/** Validates the canonical physical path, Domain, kind and stable ID relationship. */
+export function placementIssues(document: ContextDocument): readonly KnowledgeIssue[] {
+  const issues: KnowledgeIssue[] = []
+  const parts = document.path.split('/')
+  const domain = parts[1]
+  if (parts[0] !== 'context' || domain === undefined || !DOMAIN_ID.test(domain) || document.domain !== domain)
+    issues.push({ code: 'DOCUMENT_DOMAIN_MISMATCH', message: 'Document domain must equal its physical Domain directory.', path: document.path })
+  const fileName = parts.at(-1) as string
+  if (!FILE_NAME.test(fileName))
+    issues.push({ code: 'DOCUMENT_FILENAME_INVALID', message: 'Document filenames must use lowercase kebab-case.', path: document.path })
+  if (parts.length === 3) {
+    if (fileName !== 'domain.md' || document.kind !== 'domain' || document.id !== domain || document.domain !== domain)
+      issues.push({ code: 'DOCUMENT_PLACEMENT_INVALID', message: 'The Domain root may contain only its matching domain.md.', path: document.path })
+  }
+  else if (parts.length === 4) {
+    const category = parts[2]
+    const allowed = category === 'design'
+      ? ['architecture', 'decision']
+      : category === 'manual'
+        ? ['guide', 'reference']
+        : category === 'reflections'
+          ? ['reflection']
+          : []
+    if (!allowed.includes(document.kind) || document.kind === 'domain')
+      issues.push({ code: 'DOCUMENT_PLACEMENT_INVALID', message: 'Document kind does not match its category.', path: document.path })
+    if (!document.id.startsWith(`${domain}.`))
+      issues.push({ code: 'DOCUMENT_ID_DOMAIN_MISMATCH', message: 'A non-Domain Document id must begin with its Domain id.', path: document.path })
+  }
+  else {
+    issues.push({ code: 'DOCUMENT_PLACEMENT_INVALID', message: 'Formal Documents must use the canonical two-level Domain layout.', path: document.path })
+  }
+  return issues
+}
+
+function frontMatterValue(document: ContextDocument): JsonObject {
+  return {
+    schema: document.schema,
+    id: document.id,
+    description: document.description,
+    kind: document.kind,
+    domain: document.domain,
+    ...(document.relations.requires.length === 0 && document.relations.related.length === 0 && document.relations.supersedes.length === 0
+      ? {}
+      : {
+          relations: {
+            ...(document.relations.requires.length === 0 ? {} : { requires: [...document.relations.requires] }),
+            ...(document.relations.related.length === 0 ? {} : { related: [...document.relations.related] }),
+            ...(document.relations.supersedes.length === 0 ? {} : { supersedes: [...document.relations.supersedes] }),
+          },
+        }),
+    ...(document.codePaths.length === 0 ? {} : { code: { paths: [...document.codePaths] } }),
+  }
+}
+
+export function frontMatterFingerprint(document: ContextDocument): string {
+  return sha256(compactJson(frontMatterValue(document)))
+}
+
+export function bodyFingerprint(document: ContextDocument): string {
+  return sha256(document.body)
+}
+
+export function sourceFingerprint(document: ContextDocument, files: readonly SourceFile[]): string {
+  return aggregateSourceFingerprint(document.codePaths, files)
+}
+
+export interface DocumentLedger {
+  readonly frontMatterFingerprint: string
+  readonly bodyFingerprint: string
+  readonly sourceFingerprint: string
+}
+
+export interface Metrics {
+  readonly documentCount: number
+  readonly frontMatterBytes: number
+  readonly bodyBytes: number
+  readonly estimatedTokens: number
+}
+
+export interface ConvergenceBaseline extends Metrics {
+  readonly source: 'init' | 'prune'
+  readonly perDomain: Readonly<Record<string, Metrics>>
+}
+
+export interface Meta {
+  readonly toolVersion: string
+  readonly runtimeProtocol: typeof PROTOCOL
+  readonly fingerprintVersion: typeof FINGERPRINT_VERSION
+  readonly documents: Readonly<Record<string, DocumentLedger>>
+  readonly repository?: { readonly baseline: { readonly revision: string, readonly sourceFingerprint: string } }
+  readonly convergence?: ConvergenceBaseline
+}
+
+export type MetaResult
+  = | { readonly ok: true, readonly meta: Meta }
+    | { readonly ok: false, readonly issues: readonly KnowledgeIssue[] }
+
+function validCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+}
+
+function parseMetrics(value: unknown, exact = true): Metrics | undefined {
+  if (!isRecord(value) || (exact && unknownKeys(value, ['documentCount', 'frontMatterBytes', 'bodyBytes', 'estimatedTokens']).length > 0)
+    || !['documentCount', 'frontMatterBytes', 'bodyBytes', 'estimatedTokens'].every(key => validCount(value[key]))) {
+    return undefined
+  }
+  return {
+    documentCount: value.documentCount as number,
+    frontMatterBytes: value.frontMatterBytes as number,
+    bodyBytes: value.bodyBytes as number,
+    estimatedTokens: value.estimatedTokens as number,
+  }
+}
+
+/** Strictly parses the minimal v1 validity ledger. */
+export function parseMeta(sourcePath: string, raw: unknown): MetaResult {
+  const issues: KnowledgeIssue[] = []
+  if (!isRecord(raw))
+    return { ok: false, issues: [{ code: 'META_INVALID', message: 'Meta must be a JSON object.', path: sourcePath }] }
+  for (const _key of unknownKeys(raw, ['$schema', 'toolVersion', 'runtimeProtocol', 'fingerprintVersion', 'documents', 'repository', 'convergence']))
+    issues.push({ code: 'META_FIELD_UNKNOWN', message: 'Meta contains an unknown field.', path: sourcePath })
+  for (const key of ['$schema', 'toolVersion', 'runtimeProtocol', 'fingerprintVersion', 'documents']) {
+    if (!(key in raw))
+      issues.push({ code: 'META_FIELD_MISSING', message: `Meta field "${key}" is required.`, path: sourcePath })
+  }
+  if (raw.$schema !== META_SCHEMA)
+    issues.push({ code: 'META_SCHEMA_INVALID', message: `Meta schema must be ${META_SCHEMA}.`, path: sourcePath })
+  if (typeof raw.toolVersion !== 'string' || raw.toolVersion.length === 0)
+    issues.push({ code: 'META_TOOL_VERSION_INVALID', message: 'Meta toolVersion must be non-empty.', path: sourcePath })
+  if (raw.runtimeProtocol !== PROTOCOL)
+    issues.push({ code: 'META_RUNTIME_PROTOCOL_INVALID', message: `Meta runtimeProtocol must be ${PROTOCOL}.`, path: sourcePath })
+  if (raw.fingerprintVersion !== FINGERPRINT_VERSION)
+    issues.push({ code: 'META_FINGERPRINT_VERSION_INVALID', message: `Meta fingerprintVersion must be ${FINGERPRINT_VERSION}.`, path: sourcePath })
+
+  const documents: Record<string, DocumentLedger> = {}
+  if (!isRecord(raw.documents)) {
+    issues.push({ code: 'META_DOCUMENTS_INVALID', message: 'Meta documents must be an object.', path: sourcePath })
+  }
+  else {
+    for (const [id, value] of Object.entries(raw.documents).sort(([left], [right]) => compareCodeUnits(left, right))) {
+      if (!DOCUMENT_ID.test(id) || !isRecord(value)
+        || JSON.stringify(Object.keys(value).sort(compareCodeUnits)) !== JSON.stringify(['bodyFingerprint', 'frontMatterFingerprint', 'sourceFingerprint'])
+        || ![value.frontMatterFingerprint, value.bodyFingerprint, value.sourceFingerprint].every(item => typeof item === 'string' && SHA256.test(item))) {
+        issues.push({ code: 'META_DOCUMENT_INVALID', message: 'A Meta Document entry is invalid.', path: sourcePath })
+      }
+      else {
+        documents[id] = {
+          frontMatterFingerprint: value.frontMatterFingerprint as string,
+          bodyFingerprint: value.bodyFingerprint as string,
+          sourceFingerprint: value.sourceFingerprint as string,
+        }
+      }
+    }
   }
 
-  if (fields.schema !== DOCUMENT_SCHEMA)
-    fail('DOCUMENT_SCHEMA_INVALID', `Front matter must declare schema "${DOCUMENT_SCHEMA}".`)
-  if (typeof fields.id !== 'string' || !ID.test(fields.id))
-    fail('DOCUMENT_ID_INVALID', 'Front matter id must be dotted lowercase kebab-case.')
-  if (typeof fields.description !== 'string' || fields.description.trim().length === 0)
-    fail('DOCUMENT_DESCRIPTION_INVALID', 'Front matter description must be a non-empty string.')
-  if (typeof fields.kind !== 'string' || !(DOCUMENT_KINDS as readonly string[]).includes(fields.kind))
-    fail('DOCUMENT_KIND_INVALID', 'Front matter kind must be a known document kind.')
-  if (typeof fields.domain !== 'string' || !DOMAIN_ID.test(fields.domain))
-    fail('DOCUMENT_DOMAIN_INVALID', 'Front matter domain must be lowercase kebab-case.')
-
-  const relations = fields.relations
-  const relationLists: Record<string, readonly string[]> = { requires: [], related: [], supersedes: [] }
-  if (relations !== undefined) {
-    if (typeof relations !== 'object' || relations === null || Array.isArray(relations)) {
-      fail('DOCUMENT_RELATIONS_INVALID', 'Front matter relations must be a mapping.')
+  let repository: Meta['repository']
+  if (raw.repository !== undefined) {
+    if (!isRecord(raw.repository) || JSON.stringify(Object.keys(raw.repository)) !== JSON.stringify(['baseline']) || !isRecord(raw.repository.baseline)
+      || JSON.stringify(Object.keys(raw.repository.baseline).sort(compareCodeUnits)) !== JSON.stringify(['revision', 'sourceFingerprint'])
+      || typeof raw.repository.baseline.revision !== 'string' || raw.repository.baseline.revision.length === 0
+      || typeof raw.repository.baseline.sourceFingerprint !== 'string' || !SHA256.test(raw.repository.baseline.sourceFingerprint)) {
+      issues.push({ code: 'META_REPOSITORY_INVALID', message: 'Meta repository baseline is invalid.', path: sourcePath })
     }
     else {
-      for (const [name, value] of Object.entries(relations as Record<string, unknown>)) {
-        if (!(name in relationLists)) {
-          fail('DOCUMENT_RELATIONS_INVALID', `Unknown relation "${name}".`)
-          continue
-        }
-        const list = stringList(value)
-        if (list === undefined)
-          fail('DOCUMENT_RELATIONS_INVALID', `Relation "${name}" must contain unique non-empty IDs.`)
+      repository = { baseline: { revision: raw.repository.baseline.revision, sourceFingerprint: raw.repository.baseline.sourceFingerprint } }
+    }
+  }
+
+  let convergence: ConvergenceBaseline | undefined
+  if (raw.convergence !== undefined) {
+    const value = raw.convergence
+    const metric = parseMetrics(value, false)
+    if (!isRecord(value)
+      || JSON.stringify(Object.keys(value).sort(compareCodeUnits)) !== JSON.stringify(['bodyBytes', 'documentCount', 'estimatedTokens', 'frontMatterBytes', 'perDomain', 'source'])
+      || (value.source !== 'init' && value.source !== 'prune')
+      || metric === undefined
+      || !isRecord(value.perDomain)) {
+      issues.push({ code: 'META_CONVERGENCE_INVALID', message: 'Meta convergence baseline is invalid.', path: sourcePath })
+    }
+    else {
+      const perDomain: Record<string, Metrics> = {}
+      for (const [id, rawMetrics] of Object.entries(value.perDomain).sort(([left], [right]) => compareCodeUnits(left, right))) {
+        const metrics = parseMetrics(rawMetrics)
+        if (!DOMAIN_ID.test(id) || metrics === undefined)
+          issues.push({ code: 'META_CONVERGENCE_DOMAIN_INVALID', message: 'A convergence Domain entry is invalid.', path: sourcePath })
         else
-          relationLists[name] = list
+          perDomain[id] = metrics
       }
-    }
-  }
-
-  const code = fields.code
-  let paths: readonly string[] = []
-  let symbols: readonly string[] = []
-  if (code !== undefined) {
-    if (typeof code !== 'object' || code === null || Array.isArray(code)) {
-      fail('DOCUMENT_CODE_INVALID', 'Front matter code must be a mapping.')
-    }
-    else {
-      const declared = code as Record<string, unknown>
-      for (const field of Object.keys(declared)) {
-        if (field !== 'paths' && field !== 'symbols')
-          fail('DOCUMENT_CODE_INVALID', `Unknown code field "${field}".`)
-      }
-      const declaredPaths = stringList(declared.paths)
-      const declaredSymbols = stringList(declared.symbols)
-      if (declaredPaths === undefined)
-        fail('DOCUMENT_CODE_INVALID', 'code.paths must contain unique non-empty strings.')
-      else
-        paths = declaredPaths
-      if (declaredSymbols === undefined)
-        fail('DOCUMENT_CODE_INVALID', 'code.symbols must contain unique non-empty strings.')
-      else
-        symbols = declaredSymbols
-
-      for (const candidate of paths) {
-        try {
-          if (/[*?[\]{}]/.test(candidate))
-            assertBoundedGlob(candidate)
-          else
-            assertSafeRelativePath(candidate)
-        }
-        catch (error) {
-          fail('DOCUMENT_CODE_PATH_UNSAFE', `code.paths entry "${candidate}" is unsafe: ${(error as Error).message}`)
-        }
-      }
+      convergence = { source: value.source, ...metric, perDomain }
     }
   }
 
   if (issues.length > 0)
     return { ok: false, issues }
-
   return {
     ok: true,
-    document: {
-      id: fields.id as string,
-      description: fields.description as string,
-      kind: fields.kind as DocumentKind,
-      domain: fields.domain as string,
-      relations: {
-        requires: relationLists.requires ?? [],
-        related: relationLists.related ?? [],
-        supersedes: relationLists.supersedes ?? [],
-      },
-      code: { paths, symbols },
-      path,
-      frontMatter: split.frontMatter,
-      body: split.body,
+    meta: {
+      toolVersion: raw.toolVersion as string,
+      runtimeProtocol: PROTOCOL,
+      fingerprintVersion: FINGERPRINT_VERSION,
+      documents,
+      ...(repository === undefined ? {} : { repository }),
+      ...(convergence === undefined ? {} : { convergence }),
     },
   }
 }
 
-/**
- * Checks that a document's kind is legal for the directory it sits in.
- *
- * @param document the parsed document.
- * @param category the Domain sub-directory, or undefined for `domain.md`.
- * @returns the issue found, or undefined when the placement is legal.
- */
-export function checkPlacement(document: ContextDocument, category: string | undefined): DocumentIssue | undefined {
-  if (category === undefined) {
-    return document.kind === 'domain'
-      ? undefined
-      : { code: 'DOCUMENT_PLACEMENT_INVALID', message: 'Only a domain document may sit at the Domain root.', path: document.path }
+export function metaValue(meta: Meta): JsonObject {
+  const documents: JsonObject = {}
+  for (const [id, entry] of Object.entries(meta.documents).sort(([left], [right]) => compareCodeUnits(left, right)))
+    documents[id] = { ...entry }
+  const perDomain: JsonObject = {}
+  if (meta.convergence !== undefined) {
+    for (const [id, metrics] of Object.entries(meta.convergence.perDomain).sort(([left], [right]) => compareCodeUnits(left, right)))
+      perDomain[id] = { ...metrics }
   }
+  return {
+    $schema: META_SCHEMA,
+    toolVersion: meta.toolVersion,
+    runtimeProtocol: PROTOCOL,
+    fingerprintVersion: FINGERPRINT_VERSION,
+    documents,
+    ...(meta.repository === undefined ? {} : { repository: { baseline: { ...meta.repository.baseline } } }),
+    ...(meta.convergence === undefined
+      ? {}
+      : {
+          convergence: {
+            source: meta.convergence.source,
+            documentCount: meta.convergence.documentCount,
+            frontMatterBytes: meta.convergence.frontMatterBytes,
+            bodyBytes: meta.convergence.bodyBytes,
+            estimatedTokens: meta.convergence.estimatedTokens,
+            perDomain,
+          },
+        }),
+  }
+}
 
-  const allowed = (DOMAIN_CATEGORIES as Record<string, readonly string[]>)[category]
-  if (allowed === undefined)
-    return { code: 'DOCUMENT_PLACEMENT_INVALID', message: `Unknown Domain category "${category}".`, path: document.path }
-  if (!allowed.includes(document.kind))
-    return { code: 'DOCUMENT_PLACEMENT_INVALID', message: `A ${document.kind} document may not sit in "${category}".`, path: document.path }
-  return undefined
+export function serializeMeta(meta: Meta): string {
+  return stableJson(metaValue(meta) as JsonValue)
 }

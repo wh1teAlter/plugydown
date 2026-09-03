@@ -1,164 +1,524 @@
-import { promises as fs } from 'node:fs'
+import type { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
+import { createReadStream, promises as fs } from 'node:fs'
 import path from 'node:path'
-import { CODES, RuntimeError } from './errors.js'
+import { RuntimeFault, sha256 } from './protocol.js'
+import { compactJson, compareCodeUnits } from './stable-json.js'
 
-/** Shell and Windows style variable references that must already have been expanded. */
-const UNEXPANDED_VARIABLE = /\$\{?[A-Z_]\w*\}?|%[A-Z_]\w*%/i
+export const CONTEXT_ROOT = 'context'
+export const META_PATH = 'context/meta.json'
+export const SCRATCH_ROOT = '.scratch'
+export const EVIDENCE_ROOT = `${SCRATCH_ROOT}/evidence`
+export const FEEDBACK_ROOT = `${SCRATCH_ROOT}/feedback`
+export const INVESTIGATION_ROOT = `${SCRATCH_ROOT}/investigations`
+export const RUNS_ROOT = `${SCRATCH_ROOT}/runs`
+export const LOCK_ROOT = `${SCRATCH_ROOT}/locks/context-write`
 
-/** Glob metacharacters recognised by the bounded-glob rule. */
-const GLOB_META = /[*?[\]{}]/
+export const MAX_MARKDOWN_BYTES = 1024 * 1024
+export const MAX_FRONT_MATTER_BYTES = 64 * 1024
+export const MAX_JSON_TEXT_BYTES = 4 * 1024 * 1024
+export const MAX_GIT_EVIDENCE_BYTES = 16 * 1024 * 1024
+export const MAX_SOURCE_FILES = 10_000
+export const MAX_SOURCE_BYTES = 512 * 1024 * 1024
 
-/** @returns whether `child` is `parent` itself or lies beneath it. */
-function contains(parent: string, child: string): boolean {
-  if (child === parent)
-    return true
-  return child.startsWith(parent.endsWith(path.sep) ? parent : `${parent}${path.sep}`)
-}
+const VARIABLE = /\$|%[A-Z_]\w*%/i
+const UNSUPPORTED_GLOB = /[?[\]{}!]/
+const FORBIDDEN_SOURCE_SEGMENTS = new Set(['.git', '.scratch', 'context', 'node_modules'])
+const SCRATCH_LEAF_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
-/**
- * Resolves the deepest existing ancestor of a path, then re-appends the missing tail.
- *
- * A path that does not exist yet still has to be proven safe, and `realpath` refuses to
- * resolve it. Resolving the existing prefix catches a symlinked parent, which is the case
- * that actually escapes.
- *
- * @param absolute an absolute path that may not exist.
- * @returns the absolute path with every existing component fully resolved.
- */
-async function realpathOfNearestExisting(absolute: string): Promise<string> {
-  const missing: string[] = []
-  let current = absolute
-
-  for (;;) {
-    try {
-      const resolved = await fs.realpath(current)
-      return missing.length === 0 ? resolved : path.join(resolved, ...missing.reverse())
-    }
-    catch {
-      const parent = path.dirname(current)
-      if (parent === current)
-        return absolute
-      missing.push(path.basename(current))
-      current = parent
-    }
+function isSafeDiagnosticPath(candidate: string): boolean {
+  if (candidate.length === 0 || candidate.includes('\\')
+    || path.posix.isAbsolute(candidate) || path.win32.isAbsolute(candidate) || /^[A-Z]:/i.test(candidate)
+    || [...candidate].some((character) => {
+      const value = character.codePointAt(0) as number
+      return value <= 0x1F || value === 0x7F
+    })
+    || VARIABLE.test(candidate)) {
+    return false
   }
+  const segments = candidate.split('/')
+  return !segments.some(segment => segment.length === 0 || segment === '.' || segment === '..' || segment.includes('~'))
 }
 
-/**
- * Rejects a repository-relative path that is unsafe on its own terms.
- *
- * These checks are purely lexical, so they hold even for paths that do not exist yet — which
- * matters because candidate staging names paths before it creates them.
- *
- * @param candidate the repository-relative path.
- * @throws RuntimeError when the path is absolute, escapes, or is otherwise unusable.
- */
+function pathFault(code: string, message: string, candidate: string): never {
+  throw new RuntimeFault(code, message, isSafeDiagnosticPath(candidate) ? candidate : undefined)
+}
+
+/** Strict lexical validation shared by repository-relative Runtime paths. */
 export function assertSafeRelativePath(candidate: string): void {
   if (candidate.length === 0)
-    throw new RuntimeError(CODES.PATH_EMPTY, 'A repository path must not be empty.')
-  if (candidate.includes('\0'))
-    throw new RuntimeError(CODES.PATH_NUL_BYTE, 'A repository path must not contain a NUL byte.')
-  if (UNEXPANDED_VARIABLE.test(candidate))
-    throw new RuntimeError(CODES.PATH_UNEXPANDED_VARIABLE, 'A repository path must not contain an unexpanded variable reference.')
-  if (path.isAbsolute(candidate) || /^[a-z]:/i.test(candidate))
-    throw new RuntimeError(CODES.PATH_ABSOLUTE, 'A repository path must be relative to the repository root.')
-
-  if (candidate.split(/[/\\]/).includes('..'))
-    throw new RuntimeError(CODES.PATH_TRAVERSAL, 'A repository path must not contain a parent segment.')
+    pathFault('PATH_EMPTY', 'A repository-relative path must not be empty.', candidate)
+  if (candidate.includes('\\'))
+    pathFault('PATH_SEPARATOR_INVALID', 'Repository paths must use forward slashes.', candidate)
+  if (path.posix.isAbsolute(candidate) || path.win32.isAbsolute(candidate) || /^[A-Z]:/i.test(candidate))
+    pathFault('PATH_ABSOLUTE', 'A repository path must be relative.', candidate)
+  if ([...candidate].some((character) => {
+    const value = character.codePointAt(0) as number
+    return value <= 0x1F || value === 0x7F
+  })) {
+    pathFault('PATH_CONTROL_CHARACTER', 'A repository path must not contain control characters.', candidate)
+  }
+  if (VARIABLE.test(candidate))
+    pathFault('PATH_VARIABLE', 'A repository path must not contain variables.', candidate)
+  const segments = candidate.split('/')
+  if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..' || segment.includes('~')))
+    pathFault('PATH_SEGMENT_INVALID', 'A repository path contains an unsafe segment.', candidate)
 }
 
-/**
- * Rejects a glob that is not anchored to a concrete directory.
- *
- * An unanchored pattern such as `**` or `*.ts` makes the impact set unbounded, which turns a
- * document's `code.paths` declaration into something neither reviewable nor fingerprintable.
- *
- * @param pattern the repository-relative glob.
- * @throws RuntimeError when the glob is unsafe or unbounded.
- */
-export function assertBoundedGlob(pattern: string): void {
+export function hasGlob(pattern: string): boolean {
+  return pattern.includes('*') || UNSUPPORTED_GLOB.test(pattern)
+}
+
+/** Validates the exact controlled glob language used by code.paths and path scopes. */
+export function assertSourcePattern(pattern: string): void {
   assertSafeRelativePath(pattern)
-
   const segments = pattern.split('/')
-  if (GLOB_META.test(segments[0] ?? ''))
-    throw new RuntimeError(CODES.GLOB_UNBOUNDED, 'A glob must be anchored to a concrete first directory segment.')
-  if (segments.filter(segment => segment === '**').length > 1)
-    throw new RuntimeError(CODES.GLOB_UNBOUNDED, 'A glob must not contain more than one recursive segment.')
+  if (pattern.includes('*') && (segments.length < 2 || segments[0]?.includes('*')))
+    pathFault('GLOB_ANCHOR_INVALID', 'A source pattern must begin with a concrete directory.', pattern)
+  if (UNSUPPORTED_GLOB.test(pattern))
+    pathFault('GLOB_SYNTAX_INVALID', 'A source pattern uses unsupported glob syntax.', pattern)
+  if (segments.filter(segment => segment === '**').length > 1 || segments.some(segment => segment.includes('**') && segment !== '**'))
+    pathFault('GLOB_RECURSION_INVALID', 'A source pattern may contain one complete recursive segment.', pattern)
+  if (segments.some(segment => FORBIDDEN_SOURCE_SEGMENTS.has(segment)))
+    pathFault('SOURCE_ROOT_FORBIDDEN', 'A source pattern points into a forbidden repository root.', pattern)
 }
 
-/**
- * Resolves a repository-relative path and proves it stays inside the repository.
- *
- * The lexical checks run first, then the resolved path is compared against the real repository
- * root so that a symlink cannot carry a legal-looking path outside the tree.
- *
- * @param root absolute repository root.
- * @param candidate repository-relative path.
- * @returns the absolute resolved path.
- * @throws RuntimeError when the path is unsafe or escapes the repository.
- */
-export async function resolveInsideRepository(root: string, candidate: string): Promise<string> {
+/** Validates an exact source path used as a selector rather than a declaration glob. */
+export function assertSourcePath(candidate: string): void {
+  assertSourcePattern(candidate)
+  if (hasGlob(candidate))
+    pathFault('PATH_GLOB_INVALID', 'A source path selector must not contain glob syntax.', candidate)
+}
+
+function isInside(parent: string, child: string): boolean {
+  return child === parent || child.startsWith(`${parent}${path.sep}`)
+}
+
+async function realRoot(root: string): Promise<string> {
+  const resolved = await fs.realpath(root)
+  const info = await fs.lstat(resolved)
+  if (!info.isDirectory())
+    throw new RuntimeFault('REPOSITORY_ROOT_INVALID', 'The Runtime root must be a directory.')
+  return resolved
+}
+
+/** Resolves a path while rejecting every symlink parent, even one that stays inside the root. */
+export async function resolveRepositoryPath(root: string, candidate: string, allowMissingTail = false): Promise<string> {
   assertSafeRelativePath(candidate)
+  const base = await realRoot(root)
+  const absolute = path.resolve(base, ...candidate.split('/'))
+  if (!isInside(base, absolute))
+    pathFault('PATH_ESCAPE', 'A repository path resolves outside the Runtime root.', candidate)
 
-  const realRoot = await fs.realpath(root)
-  const absolute = path.resolve(realRoot, candidate)
-  if (!contains(realRoot, absolute))
-    throw new RuntimeError(CODES.PATH_TRAVERSAL, 'A repository path must resolve inside the repository.')
-
-  if (!contains(realRoot, await realpathOfNearestExisting(absolute)))
-    throw new RuntimeError(CODES.PATH_SYMLINK_ESCAPE, 'A repository path must not resolve outside the repository through a symlink.')
-
+  const segments = candidate.split('/')
+  let current = base
+  for (let index = 0; index < segments.length; index += 1) {
+    current = path.join(current, segments[index] as string)
+    let info
+    try {
+      info = await fs.lstat(current)
+    }
+    catch (error) {
+      if (allowMissingTail && (error as NodeJS.ErrnoException).code === 'ENOENT')
+        return absolute
+      throw error
+    }
+    if (info.isSymbolicLink())
+      pathFault('PATH_SYMLINK', 'Repository paths must not traverse symlinks.', candidate)
+    if (index < segments.length - 1 && !info.isDirectory())
+      pathFault('PATH_PARENT_NOT_DIRECTORY', 'A repository path parent must be a directory.', candidate)
+  }
   return absolute
 }
 
-/**
- * Reads a repository-relative regular file.
- *
- * @param root absolute repository root.
- * @param candidate repository-relative path.
- * @returns the file contents as UTF-8.
- * @throws RuntimeError when the path is unsafe or is not a regular file.
- */
-export async function readRepositoryFile(root: string, candidate: string): Promise<string> {
-  const absolute = await resolveInsideRepository(root, candidate)
-  const stats = await fs.lstat(absolute)
-  if (stats.isSymbolicLink() || !stats.isFile())
-    throw new RuntimeError(CODES.PATH_SPECIAL_FILE, 'A repository path must reference a regular file.')
-  return fs.readFile(absolute, 'utf8')
-}
-
-/** One immediate child of a repository directory. */
-export interface DirectoryEntry {
-  readonly name: string
-  readonly kind: 'directory' | 'file'
-}
-
-/**
- * Lists the immediate entries of a repository-relative directory.
- *
- * Symlinks and special files are dropped rather than followed: the knowledge tree is defined
- * by real files, and following a link would reintroduce the escape the path rules just closed.
- *
- * @param root absolute repository root.
- * @param candidate repository-relative directory.
- * @returns directory and regular-file entries, ordered by code unit.
- */
-export async function listRepositoryDirectory(root: string, candidate: string): Promise<readonly DirectoryEntry[]> {
-  const absolute = await resolveInsideRepository(root, candidate)
-
-  return (await fs.readdir(absolute, { withFileTypes: true }))
-    .filter(entry => entry.isDirectory() || entry.isFile())
-    .map(entry => ({ name: entry.name, kind: entry.isDirectory() ? 'directory' as const : 'file' as const }))
-    .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
-}
-
-/** @returns whether a repository-relative path exists at all. */
-export async function repositoryPathExists(root: string, candidate: string): Promise<boolean> {
+export async function lstatRepositoryPath(root: string, candidate: string): Promise<import('node:fs').Stats | undefined> {
   try {
-    await fs.lstat(await resolveInsideRepository(root, candidate))
-    return true
+    return await fs.lstat(await resolveRepositoryPath(root, candidate))
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      return undefined
+    throw error
+  }
+}
+
+export async function pathExists(root: string, candidate: string): Promise<boolean> {
+  return (await lstatRepositoryPath(root, candidate)) !== undefined
+}
+
+export async function readRegularBytes(root: string, candidate: string, maximum: number): Promise<Buffer> {
+  const absolute = await resolveRepositoryPath(root, candidate)
+  const info = await fs.lstat(absolute)
+  if (!info.isFile() || info.isSymbolicLink())
+    pathFault('PATH_NOT_REGULAR_FILE', 'A repository path must reference a regular file.', candidate)
+  if (info.size > maximum)
+    pathFault('FILE_SIZE_EXCEEDED', 'A repository file exceeds its resource limit.', candidate)
+  return fs.readFile(absolute)
+}
+
+export function decodeUtf8(bytes: Uint8Array, candidate: string): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   }
   catch {
-    return false
+    pathFault('FILE_ENCODING_INVALID', 'A Runtime text file must be valid UTF-8.', candidate)
   }
+}
+
+export async function readUtf8File(root: string, candidate: string, maximum: number): Promise<string> {
+  return decodeUtf8(await readRegularBytes(root, candidate, maximum), candidate)
+}
+
+export interface DirectoryEntry {
+  readonly name: string
+  readonly kind: 'directory' | 'file' | 'symlink' | 'special'
+}
+
+export async function readDirectory(root: string, candidate: string): Promise<readonly DirectoryEntry[]> {
+  const absolute = await resolveRepositoryPath(root, candidate)
+  const info = await fs.lstat(absolute)
+  if (!info.isDirectory())
+    pathFault('PATH_NOT_DIRECTORY', 'A repository path must reference a directory.', candidate)
+  return (await fs.readdir(absolute, { withFileTypes: true }))
+    .map((entry) => {
+      const kind = entry.isSymbolicLink()
+        ? 'symlink' as const
+        : entry.isDirectory()
+          ? 'directory' as const
+          : entry.isFile()
+            ? 'file' as const
+            : 'special' as const
+      return { name: entry.name, kind }
+    })
+    .sort((left, right) => compareCodeUnits(left.name, right.name))
+}
+
+export interface TreeFile {
+  readonly path: string
+  readonly bytes: Buffer
+  readonly mode: number
+}
+
+/** Walks a strict ordinary directory tree without following or dropping unsafe entries. */
+export async function readTree(root: string, treePath: string, maximumFileBytes = MAX_JSON_TEXT_BYTES): Promise<readonly TreeFile[]> {
+  const files: TreeFile[] = []
+  const visit = async (relative: string): Promise<void> => {
+    for (const entry of await readDirectory(root, relative)) {
+      const child = `${relative}/${entry.name}`
+      if (entry.kind === 'directory') {
+        await visit(child)
+      }
+      else if (entry.kind === 'file') {
+        const absolute = await resolveRepositoryPath(root, child)
+        const info = await fs.lstat(absolute)
+        if (info.size > maximumFileBytes)
+          pathFault('FILE_SIZE_EXCEEDED', 'A repository file exceeds its resource limit.', child)
+        files.push({ path: child, bytes: await fs.readFile(absolute), mode: info.mode & 0o777 })
+      }
+      else {
+        pathFault(entry.kind === 'symlink' ? 'PATH_SYMLINK' : 'PATH_SPECIAL_FILE', 'A strict repository tree contains a non-ordinary entry.', child)
+      }
+    }
+  }
+  await visit(treePath)
+  return files.sort((left, right) => compareCodeUnits(left.path, right.path))
+}
+
+export async function fingerprintTree(root: string, treePath: string, canonicalRoot = CONTEXT_ROOT): Promise<string> {
+  const files = await readTree(root, treePath, MAX_JSON_TEXT_BYTES)
+  const prefix = `${treePath}/`
+  return sha256(compactJson(files.map(file => ({
+    path: `${canonicalRoot}/${file.path.slice(prefix.length)}`,
+    hash: sha256(file.bytes),
+  }))))
+}
+
+function segmentMatches(pattern: string, candidate: string): boolean {
+  let expression = '^'
+  for (const character of pattern)
+    expression += character === '*' ? '.*' : character.replace(/[|{}()[\]^$+?.]/g, '\\$&')
+  return new RegExp(`${expression}$`, 'u').test(candidate)
+}
+
+export function controlledGlobMatches(pattern: string, candidate: string): boolean {
+  const patterns = pattern.split('/')
+  const candidates = candidate.split('/')
+  const visit = (patternIndex: number, candidateIndex: number): boolean => {
+    if (patternIndex === patterns.length)
+      return candidateIndex === candidates.length
+    const part = patterns[patternIndex] as string
+    if (part === '**')
+      return visit(patternIndex + 1, candidateIndex) || (candidateIndex < candidates.length && visit(patternIndex, candidateIndex + 1))
+    return candidateIndex < candidates.length
+      && segmentMatches(part, candidates[candidateIndex] as string)
+      && visit(patternIndex + 1, candidateIndex + 1)
+  }
+  return visit(0, 0)
+}
+
+async function hashRegularFile(root: string, candidate: string, remainingBytes: number): Promise<{ readonly hash: string, readonly size: number }> {
+  const absolute = await resolveRepositoryPath(root, candidate)
+  const info = await fs.lstat(absolute)
+  if (!info.isFile() || info.isSymbolicLink())
+    pathFault('SOURCE_NOT_REGULAR_FILE', 'A source declaration must resolve only to regular files.', candidate)
+  if (info.size > remainingBytes)
+    throw new RuntimeFault('SOURCE_BYTE_LIMIT_EXCEEDED', 'A source expansion exceeds the byte limit.')
+  const hash = createHash('sha256')
+  await new Promise<void>((resolve, reject) => {
+    const stream = createReadStream(absolute)
+    stream.on('data', chunk => hash.update(chunk))
+    stream.on('error', reject)
+    stream.on('end', resolve)
+  })
+  return { hash: hash.digest('hex'), size: info.size }
+}
+
+async function listAnchorFiles(root: string, anchor: string): Promise<readonly string[]> {
+  const files: string[] = []
+  const visit = async (relative: string): Promise<void> => {
+    for (const entry of await readDirectory(root, relative)) {
+      const child = `${relative}/${entry.name}`
+      if (entry.kind === 'directory')
+        await visit(child)
+      else if (entry.kind === 'file')
+        files.push(child)
+      else
+        pathFault(entry.kind === 'symlink' ? 'PATH_SYMLINK' : 'PATH_SPECIAL_FILE', 'A source expansion encountered a non-ordinary entry.', child)
+    }
+  }
+  await visit(anchor)
+  return files.sort(compareCodeUnits)
+}
+
+export interface SourceFile {
+  readonly path: string
+  readonly contentHash: string
+  readonly bytes: number
+}
+
+/** Expands safe source declarations and hashes raw bytes with aggregate resource limits. */
+export async function expandSourcePatterns(root: string, patterns: readonly string[]): Promise<readonly SourceFile[]> {
+  const selected = new Set<string>()
+  for (const pattern of patterns) {
+    assertSourcePattern(pattern)
+    if (!hasGlob(pattern)) {
+      const info = await lstatRepositoryPath(root, pattern)
+      if (info === undefined)
+        pathFault('SOURCE_EXACT_MISSING', 'An exact source declaration does not exist.', pattern)
+      if (!info.isFile())
+        pathFault('SOURCE_NOT_REGULAR_FILE', 'An exact source declaration must identify a regular file.', pattern)
+      selected.add(pattern)
+      continue
+    }
+    const anchor = pattern.split('/')[0] as string
+    const anchorInfo = await lstatRepositoryPath(root, anchor)
+    if (anchorInfo === undefined || !anchorInfo.isDirectory())
+      pathFault('SOURCE_GLOB_ZERO_MATCH', 'A source glob matched no regular files.', pattern)
+    const matches = (await listAnchorFiles(root, anchor)).filter(candidate => controlledGlobMatches(pattern, candidate))
+    if (matches.length === 0)
+      pathFault('SOURCE_GLOB_ZERO_MATCH', 'A source glob matched no regular files.', pattern)
+    matches.forEach(candidate => selected.add(candidate))
+  }
+
+  const ordered = [...selected].sort(compareCodeUnits)
+  if (ordered.length > MAX_SOURCE_FILES)
+    throw new RuntimeFault('SOURCE_FILE_LIMIT_EXCEEDED', 'A source expansion exceeds the file-count limit.')
+  const files: SourceFile[] = []
+  let total = 0
+  for (const candidate of ordered) {
+    const sample = await hashRegularFile(root, candidate, MAX_SOURCE_BYTES - total)
+    total += sample.size
+    if (total > MAX_SOURCE_BYTES)
+      throw new RuntimeFault('SOURCE_BYTE_LIMIT_EXCEEDED', 'A source expansion exceeds the byte limit.')
+    files.push({ path: candidate, contentHash: sample.hash, bytes: sample.size })
+  }
+  return files
+}
+
+export function aggregateSourceFingerprint(patterns: readonly string[], files: readonly SourceFile[]): string {
+  return sha256(compactJson({
+    declarations: [...patterns].sort(compareCodeUnits),
+    files: [...files].sort((left, right) => compareCodeUnits(left.path, right.path)).map(file => ({
+      path: file.path,
+      contentHash: file.contentHash,
+    })),
+  }))
+}
+
+export type GitChangeKind = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+
+export interface GitChange {
+  readonly path: string
+  readonly kind: GitChangeKind
+  readonly previousPath?: string
+}
+
+export interface GitEvidence {
+  readonly currentRevision: string
+  readonly midOperation: boolean
+  readonly midOperationKind?: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect'
+  readonly changes: readonly GitChange[]
+  readonly hasDiff: boolean
+  readonly fingerprint: string
+}
+
+function changeKind(code: string): GitChangeKind {
+  if (code === 'A')
+    return 'added'
+  if (code === 'D')
+    return 'deleted'
+  if (code === 'R' || code === 'C')
+    return 'renamed'
+  return 'modified'
+}
+
+function validateGitPath(candidate: string): string {
+  assertSafeRelativePath(candidate)
+  return candidate
+}
+
+export function parsePorcelainV2(bytes: Uint8Array): readonly GitChange[] {
+  const text = decodeUtf8(bytes, 'status.bin')
+  if (text.length > 0 && !text.endsWith('\0'))
+    throw new RuntimeFault('GIT_STATUS_INVALID', 'Git status evidence must be NUL-delimited.', 'status.bin')
+  const records = text.split('\0')
+  const changes: GitChange[] = []
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index] as string
+    if (record.length === 0 || record.startsWith('# '))
+      continue
+    if (record.startsWith('? ')) {
+      changes.push({ path: validateGitPath(record.slice(2)), kind: 'untracked' })
+      continue
+    }
+    if (record.startsWith('! '))
+      continue
+    const ordinary = /^1 ([^ ]+) [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ (.+)$/su.exec(record)
+    if (ordinary !== null) {
+      const xy = ordinary[1] as string
+      const code = xy[0] !== '.' ? xy[0] as string : xy[1] as string
+      changes.push({ path: validateGitPath(ordinary[2] as string), kind: changeKind(code) })
+      continue
+    }
+    const renamed = /^2 ([^ ]+) [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ (.+)$/su.exec(record)
+    if (renamed !== null) {
+      const previous = records[index + 1]
+      if (previous === undefined || previous.length === 0)
+        throw new RuntimeFault('GIT_STATUS_INVALID', 'A rename record is missing its previous path.', 'status.bin')
+      index += 1
+      changes.push({
+        path: validateGitPath(renamed[2] as string),
+        kind: 'renamed',
+        previousPath: validateGitPath(previous),
+      })
+      continue
+    }
+    const unmerged = /^u [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ (.+)$/su.exec(record)
+    if (unmerged !== null) {
+      changes.push({ path: validateGitPath(unmerged[1] as string), kind: 'modified' })
+      continue
+    }
+    throw new RuntimeFault('GIT_STATUS_INVALID', 'Git status evidence contains an unknown record.', 'status.bin')
+  }
+  return changes
+}
+
+export function parseNameStatus(bytes: Uint8Array): readonly GitChange[] {
+  const text = decodeUtf8(bytes, 'diff.bin')
+  if (text.length > 0 && !text.endsWith('\0'))
+    throw new RuntimeFault('GIT_DIFF_INVALID', 'Git diff evidence must be NUL-delimited.', 'diff.bin')
+  const fields = text.split('\0')
+  const changes: GitChange[] = []
+  for (let index = 0; index < fields.length - 1;) {
+    const status = fields[index++] as string
+    if (!/^[ACDMRTUXB]\d*$/.test(status))
+      throw new RuntimeFault('GIT_DIFF_INVALID', 'Git diff evidence contains an unknown status.', 'diff.bin')
+    if (status.startsWith('R') || status.startsWith('C')) {
+      const previous = fields[index++]
+      const current = fields[index++]
+      if (!previous || !current)
+        throw new RuntimeFault('GIT_DIFF_INVALID', 'Git diff rename evidence is incomplete.', 'diff.bin')
+      changes.push({ path: validateGitPath(current), previousPath: validateGitPath(previous), kind: 'renamed' })
+    }
+    else {
+      const candidate = fields[index++]
+      if (!candidate)
+        throw new RuntimeFault('GIT_DIFF_INVALID', 'Git diff evidence is incomplete.', 'diff.bin')
+      changes.push({ path: validateGitPath(candidate), kind: changeKind(status[0] as string) })
+    }
+  }
+  return changes
+}
+
+async function assertGitRepository(root: string): Promise<void> {
+  const info = await lstatRepositoryPath(root, '.git')
+  if (info === undefined || (!info.isDirectory() && !info.isFile()))
+    throw new RuntimeFault('GIT_REPOSITORY_REQUIRED', 'This capability requires Git metadata in the Runtime root.', '.git')
+}
+
+/** Loads and strictly validates one host-collected Git evidence directory. */
+export async function readGitEvidence(root: string, evidencePath: string): Promise<GitEvidence> {
+  await assertGitRepository(root)
+  assertGitEvidencePath(evidencePath)
+  const info = await lstatRepositoryPath(root, evidencePath)
+  if (info === undefined || !info.isDirectory())
+    throw new RuntimeFault('GIT_EVIDENCE_PATH_INVALID', 'Git evidence path must be a regular directory.', evidencePath)
+  const entries = await readDirectory(root, evidencePath)
+  const names = entries.map(entry => entry.name)
+  const allowed = new Set(['head.txt', 'mid-operation.json', 'status.bin', 'diff.bin'])
+  if (entries.some(entry => entry.kind !== 'file' || !allowed.has(entry.name)))
+    throw new RuntimeFault('GIT_EVIDENCE_UNKNOWN_FILE', 'Git evidence contains an unknown or non-regular entry.', evidencePath)
+  for (const required of ['head.txt', 'mid-operation.json', 'status.bin']) {
+    if (!names.includes(required))
+      throw new RuntimeFault('GIT_EVIDENCE_FILE_MISSING', `Git evidence is missing ${required}.`, evidencePath)
+  }
+  const raw = new Map<string, Buffer>()
+  for (const name of names)
+    raw.set(name, await readRegularBytes(root, `${evidencePath}/${name}`, MAX_GIT_EVIDENCE_BYTES))
+  const head = decodeUtf8(raw.get('head.txt') as Buffer, `${evidencePath}/head.txt`)
+  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?\n$/.test(head))
+    throw new RuntimeFault('GIT_HEAD_INVALID', 'Git HEAD evidence must contain one full lowercase revision.', `${evidencePath}/head.txt`)
+  let mid: unknown
+  try {
+    mid = JSON.parse(decodeUtf8(raw.get('mid-operation.json') as Buffer, `${evidencePath}/mid-operation.json`).replace(/^\uFEFF/, ''))
+  }
+  catch {
+    throw new RuntimeFault('GIT_MID_OPERATION_INVALID', 'Git mid-operation evidence must be valid JSON.', `${evidencePath}/mid-operation.json`)
+  }
+  if (typeof mid !== 'object' || mid === null || Array.isArray(mid))
+    throw new RuntimeFault('GIT_MID_OPERATION_INVALID', 'Git mid-operation evidence must be an object.', `${evidencePath}/mid-operation.json`)
+  const object = mid as Record<string, unknown>
+  const keys = Object.keys(object).sort(compareCodeUnits)
+  const expected = object.active === true ? ['active', 'kind'] : ['active']
+  if (JSON.stringify(keys) !== JSON.stringify(expected) || typeof object.active !== 'boolean'
+    || (object.active === true && !['merge', 'rebase', 'cherry-pick', 'revert', 'bisect'].includes(String(object.kind)))) {
+    throw new RuntimeFault('GIT_MID_OPERATION_INVALID', 'Git mid-operation evidence has an invalid shape.', `${evidencePath}/mid-operation.json`)
+  }
+
+  const changes = [
+    ...(raw.has('diff.bin') ? parseNameStatus(raw.get('diff.bin') as Buffer) : []),
+    ...parsePorcelainV2(raw.get('status.bin') as Buffer),
+  ].sort((left, right) => compareCodeUnits(`${left.path}\0${left.kind}\0${left.previousPath ?? ''}`, `${right.path}\0${right.kind}\0${right.previousPath ?? ''}`))
+  const unique = changes.filter((change, index) => index === 0
+    || compactJson(change as unknown as import('./stable-json.js').JsonValue)
+    !== compactJson(changes[index - 1] as unknown as import('./stable-json.js').JsonValue))
+  const fingerprint = sha256(compactJson([...raw.entries()]
+    .sort(([left], [right]) => compareCodeUnits(left, right))
+    .map(([name, bytes]) => ({ name, hash: sha256(bytes) }))))
+  return {
+    currentRevision: head.trim(),
+    midOperation: object.active as boolean,
+    ...(object.active === true ? { midOperationKind: object.kind as NonNullable<GitEvidence['midOperationKind']> } : {}),
+    changes: unique,
+    hasDiff: raw.has('diff.bin'),
+    fingerprint,
+  }
+}
+
+/** Restricts disposable Git evidence to one directly owned leaf. */
+export function assertGitEvidencePath(evidencePath: string): void {
+  assertSafeRelativePath(evidencePath)
+  const segments = evidencePath.split('/')
+  if (segments.length !== 3 || `${segments[0]}/${segments[1]}` !== EVIDENCE_ROOT || !SCRATCH_LEAF_ID.test(segments[2] as string))
+    throw new RuntimeFault('GIT_EVIDENCE_PATH_INVALID', 'Git evidence must be one named leaf under .scratch/evidence/.', evidencePath)
 }

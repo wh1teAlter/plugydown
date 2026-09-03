@@ -1,0 +1,2280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plugydown.dev/schemas/context/runtime/v1.json",
+  "title": "Plugydown Context Runtime protocol v1",
+  "$defs": {
+    "domainId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "documentId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)*$"
+    },
+    "sourcePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)(?:\\.{1,2}|\\.git|\\.scratch|context|node_modules)(?:/|$))(?!.*[~$*?\\[\\]{}!\\u0000-\\u001f\\u007f])(?!.*%[A-Za-z_]\\w*%)[^/]+(?:/[^/]+)*$"
+    },
+    "sourcePattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)(?:\\.{1,2}|\\.git|\\.scratch|context|node_modules)(?:/|$))(?!.*[~$?\\[\\]{}!\\u0000-\\u001f\\u007f])(?!.*%[A-Za-z_]\\w*%)(?![^/]*\\*)(?!.*(?:^|/)(?!\\*\\*(?:/|$))[^/]*\\*\\*[^/]*(?:/|$))(?!.*(?:^|/)\\*\\*(?:/.*)?/(?:\\*\\*)(?:/|$))[^/]+(?:/[^/]+)*$"
+    }
+  },
+  "oneOf": [
+    {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "repository.inspect"
+            },
+            "input": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {
+                "selectedDocumentIds": {
+                  "type": "array",
+                  "maxItems": 10000,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/$defs/documentId"
+                  }
+                }
+              }
+            },
+            "budget": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1048576
+                },
+                "estimatedTokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 128000
+                }
+              }
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "frontier.query"
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "depth"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "depth": {
+                  "enum": [
+                    1,
+                    2,
+                    3
+                  ]
+                },
+                "selectors": {
+                  "type": "object",
+                  "required": [],
+                  "additionalProperties": false,
+                  "properties": {
+                    "domainIds": {
+                      "type": "array",
+                      "maxItems": 10000,
+                      "uniqueItems": true,
+                      "items": {
+                        "$ref": "#/$defs/domainId"
+                      }
+                    },
+                    "documentIds": {
+                      "type": "array",
+                      "maxItems": 10000,
+                      "uniqueItems": true,
+                      "items": {
+                        "$ref": "#/$defs/documentId"
+                      }
+                    },
+                    "kinds": {
+                      "type": "array",
+                      "maxItems": 6,
+                      "uniqueItems": true,
+                      "items": {
+                        "enum": [
+                          "domain",
+                          "architecture",
+                          "decision",
+                          "guide",
+                          "reference",
+                          "reflection"
+                        ]
+                      }
+                    },
+                    "relation": {
+                      "type": "object",
+                      "required": [
+                        "type",
+                        "documentId"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "requires",
+                            "related"
+                          ]
+                        },
+                        "documentId": {
+                          "$ref": "#/$defs/documentId"
+                        }
+                      }
+                    },
+                    "codePaths": {
+                      "type": "array",
+                      "maxItems": 10000,
+                      "uniqueItems": true,
+                      "items": {
+                        "$ref": "#/$defs/sourcePath"
+                      }
+                    }
+                  }
+                },
+                "requiresClosure": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "budget": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1048576
+                },
+                "estimatedTokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 128000
+                }
+              }
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "graph.validate"
+            },
+            "input": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "delta.compute"
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "gitEvidencePath",
+                "scope",
+                "taskEvidence"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "gitEvidencePath": {
+                  "type": "string",
+                  "pattern": "^\\.scratch/evidence/[a-z0-9]+(?:-[a-z0-9]+)*$"
+                },
+                "scope": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "repository"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "ids"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "domains"
+                        },
+                        "ids": {
+                          "type": "array",
+                          "maxItems": 10000,
+                          "uniqueItems": true,
+                          "items": {
+                            "$ref": "#/$defs/domainId"
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "ids"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "documents"
+                        },
+                        "ids": {
+                          "type": "array",
+                          "maxItems": 10000,
+                          "uniqueItems": true,
+                          "items": {
+                            "$ref": "#/$defs/documentId"
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "paths"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "paths"
+                        },
+                        "paths": {
+                          "type": "array",
+                          "maxItems": 10000,
+                          "uniqueItems": true,
+                          "items": {
+                            "$ref": "#/$defs/sourcePattern"
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    }
+                  ]
+                },
+                "taskEvidence": {
+                  "type": "object",
+                  "required": [
+                    "intentKnown",
+                    "scopeComplete",
+                    "newCapabilitySuspected",
+                    "crossDomainContractUncertain"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "intentKnown": {
+                      "type": "boolean"
+                    },
+                    "scopeComplete": {
+                      "type": "boolean"
+                    },
+                    "newCapabilitySuspected": {
+                      "type": "boolean"
+                    },
+                    "crossDomainContractUncertain": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            },
+            "budget": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1048576
+                },
+                "estimatedTokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 128000
+                }
+              }
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "growth.measure"
+            },
+            "input": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {}
+            },
+            "budget": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1048576
+                },
+                "estimatedTokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 128000
+                }
+              }
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "feedback.match"
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "context",
+                "observedBehavior",
+                "outcomeOrCorrection",
+                "reuseBoundary"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "context": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observedBehavior": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "outcomeOrCorrection": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "reuseBoundary": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "budget": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1048576
+                },
+                "estimatedTokens": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 128000
+                }
+              }
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input",
+            "action"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "command",
+                "mode",
+                "dryRun",
+                "scope",
+                "gitEvidencePath",
+                "evidencePaths"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "enum": [
+                    "init",
+                    "update",
+                    "prune"
+                  ]
+                },
+                "mode": {
+                  "enum": [
+                    "light",
+                    "deep"
+                  ]
+                },
+                "dryRun": {
+                  "type": "boolean"
+                },
+                "scope": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "repository"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "ids"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "domains"
+                        },
+                        "ids": {
+                          "type": "array",
+                          "maxItems": 10000,
+                          "uniqueItems": true,
+                          "items": {
+                            "$ref": "#/$defs/domainId"
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "ids"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "documents"
+                        },
+                        "ids": {
+                          "type": "array",
+                          "maxItems": 10000,
+                          "uniqueItems": true,
+                          "items": {
+                            "$ref": "#/$defs/documentId"
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "paths"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "paths"
+                        },
+                        "paths": {
+                          "type": "array",
+                          "maxItems": 10000,
+                          "uniqueItems": true,
+                          "items": {
+                            "$ref": "#/$defs/sourcePattern"
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    }
+                  ]
+                },
+                "gitEvidencePath": {
+                  "type": "string",
+                  "pattern": "^\\.scratch/evidence/[a-z0-9]+(?:-[a-z0-9]+)*$"
+                },
+                "evidencePaths": {
+                  "type": "array",
+                  "maxItems": 10000,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/$defs/sourcePattern"
+                  },
+                  "minItems": 1
+                }
+              }
+            },
+            "action": {
+              "const": "begin"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input",
+            "action"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "runId"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                }
+              }
+            },
+            "action": {
+              "const": "validate"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input",
+            "action"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "runId",
+                "approval"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "approval": {
+                  "type": "object",
+                  "required": [
+                    "approved",
+                    "candidateFingerprint",
+                    "sourceEvidenceFingerprint",
+                    "summary"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "approved": {
+                      "const": true
+                    },
+                    "candidateFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "sourceEvidenceFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "summary": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    }
+                  }
+                }
+              }
+            },
+            "action": {
+              "const": "commit"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input",
+            "action"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "runId"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                }
+              }
+            },
+            "action": {
+              "const": "resume"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "diagnostics"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "enum": [
+                "repository.inspect",
+                "frontier.query",
+                "graph.validate",
+                "delta.compute",
+                "growth.measure",
+                "feedback.match",
+                "transaction",
+                "unknown"
+              ]
+            },
+            "status": {
+              "const": "failed"
+            },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "severity",
+                  "message"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  },
+                  "severity": {
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "repository.inspect"
+            },
+            "status": {
+              "enum": [
+                "success",
+                "incomplete"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "context",
+                "meta"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "context": {
+                  "type": "object",
+                  "required": [
+                    "state"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "enum": [
+                        "absent",
+                        "ready",
+                        "invalid"
+                      ]
+                    },
+                    "fingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    }
+                  }
+                },
+                "counts": {
+                  "type": "object",
+                  "required": [
+                    "domains",
+                    "design",
+                    "manual",
+                    "reflections",
+                    "documents"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "domains": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "design": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "manual": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "reflections": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "documents": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "meta": {
+                  "type": "object",
+                  "required": [
+                    "state"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": {
+                      "enum": [
+                        "absent",
+                        "valid",
+                        "invalid"
+                      ]
+                    }
+                  }
+                },
+                "activeRun": {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "command",
+                    "phase"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "command": {
+                      "enum": [
+                        "init",
+                        "update",
+                        "prune"
+                      ]
+                    },
+                    "phase": {
+                      "enum": [
+                        "staged",
+                        "validated",
+                        "committing",
+                        "committed",
+                        "restored",
+                        "recovery_required",
+                        "failed"
+                      ]
+                    }
+                  }
+                },
+                "selected": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "state"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "state": {
+                        "enum": [
+                          "missing",
+                          "fresh",
+                          "stale"
+                        ]
+                      },
+                      "sourceFingerprint": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "severity",
+                  "message"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  },
+                  "severity": {
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "frontier.query"
+            },
+            "status": {
+              "enum": [
+                "success",
+                "incomplete"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "contextFingerprint",
+                "items"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "contextFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "description",
+                      "kind",
+                      "domain",
+                      "path",
+                      "relations",
+                      "code"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "description": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "kind": {
+                        "enum": [
+                          "domain",
+                          "architecture",
+                          "decision",
+                          "guide",
+                          "reference",
+                          "reflection"
+                        ]
+                      },
+                      "domain": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "relations": {
+                        "type": "object",
+                        "required": [
+                          "requires",
+                          "related",
+                          "supersedes"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "requires": {
+                            "type": "array",
+                            "maxItems": 10000,
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "related": {
+                            "type": "array",
+                            "maxItems": 10000,
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "supersedes": {
+                            "type": "array",
+                            "maxItems": 10000,
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          }
+                        }
+                      },
+                      "code": {
+                        "type": "object",
+                        "required": [
+                          "paths"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "paths": {
+                            "type": "array",
+                            "maxItems": 10000,
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          }
+                        }
+                      },
+                      "reasons": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "body": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "severity",
+                  "message"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  },
+                  "severity": {
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "graph.validate"
+            },
+            "status": {
+              "enum": [
+                "success"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "contextFingerprint",
+                "domainCount",
+                "documentCount",
+                "relationCount",
+                "sourceDeclarationCount"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "contextFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "domainCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "documentCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "relationCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sourceDeclarationCount": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "severity",
+                  "message"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  },
+                  "severity": {
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "delta.compute"
+            },
+            "status": {
+              "enum": [
+                "success",
+                "incomplete"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "currentRevision",
+                "changedPaths",
+                "directImpact",
+                "expandedImpact",
+                "unmappedPaths",
+                "brokenEvidence",
+                "light",
+                "repositoryBaselineEligible"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "repositoryBaseline": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
+                },
+                "currentRevision": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
+                },
+                "changedPaths": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path",
+                      "kind"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "kind": {
+                        "enum": [
+                          "added",
+                          "modified",
+                          "deleted",
+                          "renamed",
+                          "untracked"
+                        ]
+                      },
+                      "previousPath": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                },
+                "directImpact": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "documentId",
+                      "changedPaths",
+                      "reasons"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "documentId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "changedPaths": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "reasons": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                },
+                "expandedImpact": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "documentId",
+                      "reasons"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "documentId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "reasons": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                },
+                "unmappedPaths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "brokenEvidence": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "light": {
+                  "type": "object",
+                  "required": [
+                    "eligible",
+                    "blockers"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "eligible": {
+                      "type": "boolean"
+                    },
+                    "blockers": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                },
+                "repositoryBaselineEligible": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "severity",
+                  "message"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  },
+                  "severity": {
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "growth.measure"
+            },
+            "status": {
+              "enum": [
+                "success",
+                "incomplete"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "current",
+                "delta",
+                "perDomain",
+                "candidates"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "current": {
+                  "type": "object",
+                  "required": [
+                    "documentCount",
+                    "frontMatterBytes",
+                    "bodyBytes",
+                    "estimatedTokens"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "documentCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "frontMatterBytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "bodyBytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "estimatedTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "baseline": {
+                  "type": "object",
+                  "required": [
+                    "source",
+                    "documentCount",
+                    "frontMatterBytes",
+                    "bodyBytes",
+                    "estimatedTokens",
+                    "perDomain"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "source": {
+                      "enum": [
+                        "init",
+                        "prune"
+                      ]
+                    },
+                    "documentCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "frontMatterBytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "bodyBytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "estimatedTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "perDomain": {
+                      "type": "object",
+                      "propertyNames": {
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "required": [
+                          "documentCount",
+                          "frontMatterBytes",
+                          "bodyBytes",
+                          "estimatedTokens"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "documentCount": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "frontMatterBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "bodyBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "estimatedTokens": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "delta": {
+                  "type": "object",
+                  "required": [
+                    "documentCount",
+                    "frontMatterBytes",
+                    "bodyBytes",
+                    "estimatedTokens"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "documentCount": {
+                      "type": "integer"
+                    },
+                    "frontMatterBytes": {
+                      "type": "integer"
+                    },
+                    "bodyBytes": {
+                      "type": "integer"
+                    },
+                    "estimatedTokens": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "perDomain": {
+                  "type": "object",
+                  "propertyNames": {
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "required": [
+                      "documentCount",
+                      "frontMatterBytes",
+                      "bodyBytes",
+                      "estimatedTokens"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "documentCount": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "frontMatterBytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "bodyBytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "estimatedTokens": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                },
+                "candidates": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "documentIds",
+                      "reasons"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "duplicate",
+                          "fragmented",
+                          "concentrated",
+                          "orphaned"
+                        ]
+                      },
+                      "documentIds": {
+                        "type": "array",
+                        "maxItems": 10000,
+                        "uniqueItems": true,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "minItems": 1
+                      },
+                      "reasons": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "severity",
+                  "message"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  },
+                  "severity": {
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "feedback.match"
+            },
+            "status": {
+              "enum": [
+                "success",
+                "incomplete"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "suggestedId",
+                "matches"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "suggestedId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*-[a-f0-9]{8}$"
+                },
+                "matches": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "id",
+                      "path",
+                      "reasons"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "feedback",
+                          "reflection"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "reasons": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "severity",
+                  "message"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  },
+                  "severity": {
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "enum": [
+                "success",
+                "no_change",
+                "dry_run",
+                "incomplete",
+                "failed"
+              ]
+            },
+            "data": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "required": [],
+                  "additionalProperties": false,
+                  "properties": {
+                    "activeRunId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "manualRecoveryRequired": {
+                      "const": true
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "candidatePath",
+                    "nextAction"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "candidatePath": {
+                      "type": "string",
+                      "pattern": "^\\.scratch/runs/[a-f0-9-]+/candidate/context$"
+                    },
+                    "nextAction": {
+                      "const": "edit_candidate"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "candidateFingerprint",
+                    "sourceEvidenceFingerprint",
+                    "nextAction"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "candidateFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "sourceEvidenceFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "nextAction": {
+                      "const": "semantic_review"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "outcome",
+                    "contextFingerprint"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "outcome": {
+                      "const": "no_change"
+                    },
+                    "contextFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "outcome",
+                    "candidateFingerprint",
+                    "sourceEvidenceFingerprint"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "outcome": {
+                      "const": "validated"
+                    },
+                    "candidateFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "sourceEvidenceFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "outcome",
+                    "contextFingerprint"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "outcome": {
+                      "enum": [
+                        "committed",
+                        "candidate_completed"
+                      ]
+                    },
+                    "contextFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "approvedCandidateFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "approvedSourceEvidenceFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "outcome",
+                    "contextFingerprint"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "outcome": {
+                      "const": "backup_restored"
+                    },
+                    "contextFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "outcome",
+                    "manualRecoveryRequired"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "outcome": {
+                      "enum": [
+                        "manual_recovery",
+                        "no_trusted_copy"
+                      ]
+                    },
+                    "manualRecoveryRequired": {
+                      "const": true
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "outcome",
+                    "nextAction"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "outcome": {
+                      "enum": [
+                        "stale",
+                        "approval_mismatch"
+                      ]
+                    },
+                    "nextAction": {
+                      "enum": [
+                        "validate",
+                        "semantic_review",
+                        "regenerate_candidate"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "outcome",
+                    "nextAction"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "outcome": {
+                      "const": "ready"
+                    },
+                    "nextAction": {
+                      "enum": [
+                        "edit_candidate",
+                        "semantic_review"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "runId",
+                    "outcome"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                    },
+                    "outcome": {
+                      "enum": [
+                        "restored",
+                        "failed",
+                        "manual_required"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "severity",
+                  "message"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  },
+                  "severity": {
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

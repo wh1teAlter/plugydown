@@ -8,88 +8,92 @@ import type {
   PackageContribution,
   PlatformContributor,
 } from '@aaplugin/kit/sdk'
-import type {
-  ClaudePackageComponent,
-} from '@aaplugin/platform-claude-code'
-import type { InternalRoleSource } from './internal-role-parser.js'
+import type { ClaudePackageComponent } from '@aaplugin/platform-claude-code'
 import { defineExtension } from '@aaplugin/kit/sdk'
 import { PLATFORM_ID as CLAUDE_CODE } from '@aaplugin/platform-claude-code'
 import { PLATFORM_ID as CODEX } from '@aaplugin/platform-codex'
-import { parseInternalRole } from './internal-role-parser.js'
 
-/** The exact Internal Roles this product defines. */
-const REQUIRED = ['investigator', 'recorder', 'reflector'] as const
-
-/** Extension-owned source root, relative to the canonical source directory. */
 const ROOT = 'internal-roles'
 
-/** @returns code-unit ordering, so output never depends on the host locale. */
+interface RoleMetadata {
+  readonly id: 'investigator' | 'recorder' | 'reflector'
+  readonly description: string
+  readonly model: 'inherit' | 'capable'
+  readonly tools: readonly string[]
+}
+
+interface InternalRole extends RoleMetadata {
+  readonly body: string
+}
+
+/** Static platform metadata for the exact role set owned by this Extension. */
+const ROLE_METADATA: readonly RoleMetadata[] = Object.freeze([
+  Object.freeze({
+    id: 'investigator',
+    description: 'Establish verifiable engineering facts from code, configuration, and history.',
+    model: 'capable',
+    tools: Object.freeze(['Read', 'Glob', 'Grep', 'Bash']),
+  }),
+  Object.freeze({
+    id: 'recorder',
+    description: 'Author and converge formal repository knowledge only in a transaction candidate.',
+    model: 'capable',
+    tools: Object.freeze(['Read', 'Glob', 'Grep', 'Write', 'Edit']),
+  }),
+  Object.freeze({
+    id: 'reflector',
+    description: 'Capture recurring engineering feedback as reusable temporary evidence.',
+    model: 'inherit',
+    tools: Object.freeze(['Read', 'Glob', 'Grep', 'Write']),
+  }),
+])
+
+const METADATA_BY_FILE = new Map(ROLE_METADATA.map(role => [`${role.id}.md`, role]))
+
 function compare(left: string, right: string): number {
   return left === right ? 0 : left < right ? -1 : 1
 }
 
-/**
- * Renders a role as a Codex-private runtime resource.
- *
- * This is product data read back through the runtime protocol. It is deliberately not a Skill,
- * not an Agent, and not a runtime entry: Codex plugins cannot register agents, and generating
- * an `agent-*` Skill would claim a capability the host does not have.
- *
- * @param role the parsed role.
- * @returns the file contents.
- */
-function codexResource(role: InternalRoleSource): string {
-  const header = [
-    '---',
-    `id: ${role.id}`,
-    `description: ${role.description}`,
-    'delivery: private-runtime-resource',
-    '---',
-  ].join('\n')
-  return `${header}\n\n${role.body}\n`
-}
-
-/** Discovers role sources from the Extension's exclusive root. */
-async function discover(context: ExtensionDiscoverContext): Promise<readonly InternalRoleSource[]> {
+async function discover(context: ExtensionDiscoverContext): Promise<readonly InternalRole[]> {
   const directory = context.roots[ROOT]
   if (directory === undefined)
     return []
 
-  const roles: InternalRoleSource[] = []
-  for (const entry of await context.sources.list(directory)) {
-    if (entry.type !== 'file' || !entry.name.endsWith('.md'))
-      throw new Error(`Internal Role sources must be flat Markdown files; found "${entry.name}".`)
-
-    const role = parseInternalRole(await context.sources.readText(entry.file), entry.name)
-    if (`${role.id}.md` !== entry.name)
-      throw new Error(`Internal Role id must match its filename; "${entry.name}" declares "${role.id}".`)
-    roles.push(role)
+  const entries = await context.sources.list(directory)
+  const roles: InternalRole[] = []
+  for (const entry of entries) {
+    const metadata = METADATA_BY_FILE.get(entry.name)
+    if (metadata === undefined)
+      throw new Error(`Unknown Internal Role source "${entry.name}".`)
+    if (entry.type !== 'file')
+      throw new Error(`Internal Role "${entry.name}" must be a regular UTF-8 Markdown file.`)
+    const body = await context.sources.readText(entry.file)
+    if (body.trim().length === 0)
+      throw new Error(`Internal Role "${entry.name}" must have a non-empty Markdown body.`)
+    roles.push({ ...metadata, body })
   }
   return roles.sort((left, right) => compare(left.id, right.id))
 }
 
-/** Subject declaration returned by validation. */
 interface RoleSubject {
   readonly subject: string
   readonly capabilities: readonly string[]
 }
 
-/** Validates that exactly the three required roles exist, and declares their subjects. */
 function validate(
   context: ExtensionValidateContext,
-  roles: Readonly<readonly InternalRoleSource[]>,
-): { readonly state: readonly InternalRoleSource[], readonly subjects: readonly RoleSubject[] } {
-  const ids = roles.map(role => role.id)
-  if (ids.join(' ') !== [...REQUIRED].join(' ')) {
+  roles: Readonly<readonly InternalRole[]>,
+): { readonly state: readonly InternalRole[], readonly subjects: readonly RoleSubject[] } {
+  const expected = ROLE_METADATA.map(role => role.id)
+  const actual = roles.map(role => role.id)
+  if (actual.join('\0') !== expected.join('\0')) {
     context.diagnostics.report({
       code: 'CONTEXT_ROLE_SET_INVALID',
       severity: 'error',
-      message: `Exactly ${REQUIRED.join(', ')} Internal Roles are required.`,
-      hint: 'Add or remove a file under the internal-roles source root so the set matches exactly.',
+      message: `Exactly ${expected.join(', ')} Internal Roles are required.`,
+      hint: 'Restore the exact canonical Markdown set under src/internal-roles/.',
     })
   }
-
-  /** A canonical Agent with the same ID would collide during Claude finalization. */
   for (const role of roles) {
     if (context.project.agents.some(agent => agent.id === role.id)) {
       context.diagnostics.report({
@@ -99,26 +103,18 @@ function validate(
       })
     }
   }
-
   return {
     state: [...roles],
     subjects: roles.map(role => ({ subject: `internal-role:${role.id}`, capabilities: ['role-delivery'] })),
   }
 }
 
-/**
- * Contributes Claude Code native Agents.
- *
- * The payload is the Platform's own public component type. Claude validates it, renders
- * `agents/<id>.md`, and writes the manifest field itself, so this contributor must not emit
- * the asset or patch the document.
- */
-const claudeContributor: PlatformContributor<readonly InternalRoleSource[], ClaudePackageComponent> = Object.freeze({
+const claudeContributor: PlatformContributor<readonly InternalRole[], ClaudePackageComponent> = Object.freeze({
   platform: CLAUDE_CODE,
   platformApiVersion: '1' as const,
   contribute(
     _context: ContributionContext,
-    roles: Readonly<readonly InternalRoleSource[]>,
+    roles: Readonly<readonly InternalRole[]>,
   ): PackageContribution<ClaudePackageComponent> {
     return {
       components: roles.map(role => ({
@@ -129,44 +125,51 @@ const claudeContributor: PlatformContributor<readonly InternalRoleSource[], Clau
           description: role.description,
           body: role.body,
           model: role.model,
-          ...(role.tools.length === 0 ? {} : { tools: role.tools }),
+          tools: role.tools,
         },
       })),
       compatibility: roles.map(role => ({
         subject: `internal-role:${role.id}`,
         capability: 'role-delivery',
         level: 'native' as const,
-        reason: 'Claude Code receives the role as a native Agent with its own context.',
+        reason: 'Claude Code receives the canonical role as a native Agent.',
       })),
     }
   },
 })
 
-/**
- * Contributes Codex private runtime resources.
- *
- * Codex rejects any non-empty Platform Component Contribution, so the role travels as an
- * ordinary Extension-owned asset instead. The path cannot collide with the Core runtime
- * output because the runtime entry key is `context`, never `agents`.
- */
-const codexContributor: PlatformContributor<readonly InternalRoleSource[], JsonObject> = Object.freeze({
+function codexRoleResource(role: InternalRole): string {
+  return [
+    '---',
+    `id: ${role.id}`,
+    `description: ${role.description}`,
+    'delivery: private-runtime-resource',
+    `model: ${role.model}`,
+    `tools: ${role.tools.join(', ')}`,
+    '---',
+    '',
+    role.body.replace(/\n*$/, ''),
+    '',
+  ].join('\n')
+}
+
+const codexContributor: PlatformContributor<readonly InternalRole[], JsonObject> = Object.freeze({
   platform: CODEX,
   platformApiVersion: '1' as const,
   async contribute(
     context: ContributionContext,
-    roles: Readonly<readonly InternalRoleSource[]>,
+    roles: Readonly<readonly InternalRole[]>,
   ): Promise<PackageContribution<JsonObject>> {
     const assets = []
     for (const role of roles) {
       assets.push({
         path: `runtime/agents/${role.id}.md`,
         asset: await context.assets.fromBytes({
-          bytes: codexResource(role),
+          bytes: codexRoleResource(role),
           origin: { operation: 'internal-role-resource', subjects: [`internal-role:${role.id}`] },
         }),
       })
     }
-
     return {
       assets,
       compatibility: roles.map(role => ({
@@ -174,18 +177,17 @@ const codexContributor: PlatformContributor<readonly InternalRoleSource[], JsonO
         capability: 'role-delivery',
         level: 'transform' as const,
         transformation: 'private-runtime-resource',
-        reason: 'Codex plugins cannot register agents, so the role is delivered as runtime data and executed inline.',
+        reason: 'Codex consumes the canonical role inline from a private runtime resource.',
       })),
     }
   },
 })
 
-/** Creates the Internal Roles Extension. */
 export default function internalRoles(): Extension<
   JsonObject,
-  readonly InternalRoleSource[],
-  readonly InternalRoleSource[],
-  readonly InternalRoleSource[]
+  readonly InternalRole[],
+  readonly InternalRole[],
+  readonly InternalRole[]
 > {
   return defineExtension({
     id: 'internal-roles',
@@ -196,11 +198,8 @@ export default function internalRoles(): Extension<
       return {
         discover,
         validate,
-        build: (_context: ExtensionBuildContext, roles: Readonly<readonly InternalRoleSource[]>) => ({ state: [...roles] }),
-        contributors: [
-          claudeContributor,
-          codexContributor,
-        ] as readonly PlatformContributor<readonly InternalRoleSource[], JsonObject>[],
+        build: (_context: ExtensionBuildContext, roles: Readonly<readonly InternalRole[]>) => ({ state: [...roles] }),
+        contributors: [claudeContributor, codexContributor] as readonly PlatformContributor<readonly InternalRole[], JsonObject>[],
       }
     },
   })

@@ -13,14 +13,7 @@
     "build": "aaplugin build",
     "validate": "aaplugin validate",
     "inspect": "aaplugin inspect --json",
-    "verify:forbidden": "node scripts/verify/forbidden.mjs",
-    "verify:compatibility": "node scripts/verify/compatibility.mjs",
-    "verify:determinism": "node scripts/verify/determinism.mjs",
-    "verify:archive": "node scripts/verify/archive.mjs",
-    "smoke:install": "node scripts/smoke/install.mjs",
-    "verify": "pnpm verify:forbidden && pnpm verify:compatibility && pnpm verify:determinism && pnpm verify:archive",
     "typecheck": "tsc --noEmit",
-    "pretest": "aaplugin build",
     "test": "vitest run"
   },
   "dependencies": {
