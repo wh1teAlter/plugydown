@@ -117,15 +117,17 @@ Use only these shapes:
 
 ```text
 .scratch/evidence/<evidence-id>/
-.scratch/feedback/<slug>-<short-content-hash>.md
-.scratch/investigations/<slug>-<short-content-hash>.md
+.scratch/feedback/<slug>-<short-identity-hash>.md
+.scratch/investigations/<slug>-<short-identity-hash>.md
 .scratch/runs/<runtime-uuid>/
 .scratch/locks/context-write/
 ```
 
 Names are lowercase; collections are plural, the singleton lock is kebab-case, run IDs are Runtime UUIDs, and human
-Markdown uses a slug plus content hash. Never put timestamps in names or contents. Do not delete `.scratch/`, a
-collection root, or unknown siblings.
+Markdown uses an ASCII slug plus an 8-hex stable identity hash. Feedback identity comes from its four matching fields
+and Investigation identity from the Role Brief goal/questions/scope, so appending Evidence never forces a rename; it is
+not a hash of the whole file. Never put timestamps in names or contents. Do not delete `.scratch/`, a collection root,
+or unknown siblings.
 
 Runtime removes transaction evidence/run/lock after `success`, `no_change`, `dry_run`, trusted-backup restoration, or a
 safe pre-write failure. Delete workflow-owned Investigation files at the same safe terminal point. Preserve only facts

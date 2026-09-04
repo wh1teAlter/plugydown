@@ -64,6 +64,7 @@ describe('runtime protocol', () => {
     [{ protocol: PROTOCOL, capability: 'transaction', input: {} }, 'ACTION_UNKNOWN'],
     [{ protocol: PROTOCOL, capability: 'transaction', action: 'remove', input: {} }, 'ACTION_UNKNOWN'],
     [{ protocol: PROTOCOL, capability: 'transaction', action: 'validate', input: { runId: '11111111-1111-4111-8111-111111111111', extra: true } }, 'REQUEST_FIELD_UNKNOWN'],
+    [{ protocol: PROTOCOL, capability: 'transaction', action: 'resume', input: { runId: '11111111-1111-4111-8111-111111111111', disposition: 'discard' } }, 'REQUEST_FIELD_INVALID'],
     [{ protocol: PROTOCOL, capability: 'transaction', action: 'resume', input: { runId: '11111111-1111-4111-8111-111111111111' }, budget: { items: 1 } }, 'REQUEST_FIELD_INVALID'],
     [{ protocol: PROTOCOL, capability: 'transaction', action: 'begin', input: { command: 'init', mode: 'deep', dryRun: false, scope: { kind: 'repository' }, gitEvidencePath: 'evidence', evidencePaths: ['src/service.ts'], runId: '11111111-1111-4111-8111-111111111111' } }, 'REQUEST_FIELD_UNKNOWN'],
     [{ protocol: PROTOCOL, capability: 'transaction', action: 'commit', input: { runId: '11111111-1111-4111-8111-111111111111', approval: { approved: false, candidateFingerprint: '0'.repeat(64), sourceEvidenceFingerprint: '0'.repeat(64), summary: 'reviewed' } } }, 'APPROVAL_INVALID'],
@@ -115,7 +116,7 @@ describe('runtime protocol', () => {
     expect(final.cursor).toBeUndefined()
   })
 
-  it('fails stably when one result item cannot fit under the hard output limits', async () => {
+  it('chunks an oversized L3 body on UTF-8 boundaries and always advances its cursor', async () => {
     const huge = {
       ...SERVICE_GUIDE,
       id: 'service.huge',
@@ -125,13 +126,90 @@ describe('runtime protocol', () => {
     const root = await createRepository({ documents: [SERVICE_DOMAIN, huge], baselineRevision: REVISION_A })
     roots.push(root)
 
-    const response = await call(root, 'frontier.query', { depth: 3, selectors: { documentIds: [huge.id] } }, {
+    const input = { depth: 3 as const, selectors: { documentIds: [huge.id] } }
+    let response = await call(root, 'frontier.query', input, {
       budget: { items: 1000, bytes: 1024 * 1024, estimatedTokens: 128000 },
     })
+    let previousCursor: string | undefined
+    let endByte = 0
+    let reconstructed = ''
+    for (let page = 0; page < 10; page += 1) {
+      const item = (response.data?.items as Array<Record<string, unknown>>)[0]
+      const body = item?.body as Record<string, unknown>
+      expect(body).toMatchObject({ startByte: endByte, totalBytes: expect.any(Number), complete: expect.any(Boolean) })
+      expect(typeof body.text).toBe('string')
+      reconstructed += body.text as string
+      endByte = body.endByte as number
+      if (response.status === 'success')
+        break
+      expect(response.status).toBe('incomplete')
+      expect(response.cursor).toEqual(expect.any(String))
+      expect(response.cursor).not.toBe(previousCursor)
+      previousCursor = response.cursor
+      response = await call(root, 'frontier.query', input, {
+        cursor: response.cursor as string,
+        budget: { items: 1000, bytes: 1024 * 1024, estimatedTokens: 128000 },
+      })
+    }
+    expect(response.status).toBe('success')
+    expect(reconstructed).toContain('# Huge')
+    expect(Buffer.byteLength(reconstructed, 'utf8')).toBe(endByte)
+  })
 
-    expect(response.status).toBe('failed')
+  it('rejects non-canonical padded cursors and budgets that cannot hold one atomic item', async () => {
+    const root = await paginationReady()
+    const input = { depth: 1 }
+    const first = await call(root, 'frontier.query', input, { budget: { items: 1, bytes: 1024 * 1024, estimatedTokens: 128000 } })
+    const padded = await call(root, 'frontier.query', input, { cursor: `${first.cursor as string}=` })
+    expect(padded).toMatchObject({ status: 'failed', diagnostics: [{ code: 'CURSOR_INVALID' }] })
+
+    const tooSmall = await call(root, 'frontier.query', input, { budget: { items: 1, bytes: 1, estimatedTokens: 1 } })
+    expect(tooSmall).toMatchObject({ status: 'failed', diagnostics: [{ code: 'BUDGET_TOO_SMALL' }] })
+    expect(tooSmall.cursor).toBeUndefined()
+  })
+
+  it('fails instead of paging when the envelope fits but one metadata item cannot', async () => {
+    const root = await createRepository({
+      documents: [
+        { ...SERVICE_DOMAIN, description: `Service Domain padded to exceed a small caller budget. ${'x'.repeat(4_000)}` },
+        { ...CLIENT_DOMAIN, description: `Client Domain padded to exceed a small caller budget. ${'x'.repeat(4_000)}` },
+      ],
+      baselineRevision: REVISION_A,
+    })
+    roots.push(root)
+
+    // The response envelope fits 2 KiB but neither Domain item does, and both stay far below
+    // the hard limit. That must fail, never return an empty page with a repeating cursor.
+    const response = await call(root, 'frontier.query', { depth: 1 }, { budget: { items: 100, bytes: 2_048, estimatedTokens: 32_000 } })
+
+    expect(response).toMatchObject({ status: 'failed', diagnostics: [{ code: 'BUDGET_TOO_SMALL' }] })
     expect(response.cursor).toBeUndefined()
-    expect(response.diagnostics?.[0]?.code).toBe('RESULT_ITEM_TOO_LARGE')
+    expect(response.data).toBeUndefined()
+  })
+
+  it('never echoes an unsafe request path into a diagnostic', async () => {
+    const root = await ready()
+    const unsafe = [
+      '/etc/passwd',
+      'C:\\Windows\\system.ini',
+      'src\\windows.ts',
+      'src/../escape.ts',
+      'src/./same.ts',
+      'src/$' + '{HOME}.ts',
+      'src/%APPDATA%.ts',
+      'src/~user.ts',
+      'src/control\u0001.ts',
+    ]
+    for (const candidate of unsafe) {
+      const response = await call(root, 'frontier.query', { depth: 2, selectors: { codePaths: [candidate] } })
+
+      expect(response.status).toBe('failed')
+      expect(JSON.stringify(response)).not.toContain(candidate)
+      for (const item of response.diagnostics ?? []) {
+        // Whatever survives must be a plain repository-relative path.
+        expect(item.path === undefined || /^[\w.-]+(?:\/[\w.-]+)*$/.test(item.path)).toBe(true)
+      }
+    }
   })
 
   it('returns success with an empty list instead of an incomplete result', async () => {

@@ -119,14 +119,16 @@ Context uses the business repository paths directly:
 
 ```text
 .scratch/evidence/<evidence-id>/
-.scratch/feedback/<slug>-<short-content-hash>.md
-.scratch/investigations/<slug>-<short-content-hash>.md
+.scratch/feedback/<slug>-<short-identity-hash>.md
+.scratch/investigations/<slug>-<short-identity-hash>.md
 .scratch/runs/<runtime-uuid>/
 .scratch/locks/context-write/
 ```
 
-Use lowercase plural collection names, kebab-case singleton names, UUID run IDs, and slug-plus-content-hash Markdown
-names. Never use timestamps. Never delete `.scratch/`, a collection root, or unknown siblings.
+Use lowercase plural collection names, kebab-case singleton names, UUID run IDs, and Markdown names built from an ASCII
+slug plus an 8-hex stable identity hash. Feedback identity derives from its four matching fields and Investigation
+identity from the Role Brief goal/questions/scope, not from the whole file, so appended Evidence never forces a rename.
+Never use timestamps. Never delete `.scratch/`, a collection root, or unknown siblings.
 
 On `success`, `no_change`, `dry_run`, trusted-backup restoration, or a safe pre-write failure, remove every leaf owned
 by the completed workflow. Runtime removes transaction evidence/run/lock; the Main Assistant removes workflow-owned
@@ -142,6 +144,17 @@ continue or when `manualRecoveryRequired`/`no_trusted_copy` needs human recovery
 - `incomplete`: follow only the returned cursor, `nextAction`, active run, evidence, authorization, review, or recovery need.
 - `failed`: stop the affected workflow and report diagnostics. If `manualRecoveryRequired` is true, preserve the named
   recovery leaves and lock; otherwise clean any host-owned leaf that Runtime could not own.
+
+Transaction outcomes are distinct results, never one generic retry:
+
+| Outcome | Meaning | Do this |
+|---|---|---|
+| `candidate_edit_required` | The candidate is repairable in place | Fix the candidate, then validate again |
+| `candidate_stale` | Candidate or source changed after validation | Validate again, then obtain a fresh review |
+| `approval_mismatch` | The approval is not bound to current bytes | Review again and approve the current fingerprints |
+| `active_run` | Another run owns the write lock | Resume that run; never delete its lock |
+| `snapshot_stale` | Formal, Git or declared evidence moved; the run is cleaned | Collect evidence and begin a new transaction |
+| `manual_recovery` / `no_trusted_copy` | Copies conflict or none is trustworthy | Stop, keep the scene, ask for human recovery |
 
 For a transport failure, preserve an existing active/recoverable transaction exactly as found and stop. When no run
 was established, delete only this workflow's no-longer-used evidence or Investigation leaf. Never present transport

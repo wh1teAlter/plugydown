@@ -22,6 +22,40 @@
       "minLength": 1,
       "maxLength": 1024,
       "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)(?:\\.{1,2}|\\.git|\\.scratch|context|node_modules)(?:/|$))(?!.*[~$?\\[\\]{}!\\u0000-\\u001f\\u007f])(?!.*%[A-Za-z_]\\w*%)(?![^/]*\\*)(?!.*(?:^|/)(?!\\*\\*(?:/|$))[^/]*\\*\\*[^/]*(?:/|$))(?!.*(?:^|/)\\*\\*(?:/.*)?/(?:\\*\\*)(?:/|$))[^/]+(?:/[^/]+)*$"
+    },
+    "diagnostics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "code",
+          "severity",
+          "message"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning",
+              "info"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
     }
   },
   "oneOf": [
@@ -1962,315 +1996,742 @@
               "const": "transaction"
             },
             "status": {
-              "enum": [
-                "success",
-                "no_change",
-                "dry_run",
-                "incomplete",
-                "failed"
-              ]
+              "const": "success"
             },
             "data": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "required": [],
-                  "additionalProperties": false,
-                  "properties": {
-                    "activeRunId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "manualRecoveryRequired": {
-                      "const": true
-                    }
-                  }
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "candidatePath",
+                "nextAction"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
                 },
-                {
-                  "type": "object",
-                  "required": [
-                    "runId",
-                    "candidatePath",
-                    "nextAction"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "runId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "candidatePath": {
-                      "type": "string",
-                      "pattern": "^\\.scratch/runs/[a-f0-9-]+/candidate/context$"
-                    },
-                    "nextAction": {
-                      "const": "edit_candidate"
-                    }
-                  }
+                "outcome": {
+                  "const": "staged"
                 },
-                {
-                  "type": "object",
-                  "required": [
-                    "runId",
-                    "candidateFingerprint",
-                    "sourceEvidenceFingerprint",
-                    "nextAction"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "runId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "candidateFingerprint": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{64}$"
-                    },
-                    "sourceEvidenceFingerprint": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{64}$"
-                    },
-                    "nextAction": {
-                      "const": "semantic_review"
-                    }
-                  }
+                "candidatePath": {
+                  "type": "string",
+                  "pattern": "^\\.scratch/runs/[a-f0-9-]+/candidate/context$"
                 },
-                {
-                  "type": "object",
-                  "required": [
-                    "runId",
-                    "outcome",
-                    "contextFingerprint"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "runId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "outcome": {
-                      "const": "no_change"
-                    },
-                    "contextFingerprint": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{64}$"
-                    }
-                  }
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "runId",
-                    "outcome",
-                    "candidateFingerprint",
-                    "sourceEvidenceFingerprint"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "runId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "outcome": {
-                      "const": "validated"
-                    },
-                    "candidateFingerprint": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{64}$"
-                    },
-                    "sourceEvidenceFingerprint": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{64}$"
-                    }
-                  }
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "runId",
-                    "outcome",
-                    "contextFingerprint"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "runId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "outcome": {
-                      "enum": [
-                        "committed",
-                        "candidate_completed"
-                      ]
-                    },
-                    "contextFingerprint": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{64}$"
-                    },
-                    "approvedCandidateFingerprint": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{64}$"
-                    },
-                    "approvedSourceEvidenceFingerprint": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{64}$"
-                    }
-                  }
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "runId",
-                    "outcome",
-                    "contextFingerprint"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "runId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "outcome": {
-                      "const": "backup_restored"
-                    },
-                    "contextFingerprint": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{64}$"
-                    }
-                  }
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "runId",
-                    "outcome",
-                    "manualRecoveryRequired"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "runId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "outcome": {
-                      "enum": [
-                        "manual_recovery",
-                        "no_trusted_copy"
-                      ]
-                    },
-                    "manualRecoveryRequired": {
-                      "const": true
-                    }
-                  }
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "runId",
-                    "outcome",
-                    "nextAction"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "runId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "outcome": {
-                      "enum": [
-                        "stale",
-                        "approval_mismatch"
-                      ]
-                    },
-                    "nextAction": {
-                      "enum": [
-                        "validate",
-                        "semantic_review",
-                        "regenerate_candidate"
-                      ]
-                    }
-                  }
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "runId",
-                    "outcome",
-                    "nextAction"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "runId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "outcome": {
-                      "const": "ready"
-                    },
-                    "nextAction": {
-                      "enum": [
-                        "edit_candidate",
-                        "semantic_review"
-                      ]
-                    }
-                  }
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "runId",
-                    "outcome"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "runId": {
-                      "type": "string",
-                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
-                    },
-                    "outcome": {
-                      "enum": [
-                        "restored",
-                        "failed",
-                        "manual_required"
-                      ]
-                    }
-                  }
-                }
-              ]
-            },
-            "diagnostics": {
-              "type": "array",
-              "minItems": 1,
-              "items": {
-                "type": "object",
-                "required": [
-                  "code",
-                  "severity",
-                  "message"
-                ],
-                "additionalProperties": false,
-                "properties": {
-                  "code": {
-                    "type": "string",
-                    "pattern": "^[A-Z][A-Z0-9_]*$"
-                  },
-                  "severity": {
-                    "enum": [
-                      "error",
-                      "warning",
-                      "info"
-                    ]
-                  },
-                  "message": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "path": {
-                    "type": "string",
-                    "minLength": 1
-                  }
+                "nextAction": {
+                  "const": "edit_candidate"
                 }
               }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "success"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "candidateFingerprint",
+                "sourceEvidenceFingerprint",
+                "nextAction"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "ready_for_review"
+                },
+                "candidateFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "sourceEvidenceFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "nextAction": {
+                  "const": "semantic_review"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "success"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "contextFingerprint",
+                "approvedCandidateFingerprint",
+                "approvedSourceEvidenceFingerprint"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "committed"
+                },
+                "contextFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "approvedCandidateFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "approvedSourceEvidenceFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "success"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "contextFingerprint",
+                "approvedCandidateFingerprint",
+                "approvedSourceEvidenceFingerprint"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "candidate_completed"
+                },
+                "contextFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "approvedCandidateFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "approvedSourceEvidenceFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "success"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "abandoned"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "no_change"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "contextFingerprint"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "no_change"
+                },
+                "contextFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "dry_run"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "candidateFingerprint",
+                "sourceEvidenceFingerprint"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "validated"
+                },
+                "candidateFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "sourceEvidenceFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "incomplete"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "nextAction"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "active_run"
+                },
+                "nextAction": {
+                  "const": "resume"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "incomplete"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "nextAction"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "candidate_edit_required"
+                },
+                "nextAction": {
+                  "const": "edit_candidate"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "incomplete"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "nextAction"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "candidate_stale"
+                },
+                "nextAction": {
+                  "const": "validate"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "incomplete"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "nextAction"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "approval_mismatch"
+                },
+                "nextAction": {
+                  "const": "semantic_review"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "failed"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "nextAction"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "snapshot_stale"
+                },
+                "nextAction": {
+                  "const": "restart_transaction"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "failed"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "contextFingerprint"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "backup_restored"
+                },
+                "contextFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "failed"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "manualRecoveryRequired"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "no_trusted_copy"
+                },
+                "manualRecoveryRequired": {
+                  "const": true
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "failed"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "mechanical_failure"
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "incomplete"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "outcome",
+                "manualRecoveryRequired"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "manual_recovery"
+                },
+                "manualRecoveryRequired": {
+                  "const": true
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
             }
           }
         }

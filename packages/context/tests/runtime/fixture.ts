@@ -167,10 +167,16 @@ async function sourceFingerprint(root: string, declarations: readonly string[]):
   }
   return hash(compact({
     declarations: [...declarations].sort(),
-    files: await Promise.all([...resolved].sort().map(async candidate => ({
-      path: candidate,
-      contentHash: hash(await fs.readFile(path.join(root, candidate))),
-    }))),
+    files: await Promise.all([...resolved].sort().map(async (candidate) => {
+      let contentHash = '0'.repeat(64)
+      try {
+        contentHash = hash(await fs.readFile(path.join(root, candidate)))
+      }
+      catch {
+        // Fixtures may intentionally declare missing/special sources; source health is not formal Meta validity.
+      }
+      return { path: candidate, contentHash }
+    })),
   }))
 }
 
@@ -282,12 +288,13 @@ export async function writeGitEvidence(root: string, options: {
 } = {}): Promise<string> {
   const relative = `.scratch/evidence/${options.id ?? 'request'}`
   const directory = path.join(root, relative)
+  const revision = options.revision ?? REVISION_A
   await fs.mkdir(directory, { recursive: true })
-  await fs.writeFile(path.join(directory, 'head.txt'), `${options.revision ?? REVISION_A}\n`)
+  await fs.writeFile(path.join(directory, 'head.txt'), `${revision}\n`)
   await fs.writeFile(path.join(directory, 'mid-operation.json'), JSON.stringify(options.midOperation === undefined || options.midOperation === false
     ? { active: false }
     : { active: true, kind: options.midOperation }))
-  await fs.writeFile(path.join(directory, 'status.bin'), options.status ?? '')
+  await fs.writeFile(path.join(directory, 'status.bin'), `# branch.oid ${revision}\0# branch.head main\0${String(options.status ?? '')}`)
   if (options.diff !== undefined)
     await fs.writeFile(path.join(directory, 'diff.bin'), options.diff)
   return relative
@@ -302,6 +309,26 @@ export function nameStatus(changes: readonly { readonly status: string, readonly
   return changes.map(change => change.previousPath === undefined
     ? `${change.status}\0${change.path}\0`
     : `${change.status}\0${change.previousPath}\0${change.path}\0`).join('')
+}
+
+export function feedbackId(fields: {
+  readonly context: string
+  readonly observedBehavior: string
+  readonly outcomeOrCorrection: string
+  readonly reuseBoundary: string
+}): string {
+  const normalize = (value: string): string => value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim()
+  const ascii = normalize(`${fields.context} ${fields.observedBehavior}`)
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .match(/[a-z0-9]+/g) ?? []
+  const slug = ascii.slice(0, 4).join('-').slice(0, 48).replace(/-+$/g, '') || 'feedback'
+  return `${slug}-${hash(compact({
+    context: normalize(fields.context),
+    observedBehavior: normalize(fields.observedBehavior),
+    outcomeOrCorrection: normalize(fields.outcomeOrCorrection),
+    reuseBoundary: normalize(fields.reuseBoundary),
+  })).slice(0, 8)}`
 }
 
 export function runtimeRequest(capability: string, input: unknown, options: { readonly budget?: unknown, readonly cursor?: string } = {}): Record<string, unknown> {

@@ -1,23 +1,58 @@
 import type { ContextDocument, Metrics } from './document.js'
 import type { KnowledgeGraph } from './graph.js'
-import type { FeedbackMatchInput, FrontierQueryInput, RepositoryInspectInput, RuntimeRequest, RuntimeResponse } from './protocol.js'
+import type {
+  CursorPosition,
+  Diagnostic,
+  FeedbackMatchInput,
+  FrontierQueryInput,
+  RepositoryInspectInput,
+  RuntimeRequest,
+  RuntimeResponse,
+} from './protocol.js'
 import type { JsonObject, JsonValue } from './stable-json.js'
-import { bodyFingerprint, frontMatterFingerprint } from './document.js'
+import { Buffer } from 'node:buffer'
+import { bodyFingerprint } from './document.js'
 import { documentMetadata, graphMetrics, loadKnowledge, requiresClosure } from './graph.js'
-import { decodeCursor, diagnostic, encodeCursor, paginate, resolvedBudget, RuntimeFault, runtimeResponse, sha256 } from './protocol.js'
-import { assertSourcePath, controlledGlobMatches, FEEDBACK_ROOT, LOCK_ROOT, lstatRepositoryPath, MAX_JSON_TEXT_BYTES, pathExists, readDirectory, readUtf8File, RUNS_ROOT } from './repository.js'
-import { compareCodeUnits } from './stable-json.js'
+import {
+  decodeCursor,
+  diagnostic,
+  encodeCursor,
+  fitBodyChunk,
+  paginate,
+  resolvedBudget,
+  RuntimeFault,
+  runtimeResponse,
+  sha256,
+} from './protocol.js'
+import {
+  assertSourcePath,
+  controlledGlobMatches,
+  decodeUtf8,
+  FEEDBACK_ROOT,
+  LOCK_ROOT,
+  lstatRepositoryPath,
+  MAX_JSON_TEXT_BYTES,
+  pathExists,
+  readDirectory,
+  readRegularBytes,
+  readUtf8File,
+  RUNS_ROOT,
+} from './repository.js'
+import { compactJson, compareCodeUnits } from './stable-json.js'
 
 const RUN_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
 const TRANSACTION_COMMANDS = new Set(['init', 'update', 'prune'])
 const TRANSACTION_PHASES = new Set(['staged', 'validated', 'committing', 'committed', 'restored', 'recovery_required', 'failed'])
 
-function issueDiagnostics(graph: KnowledgeGraph): readonly import('./protocol.js').Diagnostic[] {
-  return graph.issues.map(item => diagnostic(item.code, item.message, 'error', item.path))
+function issueDiagnostics(graph: KnowledgeGraph, includeSource = false): readonly Diagnostic[] {
+  return [
+    ...graph.issues.map(item => diagnostic(item.code, item.message, 'error', item.path)),
+    ...(includeSource ? graph.sourceIssues.map(item => diagnostic(item.code, item.message, 'error', item.path)) : []),
+  ]
 }
 
-function requireReady(graph: KnowledgeGraph): void {
-  if (graph.contextState !== 'ready') {
+function requireFormalReady(graph: KnowledgeGraph): void {
+  if (graph.formalState !== 'ready') {
     const first = graph.issues[0]
     throw new RuntimeFault(
       first?.code ?? 'CONTEXT_NOT_READY',
@@ -27,7 +62,7 @@ function requireReady(graph: KnowledgeGraph): void {
   }
 }
 
-async function activeRun(root: string): Promise<{ readonly value?: JsonObject, readonly diagnostics: readonly import('./protocol.js').Diagnostic[] }> {
+async function activeRun(root: string): Promise<{ readonly value?: JsonObject, readonly diagnostics: readonly Diagnostic[] }> {
   if (!await pathExists(root, LOCK_ROOT))
     return { diagnostics: [] }
   try {
@@ -52,39 +87,63 @@ async function activeRun(root: string): Promise<{ readonly value?: JsonObject, r
     }
     return { value: { runId, command: value.command, phase: value.phase }, diagnostics: [] }
   }
-  catch {
-    return { diagnostics: [diagnostic('ACTIVE_RUN_INVALID', 'The active transaction could not be inspected safely.', 'warning', LOCK_ROOT)] }
+  catch (error) {
+    if (error instanceof RuntimeFault || error instanceof SyntaxError)
+      return { diagnostics: [diagnostic('ACTIVE_RUN_INVALID', 'The active transaction could not be inspected safely.', 'warning', LOCK_ROOT)] }
+    throw error
   }
 }
 
 export async function repositoryInspect(root: string, request: RuntimeRequest): Promise<RuntimeResponse> {
   const input = request.input as RepositoryInspectInput
-  const graph = await loadKnowledge(root)
+  const selectedIds = [...(input.selectedDocumentIds ?? [])].sort(compareCodeUnits)
+  const graph = await loadKnowledge(root, undefined, selectedIds.length === 0
+    ? { sourcePolicy: 'formal-only' }
+    : { sourcePolicy: 'selected', selectedDocumentIds: selectedIds })
   const active = await activeRun(root)
-  const fingerprint = graph.contextFingerprint ?? graph.contextState
-  const selected = [...(input.selectedDocumentIds ?? [])].sort(compareCodeUnits).map((id): JsonObject => {
-    const current = graph.ledgers.get(id)
-    const recorded = graph.meta?.documents[id]
-    if (current === undefined)
+  const contextFingerprint = graph.contextFingerprint ?? 'formal:absent'
+  const unavailable = new Set(graph.sourceIssues.map(item => item.documentId))
+  const selected = selectedIds.map((id): JsonObject => {
+    const document = graph.documents.get(id)
+    if (document === undefined)
       return { id, state: 'missing' }
+    const current = graph.ledgers.get(id)
+    if (current === undefined || unavailable.has(id))
+      return { id, state: 'source_unavailable' }
+    const recorded = graph.meta?.documents[id]
     return {
       id,
-      state: recorded !== undefined && JSON.stringify(current) === JSON.stringify(recorded) ? 'fresh' : 'stale',
+      state: recorded !== undefined
+        && compactJson(current as unknown as JsonValue) === compactJson(recorded as unknown as JsonValue)
+        ? 'fresh'
+        : 'stale',
       sourceFingerprint: current.sourceFingerprint,
     }
   })
-  const offset = decodeCursor(request.cursor, request.capability, request.input, fingerprint)
-  const cursorFor = (nextOffset: number): string => encodeCursor(request.capability, request.input, fingerprint, nextOffset)
+  const stateFingerprint = sha256(compactJson({
+    selected,
+    activeRun: active.value ?? null,
+    activeDiagnostics: active.diagnostics.map(item => item.code),
+  }))
+  const position = decodeCursor(request.cursor, request.capability, request.input, contextFingerprint, stateFingerprint)
+  const cursorFor = (next: CursorPosition): string => encodeCursor(
+    request.capability,
+    request.input,
+    contextFingerprint,
+    stateFingerprint,
+    next,
+  )
   const response = (items: readonly JsonObject[], cursor?: string): RuntimeResponse => runtimeResponse(
     'repository.inspect',
     cursor === undefined ? 'success' : 'incomplete',
     {
       data: {
         context: {
-          state: graph.contextState,
+          state: graph.formalState,
+          sourceState: graph.sourceState,
           ...(graph.contextFingerprint === undefined ? {} : { fingerprint: graph.contextFingerprint }),
         },
-        ...(graph.contextState === 'absent' ? {} : { counts: { ...graph.counts } }),
+        ...(graph.formalState === 'absent' ? {} : { counts: { ...graph.counts } }),
         meta: { state: graph.metaState },
         ...(active.value === undefined ? {} : { activeRun: active.value }),
         ...(input.selectedDocumentIds === undefined ? {} : { selected: [...items] }),
@@ -93,8 +152,8 @@ export async function repositoryInspect(root: string, request: RuntimeRequest): 
       diagnostics: [...issueDiagnostics(graph), ...active.diagnostics],
     },
   )
-  const page = paginate(selected, offset, resolvedBudget(request), { response, cursor: cursorFor })
-  const cursor = page.nextOffset === undefined ? undefined : cursorFor(page.nextOffset)
+  const page = paginate(selected, position, resolvedBudget(request), { response, cursor: cursorFor })
+  const cursor = page.nextPosition === undefined ? undefined : cursorFor(page.nextPosition)
   return response(page.items, cursor)
 }
 
@@ -176,38 +235,97 @@ function frontierCandidates(graph: KnowledgeGraph, input: FrontierQueryInput): r
     })
 }
 
+interface FrontierItem {
+  readonly metadata: JsonObject
+  readonly body?: string
+}
+
 export async function frontierQuery(root: string, request: RuntimeRequest): Promise<RuntimeResponse> {
   const input = request.input as FrontierQueryInput
   input.selectors?.codePaths?.forEach(assertSourcePath)
-  const graph = await loadKnowledge(root)
-  requireReady(graph)
-  const fingerprint = graph.contextFingerprint as string
+  const graph = await loadKnowledge(root, undefined, { sourcePolicy: 'formal-only' })
+  requireFormalReady(graph)
+  const contextFingerprint = graph.contextFingerprint as string
+  const stateFingerprint = contextFingerprint
   const explicitBodyIds = new Set(input.selectors?.documentIds ?? [])
-  const items = frontierCandidates(graph, input).map(({ document, reasons }): JsonObject => ({
-    ...documentMetadata(document, reasons),
+  const items: readonly FrontierItem[] = frontierCandidates(graph, input).map(({ document, reasons }) => ({
+    metadata: documentMetadata(document, reasons),
     ...(input.depth === 3 && explicitBodyIds.has(document.id) ? { body: document.body } : {}),
   }))
-  const offset = decodeCursor(request.cursor, request.capability, request.input, fingerprint)
-  const cursorFor = (nextOffset: number): string => encodeCursor(request.capability, request.input, fingerprint, nextOffset)
+  const position = decodeCursor(request.cursor, request.capability, request.input, contextFingerprint, stateFingerprint)
+  if (position.itemOffset > items.length || (position.itemOffset === items.length && request.cursor !== undefined))
+    throw new RuntimeFault('CURSOR_INVALID', 'The continuation cursor points beyond the current result stream.')
+  const cursorFor = (next: CursorPosition): string => encodeCursor(
+    request.capability,
+    request.input,
+    contextFingerprint,
+    stateFingerprint,
+    next,
+  )
   const response = (pageItems: readonly JsonObject[], cursor?: string): RuntimeResponse => runtimeResponse(
     'frontier.query',
     cursor === undefined ? 'success' : 'incomplete',
     {
-      data: { contextFingerprint: fingerprint, items: [...pageItems] },
+      data: { contextFingerprint, items: [...pageItems] },
       ...(cursor === undefined ? {} : { cursor }),
     },
   )
-  const page = paginate(items, offset, resolvedBudget(request), { response, cursor: cursorFor })
-  const cursor = page.nextOffset === undefined ? undefined : cursorFor(page.nextOffset)
+  if (items.length === 0)
+    return response([])
+
+  const current = items[position.itemOffset] as FrontierItem
+  if (current.body !== undefined) {
+    const startByte = position.bodyByteOffset ?? 0
+    const totalBytes = Buffer.byteLength(current.body, 'utf8')
+    const continuation = (endByte: number): string | undefined => {
+      if (endByte < totalBytes)
+        return cursorFor({ itemOffset: position.itemOffset, bodyByteOffset: endByte })
+      return position.itemOffset + 1 < items.length ? cursorFor({ itemOffset: position.itemOffset + 1 }) : undefined
+    }
+    const chunk = fitBodyChunk(
+      current.body,
+      startByte,
+      resolvedBudget(request),
+      (candidate, cursor) => response([{ ...current.metadata, body: candidate }], cursor),
+      continuation,
+    )
+    return response([{ ...current.metadata, body: chunk }], continuation(chunk.endByte))
+  }
+  if (position.bodyByteOffset !== undefined)
+    throw new RuntimeFault('CURSOR_INVALID', 'The continuation cursor points inside an item without a body.')
+
+  // Metadata pages use the shared paginator so an item that fits the hard limit but not the
+  // caller budget fails with BUDGET_TOO_SMALL instead of emitting a non-advancing cursor.
+  // Pagination stops at the first body item: bodies are chunked by the branch above.
+  const nextBody = items.findIndex((item, index) => index >= position.itemOffset && item.body !== undefined)
+  const runEnd = nextBody === -1 ? items.length : nextBody
+  const page = paginate(
+    items.slice(position.itemOffset, runEnd).map(item => item.metadata),
+    { itemOffset: 0 },
+    resolvedBudget(request),
+    {
+      response,
+      cursor: next => cursorFor({ itemOffset: position.itemOffset + next.itemOffset }),
+    },
+  )
+  const consumed = position.itemOffset + page.items.length
+  const cursor = consumed < items.length ? cursorFor({ itemOffset: consumed }) : undefined
   return response(page.items, cursor)
 }
 
 export async function graphValidate(root: string): Promise<RuntimeResponse> {
-  const graph = await loadKnowledge(root)
-  if (graph.contextState !== 'ready') {
-    return runtimeResponse('graph.validate', 'failed', { diagnostics: issueDiagnostics(graph).length === 0
+  const graph = await loadKnowledge(root, undefined, { sourcePolicy: 'all-strict' })
+  const sourceLedgerDiagnostics = [...graph.ledgers.entries()].flatMap(([id, current]) => {
+    const recorded = graph.meta?.documents[id]
+    return recorded !== undefined && recorded.sourceFingerprint !== current.sourceFingerprint
+      ? [diagnostic('META_SOURCE_FINGERPRINT_MISMATCH', `Meta source fingerprint for "${id}" is stale.`, 'error', 'context/meta.json')]
+      : []
+  })
+  const diagnostics = [...issueDiagnostics(graph, true), ...sourceLedgerDiagnostics]
+  if (graph.formalState !== 'ready' || graph.sourceState !== 'ready' || sourceLedgerDiagnostics.length > 0) {
+    return runtimeResponse('graph.validate', 'failed', { diagnostics: diagnostics.length === 0
       ? [diagnostic('CONTEXT_NOT_READY', 'Formal Context is absent or invalid.', 'error', 'context')]
-      : issueDiagnostics(graph) })
+      : diagnostics })
   }
   return runtimeResponse('graph.validate', 'success', {
     data: {
@@ -233,14 +351,14 @@ function growthCandidates(graph: KnowledgeGraph): readonly JsonObject[] {
   const candidates: JsonObject[] = []
   const duplicates = new Map<string, string[]>()
   for (const document of graph.documents.values()) {
-    const key = `${frontMatterFingerprint(document)}:${bodyFingerprint(document)}`
+    const key = `${document.kind}:${bodyFingerprint(document)}`
     const ids = duplicates.get(key) ?? []
     ids.push(document.id)
     duplicates.set(key, ids)
   }
   for (const ids of duplicates.values()) {
     if (ids.length > 1)
-      candidates.push({ kind: 'duplicate', documentIds: ids.sort(compareCodeUnits), reasons: ['identical normalized front matter and body'] })
+      candidates.push({ kind: 'duplicate', documentIds: ids.sort(compareCodeUnits), reasons: ['same kind and identical normalized body'] })
   }
   for (const [domainId, domain] of graph.domains) {
     const small = domain.documentIds.filter(id => (graph.documents.get(id)?.bodyBytes ?? 0) < 256)
@@ -255,21 +373,29 @@ function growthCandidates(graph: KnowledgeGraph): readonly JsonObject[] {
     if (document.kind !== 'domain' && !incoming && outgoing === 0 && document.codePaths.length === 0)
       candidates.push({ kind: 'orphaned', documentIds: [document.id], reasons: ['no code paths or current requires/related edges'] })
   }
-  return candidates.sort((left, right) => compareCodeUnits(JSON.stringify(left), JSON.stringify(right)))
+  return candidates.sort((left, right) => compareCodeUnits(compactJson(left), compactJson(right)))
 }
 
 export async function growthMeasure(root: string, request: RuntimeRequest): Promise<RuntimeResponse> {
-  const graph = await loadKnowledge(root)
-  requireReady(graph)
+  const graph = await loadKnowledge(root, undefined, { sourcePolicy: 'formal-only' })
+  requireFormalReady(graph)
   const metrics = graphMetrics(graph)
   const baseline = graph.meta?.convergence
-  const candidates = growthCandidates(graph)
-  const fingerprint = graph.contextFingerprint as string
-  const offset = decodeCursor(request.cursor, request.capability, request.input, fingerprint)
-  const perDomain: JsonObject = {}
-  for (const [id, values] of Object.entries(metrics.perDomain).sort(([left], [right]) => compareCodeUnits(left, right)))
-    perDomain[id] = { ...values }
-  const cursorFor = (nextOffset: number): string => encodeCursor(request.capability, request.input, fingerprint, nextOffset)
+  const stream: JsonObject[] = []
+  for (const [id, current] of Object.entries(metrics.perDomain).sort(([left], [right]) => compareCodeUnits(left, right))) {
+    const domainBaseline = baseline?.perDomain[id]
+    stream.push({ section: 'domain', value: {
+      id,
+      current: { ...current },
+      ...(domainBaseline === undefined ? {} : { baseline: { ...domainBaseline } }),
+      delta: subtract(current, domainBaseline),
+    } })
+  }
+  growthCandidates(graph).forEach(value => stream.push({ section: 'candidate', value }))
+  const contextFingerprint = graph.contextFingerprint as string
+  const stateFingerprint = contextFingerprint
+  const position = decodeCursor(request.cursor, request.capability, request.input, contextFingerprint, stateFingerprint)
+  const cursorFor = (next: CursorPosition): string => encodeCursor(request.capability, request.input, contextFingerprint, stateFingerprint, next)
   const response = (pageItems: readonly JsonObject[], cursor?: string): RuntimeResponse => runtimeResponse(
     'growth.measure',
     cursor === undefined ? 'success' : 'incomplete',
@@ -278,76 +404,144 @@ export async function growthMeasure(root: string, request: RuntimeRequest): Prom
         current: { ...metrics.current },
         ...(baseline === undefined ? {} : { baseline: { ...baseline, perDomain: Object.fromEntries(Object.entries(baseline.perDomain)) as unknown as JsonValue } }),
         delta: subtract(metrics.current, baseline),
-        perDomain,
-        candidates: [...pageItems],
+        perDomain: pageItems.filter(item => item.section === 'domain').map(item => item.value as JsonValue),
+        candidates: pageItems.filter(item => item.section === 'candidate').map(item => item.value as JsonValue),
       },
       ...(cursor === undefined ? {} : { cursor }),
     },
   )
-  const page = paginate(candidates, offset, resolvedBudget(request), { response, cursor: cursorFor })
-  const cursor = page.nextOffset === undefined ? undefined : cursorFor(page.nextOffset)
+  const page = paginate(stream, position, resolvedBudget(request), { response, cursor: cursorFor })
+  const cursor = page.nextPosition === undefined ? undefined : cursorFor(page.nextPosition)
   return response(page.items, cursor)
 }
 
 function normalize(value: string): string {
-  return value.normalize('NFKC').toLocaleLowerCase('en-US').replace(/\s+/g, ' ').trim()
+  return value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
 function terms(value: string): ReadonlySet<string> {
   return new Set(normalize(value).match(/[\p{L}\p{N}]+/gu) ?? [])
 }
 
-function feedbackSections(source: string): string | undefined {
-  const headings = ['Context', 'Observed behavior', 'Outcome or correction', 'Evidence', 'Reuse boundary']
-  const positions = headings.map(heading => source.indexOf(`# ${heading}`))
-  if (positions.some((position, index) => position < 0 || (index > 0 && position <= (positions[index - 1] as number))))
+interface FeedbackFields {
+  readonly context: string
+  readonly observedBehavior: string
+  readonly outcomeOrCorrection: string
+  readonly evidence: string
+  readonly reuseBoundary: string
+}
+
+const FEEDBACK_HEADINGS = ['Context', 'Observed behavior', 'Outcome or correction', 'Evidence', 'Reuse boundary'] as const
+const FEEDBACK_FILE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*-[a-f0-9]{8}\.md$/
+
+function feedbackSections(source: string): FeedbackFields | undefined {
+  const normalized = source.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+  const bodies: string[][] = FEEDBACK_HEADINGS.map(() => [])
+  let heading = -1
+  for (const line of normalized.split('\n')) {
+    if (line.startsWith('# ')) {
+      const expected = FEEDBACK_HEADINGS[heading + 1]
+      if (expected === undefined || line !== `# ${expected}`)
+        return undefined
+      heading += 1
+      continue
+    }
+    if (heading < 0) {
+      if (line.trim().length > 0)
+        return undefined
+      continue
+    }
+    ;(bodies[heading] as string[]).push(line)
+  }
+  if (heading !== FEEDBACK_HEADINGS.length - 1 || bodies.some(lines => lines.join('\n').trim().length === 0))
     return undefined
-  return source
+  return {
+    context: (bodies[0] as string[]).join('\n').trim(),
+    observedBehavior: (bodies[1] as string[]).join('\n').trim(),
+    outcomeOrCorrection: (bodies[2] as string[]).join('\n').trim(),
+    evidence: (bodies[3] as string[]).join('\n').trim(),
+    reuseBoundary: (bodies[4] as string[]).join('\n').trim(),
+  }
+}
+
+function feedbackIdentity(fields: Omit<FeedbackFields, 'evidence'>): JsonObject {
+  return {
+    context: normalize(fields.context),
+    observedBehavior: normalize(fields.observedBehavior),
+    outcomeOrCorrection: normalize(fields.outcomeOrCorrection),
+    reuseBoundary: normalize(fields.reuseBoundary),
+  }
+}
+
+function asciiSlug(fields: Pick<FeedbackFields, 'context' | 'observedBehavior'>): string {
+  const normalized = normalize(`${fields.context} ${fields.observedBehavior}`)
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+  const found = normalized.match(/[a-z0-9]+/g) ?? []
+  const slug = found.slice(0, 4).join('-').slice(0, 48).replace(/-+$/g, '')
+  return slug.length === 0 ? 'feedback' : slug
+}
+
+function suggestedFeedbackId(fields: Omit<FeedbackFields, 'evidence'>): string {
+  return `${asciiSlug(fields)}-${sha256(compactJson(feedbackIdentity(fields))).slice(0, 8)}`
 }
 
 interface MatchSource { readonly kind: 'feedback' | 'reflection', readonly id: string, readonly path: string, readonly text: string }
 
-const FEEDBACK_FILE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*-[a-f0-9]{8}\.md$/
-
-async function matchSources(root: string, graph: KnowledgeGraph): Promise<readonly MatchSource[]> {
+async function matchSources(root: string, graph: KnowledgeGraph): Promise<{ readonly sources: readonly MatchSource[], readonly fingerprint: string }> {
   const sources: MatchSource[] = []
+  const feedbackFacts: JsonObject[] = []
   if (await pathExists(root, FEEDBACK_ROOT)) {
     for (const entry of await readDirectory(root, FEEDBACK_ROOT)) {
-      const sourcePath = `${FEEDBACK_ROOT}/${entry.name}`
       if (entry.kind !== 'file' || !FEEDBACK_FILE_NAME.test(entry.name))
-        throw new RuntimeFault('FEEDBACK_FILE_INVALID', 'Feedback storage contains an invalid entry.', sourcePath)
-      const source = await readUtf8File(root, sourcePath, MAX_JSON_TEXT_BYTES)
-      if (feedbackSections(source) === undefined)
-        throw new RuntimeFault('FEEDBACK_FORMAT_INVALID', 'Feedback Markdown does not use the fixed short structure.', sourcePath)
-      sources.push({ kind: 'feedback', id: entry.name.slice(0, -3), path: sourcePath, text: source })
+        throw new RuntimeFault('FEEDBACK_FILE_INVALID', 'Feedback storage contains an invalid entry.', FEEDBACK_ROOT)
+      const sourcePath = `${FEEDBACK_ROOT}/${entry.name}`
+      const bytes = await readRegularBytes(root, sourcePath, MAX_JSON_TEXT_BYTES)
+      const source = decodeUtf8(bytes, sourcePath)
+      const fields = feedbackSections(source)
+      if (fields === undefined)
+        throw new RuntimeFault('FEEDBACK_FORMAT_INVALID', 'Feedback Markdown does not use the fixed short structure.', FEEDBACK_ROOT)
+      const expected = suggestedFeedbackId(fields)
+      if (entry.name !== `${expected}.md`)
+        throw new RuntimeFault('FEEDBACK_IDENTITY_INVALID', 'Feedback filename does not match its normalized identity.', FEEDBACK_ROOT)
+      sources.push({ kind: 'feedback', id: expected, path: sourcePath, text: Object.values(fields).join('\n') })
+      feedbackFacts.push({ path: sourcePath, hash: sha256(bytes) })
     }
   }
   for (const document of graph.documents.values()) {
     if (document.kind === 'reflection')
       sources.push({ kind: 'reflection', id: document.id, path: document.path, text: `${document.description}\n${document.body}` })
   }
-  return sources.sort((left, right) => compareCodeUnits(`${left.kind}\0${left.id}`, `${right.kind}\0${right.id}`))
+  return {
+    sources: sources.sort((left, right) => compareCodeUnits(`${left.kind}\0${left.id}`, `${right.kind}\0${right.id}`)),
+    fingerprint: sha256(compactJson(feedbackFacts.sort((left, right) => compareCodeUnits(String(left.path), String(right.path))))),
+  }
 }
 
 export async function feedbackMatch(root: string, request: RuntimeRequest): Promise<RuntimeResponse> {
   const input = request.input as FeedbackMatchInput
-  const graph = await loadKnowledge(root)
-  if (graph.contextState === 'invalid')
-    requireReady(graph)
+  const graph = await loadKnowledge(root, undefined, { sourcePolicy: 'formal-only' })
+  if (graph.formalState === 'invalid')
+    requireFormalReady(graph)
   const queryText = `${input.context}\n${input.observedBehavior}\n${input.outcomeOrCorrection}\n${input.reuseBoundary}`
   const queryTerms = terms(queryText)
-  const matches = (await matchSources(root, graph)).flatMap((source): JsonObject[] => {
+  const matched = await matchSources(root, graph)
+  const matches = matched.sources.flatMap((source): JsonObject[] => {
     const overlap = [...terms(source.text)].filter(term => queryTerms.has(term)).sort(compareCodeUnits)
     if (overlap.length === 0)
       return []
     return [{ kind: source.kind, id: source.id, path: source.path, reasons: overlap.slice(0, 12).map(term => `shared term: ${term}`) }]
   })
-  const slugTerms = [...terms(`${input.context} ${input.observedBehavior}`)].slice(0, 4)
-  const slug = slugTerms.length === 0 ? 'feedback' : slugTerms.join('-').slice(0, 48)
-  const suggestedId = `${slug}-${sha256(normalize(queryText)).slice(0, 8)}`
-  const fingerprint = graph.contextFingerprint ?? graph.contextState
-  const offset = decodeCursor(request.cursor, request.capability, request.input, fingerprint)
-  const cursorFor = (nextOffset: number): string => encodeCursor(request.capability, request.input, fingerprint, nextOffset)
+  const suggestedId = suggestedFeedbackId({
+    context: input.context,
+    observedBehavior: input.observedBehavior,
+    outcomeOrCorrection: input.outcomeOrCorrection,
+    reuseBoundary: input.reuseBoundary,
+  })
+  const contextFingerprint = graph.contextFingerprint ?? 'formal:absent'
+  const stateFingerprint = matched.fingerprint
+  const position = decodeCursor(request.cursor, request.capability, request.input, contextFingerprint, stateFingerprint)
+  const cursorFor = (next: CursorPosition): string => encodeCursor(request.capability, request.input, contextFingerprint, stateFingerprint, next)
   const response = (pageItems: readonly JsonObject[], cursor?: string): RuntimeResponse => runtimeResponse(
     'feedback.match',
     cursor === undefined ? 'success' : 'incomplete',
@@ -356,7 +550,7 @@ export async function feedbackMatch(root: string, request: RuntimeRequest): Prom
       ...(cursor === undefined ? {} : { cursor }),
     },
   )
-  const page = paginate(matches, offset, resolvedBudget(request), { response, cursor: cursorFor })
-  const cursor = page.nextOffset === undefined ? undefined : cursorFor(page.nextOffset)
+  const page = paginate(matches, position, resolvedBudget(request), { response, cursor: cursorFor })
+  const cursor = page.nextPosition === undefined ? undefined : cursorFor(page.nextPosition)
   return response(page.items, cursor)
 }

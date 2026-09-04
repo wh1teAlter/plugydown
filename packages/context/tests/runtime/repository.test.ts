@@ -2,13 +2,14 @@ import { Buffer } from 'node:buffer'
 import { promises as fs } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { MAX_SOURCE_BYTES, MAX_SOURCE_FILES } from '../../src/runtime/repository.js'
-import { call, createRepository, documentSource, removeRepository, SERVICE_DOMAIN, writeMeta } from './fixture.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MAX_JSON_TEXT_BYTES, MAX_SOURCE_BYTES, MAX_SOURCE_FILES } from '../../src/runtime/repository.js'
+import { call, createRepository, documentSource, removeRepository, SERVICE_DOMAIN, SERVICE_GUIDE, writeMeta } from './fixture.js'
 
 const roots: string[] = []
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(roots.splice(0).map(removeRepository))
 })
 
@@ -16,6 +17,7 @@ async function repository(document = SERVICE_DOMAIN): Promise<string> {
   const root = await createRepository({ documents: [SERVICE_DOMAIN] })
   roots.push(root)
   await fs.writeFile(path.join(root, 'context/service/domain.md'), documentSource(document))
+  await writeMeta(root, [document])
   return root
 }
 
@@ -41,6 +43,7 @@ describe('repository safety', () => {
     '.scratch/input.md',
     'context/service/domain.md',
     'src/node_modules/pkg.ts',
+    `src/${'x'.repeat(1_021)}`,
   ])('rejects unsafe code.paths pattern %s', async (codePath) => {
     const document = { ...SERVICE_DOMAIN, codePaths: [codePath] }
     const root = await repository()
@@ -165,6 +168,20 @@ describe('repository safety', () => {
     expect(response.diagnostics?.[0]?.code).toBe('GIT_EVIDENCE_PATH_INVALID')
   })
 
+  it('maps only known filesystem errno values and lets unknown failures reach the transport boundary', async () => {
+    const knownRoot = await repository()
+    vi.spyOn(fs, 'readFile').mockRejectedValueOnce(Object.assign(new Error('private machine detail'), { code: 'EIO' }))
+    const known = await validate(knownRoot)
+    expect(known).toMatchObject({ status: 'failed' })
+    expect(known.diagnostics?.some(item => item.code === 'REPOSITORY_IO_FAILED')).toBe(true)
+    expect(JSON.stringify(known)).not.toContain('private machine detail')
+    vi.restoreAllMocks()
+
+    const unknownRoot = await repository()
+    vi.spyOn(fs, 'readFile').mockRejectedValueOnce(Object.assign(new Error('unexpected filesystem failure'), { code: 'EUNKNOWN' }))
+    await expect(validate(unknownRoot)).rejects.toThrow('unexpected filesystem failure')
+  })
+
   it('enforces source aggregate byte and file-count limits without a partial fingerprint', async () => {
     const byteRoot = await repository({ ...SERVICE_DOMAIN, codePaths: ['large/blob.bin'] })
     await fs.mkdir(path.join(byteRoot, 'large'))
@@ -175,14 +192,56 @@ describe('repository safety', () => {
     expect(bytes.data).toBeUndefined()
     expect(bytes.diagnostics?.some(item => item.code === 'SOURCE_BYTE_LIMIT_EXCEEDED')).toBe(true)
 
-    const countRoot = await repository({ ...SERVICE_DOMAIN, codePaths: ['bulk/**'] })
-    await fs.mkdir(path.join(countRoot, 'bulk'))
-    await Promise.all(Array.from({ length: MAX_SOURCE_FILES + 1 }, async (_, index) => {
-      await fs.writeFile(path.join(countRoot, `bulk/${index}.txt`), '')
+    const countRoot = await createRepository({ documents: [
+      { ...SERVICE_DOMAIN, codePaths: ['bulk-a/**'] },
+      { ...SERVICE_GUIDE, codePaths: ['bulk-b/**'] },
+    ] })
+    roots.push(countRoot)
+    await fs.mkdir(path.join(countRoot, 'bulk-a'))
+    await fs.mkdir(path.join(countRoot, 'bulk-b'))
+    const perDocument = Math.floor(MAX_SOURCE_FILES / 2) + 1
+    await Promise.all(Array.from({ length: perDocument }, async (_, index) => {
+      await Promise.all([
+        fs.writeFile(path.join(countRoot, `bulk-a/${index}.txt`), ''),
+        fs.writeFile(path.join(countRoot, `bulk-b/${index}.txt`), ''),
+      ])
     }))
     const count = await validate(countRoot)
     expect(count.status).toBe('failed')
     expect(count.data).toBeUndefined()
     expect(count.diagnostics?.some(item => item.code === 'SOURCE_FILE_LIMIT_EXCEEDED')).toBe(true)
   }, 30_000)
+
+  it('rejects an over-long repository path before touching the filesystem, without echoing it', async () => {
+    const root = await repository()
+    const long = 'e'.repeat(1_100)
+
+    // The 1024-character ceiling is enforced at the request boundary for evidence paths and
+    // inside path lexing for declarations; either way the value must never come back out.
+    const evidencePath = await call(root, 'delta.compute', {
+      gitEvidencePath: `.scratch/evidence/${long}`,
+      scope: { kind: 'repository' },
+      taskEvidence: { intentKnown: true, scopeComplete: true, newCapabilitySuspected: false, crossDomainContractUncertain: false },
+    })
+    expect(evidencePath.status).toBe('failed')
+    expect(evidencePath.diagnostics?.[0]?.code).toBe('REQUEST_FIELD_INVALID')
+    expect(JSON.stringify(evidencePath)).not.toContain('e'.repeat(64))
+
+    const declared = await call(root, 'frontier.query', { depth: 2, selectors: { codePaths: [`src/${long}.ts`] } })
+    expect(declared.status).toBe('failed')
+    expect(declared.diagnostics?.[0]?.code).toBe('PATH_LENGTH_EXCEEDED')
+    expect(JSON.stringify(declared)).not.toContain('e'.repeat(64))
+  })
+
+  it('enforces the per-file formal Markdown ceiling before any tree aggregate', async () => {
+    const root = await repository()
+    await fs.writeFile(path.join(root, 'context/service/filler.md'), '')
+    await fs.truncate(path.join(root, 'context/service/filler.md'), MAX_JSON_TEXT_BYTES + 1)
+
+    const response = await validate(root)
+
+    expect(response.status).toBe('failed')
+    expect(response.data).toBeUndefined()
+    expect(response.diagnostics?.some(item => item.code === 'FILE_SIZE_EXCEEDED')).toBe(true)
+  })
 })

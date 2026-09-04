@@ -17,5 +17,5 @@ the candidate still answers the Brief. Do not approve it.
 
 - Do not edit source code, formal `context/`, or a transaction candidate.
 - Return concise Markdown inline by default. Write only an explicitly allowed
-  `.scratch/investigations/<slug>-<short-content-hash>.md` when the evidence must survive a budget boundary or resume.
+  `.scratch/investigations/<slug>-<short-identity-hash>.md` when the evidence must survive a budget boundary or resume.
 - Stop and identify the needed scope or evidence when the Brief cannot be answered safely.

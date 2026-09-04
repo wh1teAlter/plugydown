@@ -2,7 +2,7 @@ import type { SourceFile } from './repository.js'
 import type { JsonObject, JsonValue } from './stable-json.js'
 import { Buffer } from 'node:buffer'
 import { parse as parseYaml } from 'yaml'
-import { PROTOCOL, sha256 } from './protocol.js'
+import { isRecord, PROTOCOL, sha256 } from './protocol.js'
 import { aggregateSourceFingerprint, assertSourcePattern, MAX_FRONT_MATTER_BYTES, MAX_MARKDOWN_BYTES } from './repository.js'
 import { compactJson, compareCodeUnits, stableJson } from './stable-json.js'
 
@@ -18,6 +18,7 @@ const DOMAIN_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const DOCUMENT_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$/
 const FILE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*\.md$/
 const SHA256 = /^[a-f0-9]{64}$/
+const GIT_REVISION = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 const FRONT_MATTER = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/
 
 export interface Relations {
@@ -49,10 +50,6 @@ export interface KnowledgeIssue {
 export type DocumentResult
   = | { readonly ok: true, readonly document: ContextDocument }
     | { readonly ok: false, readonly issues: readonly KnowledgeIssue[] }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 function unknownKeys(value: Record<string, unknown>, allowed: readonly string[]): readonly string[] {
   const known = new Set(allowed)
@@ -345,7 +342,7 @@ export function parseMeta(sourcePath: string, raw: unknown): MetaResult {
   if (raw.repository !== undefined) {
     if (!isRecord(raw.repository) || JSON.stringify(Object.keys(raw.repository)) !== JSON.stringify(['baseline']) || !isRecord(raw.repository.baseline)
       || JSON.stringify(Object.keys(raw.repository.baseline).sort(compareCodeUnits)) !== JSON.stringify(['revision', 'sourceFingerprint'])
-      || typeof raw.repository.baseline.revision !== 'string' || raw.repository.baseline.revision.length === 0
+      || typeof raw.repository.baseline.revision !== 'string' || !GIT_REVISION.test(raw.repository.baseline.revision)
       || typeof raw.repository.baseline.sourceFingerprint !== 'string' || !SHA256.test(raw.repository.baseline.sourceFingerprint)) {
       issues.push({ code: 'META_REPOSITORY_INVALID', message: 'Meta repository baseline is invalid.', path: sourcePath })
     }

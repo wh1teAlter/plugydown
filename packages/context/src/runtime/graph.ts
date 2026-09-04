@@ -3,7 +3,16 @@ import type { SourceFile } from './repository.js'
 import type { JsonObject } from './stable-json.js'
 import { bodyFingerprint, frontMatterFingerprint, parseDocument, parseMeta, placementIssues, sourceFingerprint } from './document.js'
 import { RuntimeFault } from './protocol.js'
-import { CONTEXT_ROOT, expandSourcePatterns, fingerprintTree, lstatRepositoryPath, MAX_JSON_TEXT_BYTES, MAX_MARKDOWN_BYTES, readDirectory, readUtf8File } from './repository.js'
+import {
+  CONTEXT_ROOT,
+  expandSourcePatternSets,
+  fingerprintTree,
+  lstatRepositoryPath,
+  MAX_JSON_TEXT_BYTES,
+  MAX_MARKDOWN_BYTES,
+  readDirectory,
+  readUtf8File,
+} from './repository.js'
 import { compareCodeUnits } from './stable-json.js'
 
 export interface DomainNode {
@@ -12,17 +21,27 @@ export interface DomainNode {
   readonly domainDocumentId?: string
 }
 
+export type SourcePolicy = 'formal-only' | 'selected' | 'all-strict' | 'all-tolerant'
+
+export interface SourceKnowledgeIssue extends KnowledgeIssue {
+  readonly documentId: string
+  readonly sourcePattern: string
+}
+
 export interface KnowledgeGraph {
   readonly contextPath: string
-  readonly contextState: 'absent' | 'ready' | 'invalid'
+  readonly formalState: 'absent' | 'ready' | 'invalid'
+  readonly sourceState: 'unchecked' | 'ready' | 'degraded'
   readonly metaState: 'absent' | 'valid' | 'invalid'
   readonly contextFingerprint?: string
+  readonly sourceFingerprint?: string
   readonly documents: ReadonlyMap<string, ContextDocument>
   readonly domains: ReadonlyMap<string, DomainNode>
   readonly sources: ReadonlyMap<string, readonly SourceFile[]>
   readonly ledgers: ReadonlyMap<string, DocumentLedger>
   readonly meta?: Meta
   readonly issues: readonly KnowledgeIssue[]
+  readonly sourceIssues: readonly SourceKnowledgeIssue[]
   readonly counts: {
     readonly domains: number
     readonly design: number
@@ -38,14 +57,14 @@ const DOMAIN_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const CATEGORIES = new Set(['design', 'manual', 'reflections'])
 const META_PATH_FOR_ISSUE = 'context/meta.json'
 
-function issue(code: string, message: string, path: string): KnowledgeIssue {
-  return { code, message, path }
+function issue(code: string, message: string, issuePath: string): KnowledgeIssue {
+  return { code, message, path: issuePath }
 }
 
 function faultIssues(error: unknown, fallbackPath: string): readonly KnowledgeIssue[] {
-  if (error instanceof RuntimeFault)
-    return error.diagnostics.map(item => issue(item.code, item.message, item.path ?? fallbackPath))
-  return [issue('KNOWLEDGE_IO_FAILED', 'The formal knowledge tree could not be read safely.', fallbackPath)]
+  if (!(error instanceof RuntimeFault))
+    throw error
+  return error.diagnostics.map(item => issue(item.code, item.message, item.path ?? fallbackPath))
 }
 
 function canonicalPath(contextPath: string, actualPath: string): string {
@@ -182,125 +201,94 @@ export function graphMetrics(graph: KnowledgeGraph): { readonly current: Metrics
   return { current: documentMetrics(graph.documents.values()), perDomain }
 }
 
-/** Loads and fully derives a Context tree without persisting any graph/cache state. */
+function emptyGraph(contextPath: string, formalState: 'absent' | 'invalid', issues: readonly KnowledgeIssue[]): KnowledgeGraph {
+  return {
+    contextPath,
+    formalState,
+    sourceState: 'unchecked',
+    metaState: 'absent',
+    documents: new Map(),
+    domains: new Map(),
+    sources: new Map(),
+    ledgers: new Map(),
+    issues,
+    sourceIssues: [],
+    counts: { domains: 0, design: 0, manual: 0, reflections: 0, documents: 0 },
+    relationCount: 0,
+    sourceDeclarationCount: 0,
+  }
+}
+
+/** Loads formal knowledge and source evidence under an explicit capability policy. */
 export async function loadKnowledge(
   root: string,
   contextPath = CONTEXT_ROOT,
-  options: { readonly ignoreMeta?: boolean, readonly requireMeta?: boolean } = {},
+  options: {
+    readonly ignoreMeta?: boolean
+    readonly requireMeta?: boolean
+    readonly sourcePolicy?: SourcePolicy
+    readonly selectedDocumentIds?: readonly string[]
+  } = {},
 ): Promise<KnowledgeGraph> {
   const requireMeta = options.requireMeta !== false
+  const sourcePolicy = options.sourcePolicy ?? 'all-strict'
   let info
   try {
     info = await lstatRepositoryPath(root, contextPath)
   }
   catch (error) {
-    return {
-      contextPath,
-      contextState: 'invalid',
-      metaState: 'absent',
-      documents: new Map(),
-      domains: new Map(),
-      sources: new Map(),
-      ledgers: new Map(),
-      issues: faultIssues(error, CONTEXT_ROOT),
-      counts: { domains: 0, design: 0, manual: 0, reflections: 0, documents: 0 },
-      relationCount: 0,
-      sourceDeclarationCount: 0,
-    }
+    return emptyGraph(contextPath, 'invalid', faultIssues(error, CONTEXT_ROOT))
   }
-  if (info === undefined) {
-    return {
-      contextPath,
-      contextState: 'absent',
-      metaState: 'absent',
-      documents: new Map(),
-      domains: new Map(),
-      sources: new Map(),
-      ledgers: new Map(),
-      issues: [],
-      counts: { domains: 0, design: 0, manual: 0, reflections: 0, documents: 0 },
-      relationCount: 0,
-      sourceDeclarationCount: 0,
-    }
-  }
-  if (!info.isDirectory()) {
-    return {
-      contextPath,
-      contextState: 'invalid',
-      metaState: 'absent',
-      documents: new Map(),
-      domains: new Map(),
-      sources: new Map(),
-      ledgers: new Map(),
-      issues: [issue('CONTEXT_NOT_DIRECTORY', 'The Context root must be a regular directory.', CONTEXT_ROOT)],
-      counts: { domains: 0, design: 0, manual: 0, reflections: 0, documents: 0 },
-      relationCount: 0,
-      sourceDeclarationCount: 0,
-    }
-  }
+  if (info === undefined)
+    return emptyGraph(contextPath, 'absent', [])
+  if (!info.isDirectory())
+    return emptyGraph(contextPath, 'invalid', [issue('CONTEXT_NOT_DIRECTORY', 'The Context root must be a regular directory.', CONTEXT_ROOT)])
 
-  const issues: KnowledgeIssue[] = []
+  const formalIssues: KnowledgeIssue[] = []
   let contextFingerprint: string | undefined
   try {
     contextFingerprint = await fingerprintTree(root, contextPath)
   }
   catch (error) {
-    issues.push(...faultIssues(error, CONTEXT_ROOT))
+    formalIssues.push(...faultIssues(error, CONTEXT_ROOT))
   }
   let loaded: LoadedDocuments = { documents: [], domains: [], issues: [], counts: { design: 0, manual: 0, reflections: 0 } }
   try {
     loaded = await loadDocuments(root, contextPath)
-    issues.push(...loaded.issues)
+    formalIssues.push(...loaded.issues)
   }
   catch (error) {
-    issues.push(...faultIssues(error, CONTEXT_ROOT))
+    formalIssues.push(...faultIssues(error, CONTEXT_ROOT))
   }
 
   const documents = new Map<string, ContextDocument>()
   for (const document of [...loaded.documents].sort((left, right) => compareCodeUnits(left.path, right.path))) {
     if (documents.has(document.id))
-      issues.push(issue('DOCUMENT_ID_DUPLICATE', `Document id "${document.id}" is duplicated.`, document.path))
+      formalIssues.push(issue('DOCUMENT_ID_DUPLICATE', `Document id "${document.id}" is duplicated.`, document.path))
     else
       documents.set(document.id, document)
   }
   const domainSet = new Set(loaded.domains)
   for (const document of documents.values()) {
     if (!domainSet.has(document.domain))
-      issues.push(issue('DOCUMENT_DOMAIN_UNKNOWN', 'Document refers to an unknown Domain.', document.path))
+      formalIssues.push(issue('DOCUMENT_DOMAIN_UNKNOWN', 'Document refers to an unknown Domain.', document.path))
     for (const relation of ['requires', 'related', 'supersedes'] as const) {
       for (const target of document.relations[relation]) {
         if (target === document.id)
-          issues.push(issue('DOCUMENT_RELATION_SELF', 'A Document must not relate to itself.', document.path))
+          formalIssues.push(issue('DOCUMENT_RELATION_SELF', 'A Document must not relate to itself.', document.path))
         if (relation !== 'supersedes' && !documents.has(target))
-          issues.push(issue('DOCUMENT_RELATION_DANGLING', `Relation target "${target}" is missing.`, document.path))
+          formalIssues.push(issue('DOCUMENT_RELATION_DANGLING', `Relation target "${target}" is missing.`, document.path))
       }
     }
   }
   for (const id of requiresCycles(documents))
-    issues.push(issue('DOCUMENT_REQUIRES_CYCLE', `Document "${id}" participates in a requires cycle.`, documents.get(id)?.path ?? CONTEXT_ROOT))
+    formalIssues.push(issue('DOCUMENT_REQUIRES_CYCLE', `Document "${id}" participates in a requires cycle.`, documents.get(id)?.path ?? CONTEXT_ROOT))
 
   const domains = new Map<string, DomainNode>()
   for (const id of [...domainSet].sort(compareCodeUnits)) {
     const documentIds = [...documents.values()].filter(document => document.domain === id).map(document => document.id).sort(compareCodeUnits)
     const domainDocumentId = documentIds.find(documentId => documents.get(documentId)?.kind === 'domain')
     domains.set(id, { id, documentIds, ...(domainDocumentId === undefined ? {} : { domainDocumentId }) })
-  }
-
-  const sources = new Map<string, readonly SourceFile[]>()
-  const ledgers = new Map<string, DocumentLedger>()
-  for (const document of [...documents.values()].sort((left, right) => compareCodeUnits(left.id, right.id))) {
-    try {
-      const files = await expandSourcePatterns(root, document.codePaths)
-      sources.set(document.id, files)
-      ledgers.set(document.id, {
-        frontMatterFingerprint: frontMatterFingerprint(document),
-        bodyFingerprint: bodyFingerprint(document),
-        sourceFingerprint: sourceFingerprint(document, files),
-      })
-    }
-    catch (error) {
-      issues.push(...faultIssues(error, document.path).map(item => ({ ...item, path: document.path })))
-    }
   }
 
   let meta: Meta | undefined
@@ -313,66 +301,129 @@ export async function loadKnowledge(
     }
     catch (error) {
       metaState = 'invalid'
-      issues.push(...faultIssues(error, META_PATH_FOR_ISSUE))
+      formalIssues.push(...faultIssues(error, META_PATH_FOR_ISSUE))
     }
   }
   if (metaInfo !== undefined) {
     if (!metaInfo.isFile()) {
       metaState = 'invalid'
-      issues.push(issue('META_NOT_REGULAR_FILE', 'context/meta.json must be a regular file.', META_PATH_FOR_ISSUE))
+      formalIssues.push(issue('META_NOT_REGULAR_FILE', 'context/meta.json must be a regular file.', META_PATH_FOR_ISSUE))
     }
     else {
       try {
         const text = await readUtf8File(root, metaActual, MAX_JSON_TEXT_BYTES)
-        const parsed = parseMeta(META_PATH_FOR_ISSUE, JSON.parse(text.replace(/^\uFEFF/, '')))
-        if (parsed.ok) {
-          meta = parsed.meta
-          metaState = 'valid'
+        let raw: unknown
+        try {
+          raw = JSON.parse(text.replace(/^\uFEFF/, ''))
         }
-        else {
+        catch (error) {
+          if (!(error instanceof SyntaxError))
+            throw error
+          formalIssues.push(issue('META_JSON_INVALID', 'context/meta.json must contain valid JSON.', META_PATH_FOR_ISSUE))
           metaState = 'invalid'
-          issues.push(...parsed.issues)
+        }
+        if (raw !== undefined) {
+          const parsed = parseMeta(META_PATH_FOR_ISSUE, raw)
+          if (parsed.ok) {
+            meta = parsed.meta
+            metaState = 'valid'
+          }
+          else {
+            metaState = 'invalid'
+            formalIssues.push(...parsed.issues)
+          }
         }
       }
       catch (error) {
         metaState = 'invalid'
-        issues.push(...faultIssues(error, META_PATH_FOR_ISSUE))
+        formalIssues.push(...faultIssues(error, META_PATH_FOR_ISSUE))
       }
     }
   }
   if (requireMeta && options.ignoreMeta !== true && metaState === 'absent')
-    issues.push(issue('META_MISSING', 'A ready Context tree requires context/meta.json.', META_PATH_FOR_ISSUE))
+    formalIssues.push(issue('META_MISSING', 'A ready Context tree requires context/meta.json.', META_PATH_FOR_ISSUE))
   if (requireMeta && meta !== undefined) {
     const expectedIds = [...documents.keys()].sort(compareCodeUnits)
     const actualIds = Object.keys(meta.documents).sort(compareCodeUnits)
     if (JSON.stringify(expectedIds) !== JSON.stringify(actualIds))
-      issues.push(issue('META_DOCUMENT_SET_MISMATCH', 'Meta Document IDs must exactly match the formal Markdown tree.', META_PATH_FOR_ISSUE))
+      formalIssues.push(issue('META_DOCUMENT_SET_MISMATCH', 'Meta Document IDs must exactly match the formal Markdown tree.', META_PATH_FOR_ISSUE))
     for (const id of expectedIds) {
-      const expected = ledgers.get(id)
+      const document = documents.get(id) as ContextDocument
       const actual = meta.documents[id]
-      if (expected === undefined || actual === undefined
-        || expected.frontMatterFingerprint !== actual.frontMatterFingerprint
-        || expected.bodyFingerprint !== actual.bodyFingerprint) {
-        issues.push(issue('META_DOCUMENT_FINGERPRINT_MISMATCH', `Meta content fingerprints for "${id}" are stale or incomplete.`, META_PATH_FOR_ISSUE))
+      if (actual === undefined
+        || frontMatterFingerprint(document) !== actual.frontMatterFingerprint
+        || bodyFingerprint(document) !== actual.bodyFingerprint) {
+        formalIssues.push(issue('META_DOCUMENT_FINGERPRINT_MISMATCH', `Meta content fingerprints for "${id}" are stale or incomplete.`, META_PATH_FOR_ISSUE))
       }
     }
   }
 
-  const sortedIssues = issues.sort((left, right) => compareCodeUnits(`${left.path}\0${left.code}`, `${right.path}\0${right.code}`))
+  const sortedFormalIssues = formalIssues.sort((left, right) => compareCodeUnits(`${left.path}\0${left.code}`, `${right.path}\0${right.code}`))
+  const formalState: KnowledgeGraph['formalState'] = sortedFormalIssues.length === 0 && (!requireMeta || metaState === 'valid') ? 'ready' : 'invalid'
+  const sources = new Map<string, readonly SourceFile[]>()
+  const ledgers = new Map<string, DocumentLedger>()
+  const sourceIssues: SourceKnowledgeIssue[] = []
+  let sourceState: KnowledgeGraph['sourceState'] = 'unchecked'
+  let sourceDatasetFingerprint: string | undefined
+
+  if (formalState === 'ready' && sourcePolicy !== 'formal-only') {
+    const selectedIds = sourcePolicy === 'selected'
+      ? [...(options.selectedDocumentIds ?? [])].filter(id => documents.has(id)).sort(compareCodeUnits)
+      : [...documents.keys()].sort(compareCodeUnits)
+    if (selectedIds.length > 0 || sourcePolicy !== 'selected') {
+      const expansion = await expandSourcePatternSets(root, selectedIds.map(id => ({
+        owner: id,
+        patterns: (documents.get(id) as ContextDocument).codePaths,
+      })))
+      sourceDatasetFingerprint = expansion.fingerprint
+      const affected = new Set<string>()
+      for (const problem of expansion.issues) {
+        affected.add(problem.owner)
+        sourceIssues.push({
+          documentId: problem.owner,
+          sourcePattern: problem.pattern,
+          code: problem.diagnostic.code,
+          message: problem.diagnostic.message,
+          path: documents.get(problem.owner)?.path ?? CONTEXT_ROOT,
+        })
+      }
+      for (const id of selectedIds) {
+        if (affected.has(id))
+          continue
+        const document = documents.get(id) as ContextDocument
+        const files = expansion.filesByOwner.get(id) ?? []
+        sources.set(id, files)
+        ledgers.set(id, {
+          frontMatterFingerprint: frontMatterFingerprint(document),
+          bodyFingerprint: bodyFingerprint(document),
+          sourceFingerprint: sourceFingerprint(document, files),
+        })
+      }
+      sourceState = sourceIssues.length === 0 ? 'ready' : 'degraded'
+    }
+  }
+
+  const sortedSourceIssues = sourceIssues.sort((left, right) => compareCodeUnits(
+    `${left.documentId}\0${left.sourcePattern}\0${left.code}`,
+    `${right.documentId}\0${right.sourcePattern}\0${right.code}`,
+  ))
   const relationCount = [...documents.values()].reduce((total, document) => total
     + document.relations.requires.length + document.relations.related.length + document.relations.supersedes.length, 0)
   const sourceDeclarationCount = [...documents.values()].reduce((total, document) => total + document.codePaths.length, 0)
   return {
     contextPath,
-    contextState: sortedIssues.length === 0 && (!requireMeta || metaState === 'valid') ? 'ready' : 'invalid',
+    formalState,
+    sourceState,
     metaState,
     ...(contextFingerprint === undefined ? {} : { contextFingerprint }),
+    ...(sourceDatasetFingerprint === undefined ? {} : { sourceFingerprint: sourceDatasetFingerprint }),
     documents,
     domains,
     sources,
     ledgers,
     ...(meta === undefined ? {} : { meta }),
-    issues: sortedIssues,
+    issues: sortedFormalIssues,
+    sourceIssues: sortedSourceIssues,
     counts: {
       domains: domains.size,
       design: loaded.counts.design,

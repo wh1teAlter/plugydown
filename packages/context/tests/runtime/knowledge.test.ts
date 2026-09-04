@@ -152,6 +152,21 @@ describe('document, Meta, graph, and fingerprints', () => {
     expect((await call(root, 'graph.validate', {})).diagnostics?.some(item => item.code === 'META_DOCUMENT_FINGERPRINT_MISMATCH')).toBe(true)
   })
 
+  it('keeps source staleness separate from Formal state while full graph validation rejects it', async () => {
+    const root = await repository([SERVICE_DOMAIN])
+    await fs.writeFile(path.join(root, 'src/service.ts'), 'changed source bytes\n')
+
+    const inspect = await call(root, 'repository.inspect', { selectedDocumentIds: ['service'] })
+    expect(inspect).toMatchObject({
+      status: 'success',
+      data: { context: { state: 'ready', sourceState: 'ready' }, selected: [{ id: 'service', state: 'stale' }] },
+    })
+    expect(await call(root, 'graph.validate', {})).toMatchObject({
+      status: 'failed',
+      diagnostics: [expect.objectContaining({ code: 'META_SOURCE_FINGERPRINT_MISMATCH' })],
+    })
+  })
+
   it('rejects Meta unknown fields and persisted derived status', async () => {
     const root = await repository([SERVICE_DOMAIN])
     const metaPath = path.join(root, 'context/meta.json')
@@ -164,6 +179,33 @@ describe('document, Meta, graph, and fingerprints', () => {
     expect(response.status).toBe('failed')
     expect(response.diagnostics?.some(item => item.code === 'META_FIELD_UNKNOWN')).toBe(true)
     expect(response.diagnostics?.some(item => item.code === 'META_DOCUMENT_INVALID')).toBe(true)
+  })
+
+  it('rejects whitespace-only descriptions and non-canonical repository revisions', async () => {
+    const descriptionRoot = await repository([SERVICE_DOMAIN])
+    const documentPath = path.join(descriptionRoot, 'context/service/domain.md')
+    await fs.writeFile(documentPath, (await fs.readFile(documentPath, 'utf8')).replace('description: "Service Domain boundaries and navigation."', 'description: "   "'))
+    expect((await call(descriptionRoot, 'graph.validate', {})).diagnostics?.some(item => item.code === 'DOCUMENT_DESCRIPTION_INVALID')).toBe(true)
+
+    const revisionRoot = await repository([SERVICE_DOMAIN])
+    const metaPath = path.join(revisionRoot, 'context/meta.json')
+    const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'))
+    meta.repository = { baseline: { revision: 'A'.repeat(40), sourceFingerprint: '0'.repeat(64) } }
+    await fs.writeFile(metaPath, JSON.stringify(meta))
+    expect((await call(revisionRoot, 'graph.validate', {})).diagnostics?.some(item => item.code === 'META_REPOSITORY_INVALID')).toBe(true)
+  })
+
+  it('bounds diagnostics to the first 99 sorted facts plus one omission record', async () => {
+    const root = await repository([SERVICE_DOMAIN])
+    await Promise.all(Array.from({ length: 110 }, async (_, index) => {
+      await fs.writeFile(path.join(root, 'context', `invalid-${String(index).padStart(3, '0')}.txt`), 'invalid\n')
+    }))
+    const response = await call(root, 'graph.validate', {})
+
+    expect(response.status).toBe('failed')
+    expect(response.diagnostics).toHaveLength(100)
+    expect(response.diagnostics?.at(-1)).toEqual(expect.objectContaining({ code: 'DIAGNOSTICS_OMITTED', severity: 'warning' }))
+    expect(response.diagnostics?.every(item => item.message.length <= 512 && (item.path?.length ?? 0) <= 1024)).toBe(true)
   })
 
   it('treats a Context root or Meta symlink as invalid instead of absent', async () => {

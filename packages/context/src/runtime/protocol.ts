@@ -114,7 +114,10 @@ export interface TransactionCommitInput {
   readonly approval: TransactionApproval
 }
 
-export interface TransactionResumeInput { readonly runId: string }
+export interface TransactionResumeInput {
+  readonly runId: string
+  readonly disposition?: 'continue' | 'abandon'
+}
 
 export type CapabilityInput
   = | RepositoryInspectInput
@@ -147,11 +150,13 @@ export interface RuntimeResponse {
 
 /** Product-level failure represented inside a legal Runtime response. */
 export class RuntimeFault extends Error {
+  readonly code: string
   readonly diagnostics: readonly Diagnostic[]
 
   constructor(code: string, message: string, path?: string) {
     super(message)
     this.name = 'RuntimeFault'
+    this.code = code
     this.diagnostics = [{ code, severity: 'error', message, ...(path === undefined ? {} : { path }) }]
   }
 }
@@ -160,11 +165,55 @@ export function diagnostic(code: string, message: string, severity: Severity = '
   return { code, severity, message, ...(path === undefined ? {} : { path }) }
 }
 
+const MAX_DIAGNOSTICS = 100
+const MAX_DIAGNOSTIC_MESSAGE = 512
+const MAX_DIAGNOSTIC_PATH = 1_024
+
+function cleanDiagnosticText(value: string, maximum: number): string {
+  const cleaned = [...value].map((character) => {
+    const codePoint = character.codePointAt(0) as number
+    return codePoint <= 0x1F || codePoint === 0x7F ? ' ' : character
+  }).join('').trim()
+  return cleaned.length <= maximum ? cleaned : cleaned.slice(0, maximum)
+}
+
+// Mirrors repository.ts's path-safety rule. It is duplicated rather than shared because
+// repository imports this module, so importing back would make the graph cyclic; keep the two
+// in step, and never let this final wire filter be the weaker of the pair.
+const DIAGNOSTIC_PATH_VARIABLE = /\$|%[A-Z_]\w*%/i
+
+function safeDiagnosticPath(value: string): string | undefined {
+  const cleaned = cleanDiagnosticText(value, MAX_DIAGNOSTIC_PATH)
+  if (cleaned.length === 0 || cleaned.length !== value.length || cleaned.startsWith('/') || cleaned.includes('\\')
+    || /^[a-z]:/i.test(cleaned) || DIAGNOSTIC_PATH_VARIABLE.test(cleaned) || cleaned.includes('~')
+    || cleaned.split('/').some(part => part.length === 0 || part === '.' || part === '..')) {
+    return undefined
+  }
+  return cleaned
+}
+
+function boundedDiagnostic(value: Diagnostic): Diagnostic {
+  const path = value.path === undefined ? undefined : safeDiagnosticPath(value.path)
+  return {
+    code: cleanDiagnosticText(value.code, 128),
+    severity: value.severity,
+    message: cleanDiagnosticText(value.message, MAX_DIAGNOSTIC_MESSAGE),
+    ...(path === undefined ? {} : { path }),
+  }
+}
+
 export function sortDiagnostics(diagnostics: readonly Diagnostic[]): readonly Diagnostic[] {
-  return [...diagnostics].sort((left, right) => compareCodeUnits(
+  const sorted = diagnostics.map(boundedDiagnostic).sort((left, right) => compareCodeUnits(
     `${left.code}\0${left.path ?? ''}\0${left.message}`,
     `${right.code}\0${right.path ?? ''}\0${right.message}`,
   ))
+  if (sorted.length <= MAX_DIAGNOSTICS)
+    return sorted
+  const omitted = sorted.length - (MAX_DIAGNOSTICS - 1)
+  return [
+    ...sorted.slice(0, MAX_DIAGNOSTICS - 1),
+    diagnostic('DIAGNOSTICS_OMITTED', `${omitted} additional diagnostics were omitted.`, 'warning'),
+  ]
 }
 
 export function runtimeResponse(
@@ -173,6 +222,16 @@ export function runtimeResponse(
   options: { readonly data?: JsonObject, readonly cursor?: string, readonly diagnostics?: readonly Diagnostic[] } = {},
 ): RuntimeResponse {
   const diagnostics = options.diagnostics === undefined ? undefined : sortDiagnostics(options.diagnostics)
+  if (capability !== 'transaction') {
+    if (status === 'failed' && (options.data !== undefined || options.cursor !== undefined || diagnostics === undefined || diagnostics.length === 0))
+      throw new TypeError('A failed read response requires diagnostics and forbids data/cursor.')
+    if (status === 'success' && (options.data === undefined || options.cursor !== undefined))
+      throw new TypeError('A successful read response requires data and forbids a cursor.')
+    if (status === 'incomplete' && (options.data === undefined || options.cursor === undefined))
+      throw new TypeError('An incomplete read response requires data and a cursor.')
+    if (status === 'no_change' || status === 'dry_run')
+      throw new TypeError('Read capabilities do not use transaction-only statuses.')
+  }
   return {
     protocol: PROTOCOL,
     capability,
@@ -180,6 +239,61 @@ export function runtimeResponse(
     ...(options.data === undefined ? {} : { data: options.data }),
     ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
     ...(diagnostics === undefined || diagnostics.length === 0 ? {} : { diagnostics }),
+  }
+}
+
+/**
+ * The D47 transaction outcome union. Each variant carries exactly the fields its outcome
+ * allows, so status/outcome/field combinations are enforced by construction rather than
+ * re-validated against a parallel matrix.
+ */
+export type TransactionOutcome
+  = | { readonly outcome: 'staged', readonly runId: string, readonly candidatePath: string }
+    | { readonly outcome: 'ready_for_review', readonly runId: string, readonly candidateFingerprint: string, readonly sourceEvidenceFingerprint: string }
+    | { readonly outcome: 'committed' | 'candidate_completed', readonly runId: string, readonly contextFingerprint: string, readonly approvedCandidateFingerprint: string, readonly approvedSourceEvidenceFingerprint: string }
+    | { readonly outcome: 'abandoned', readonly runId: string }
+    | { readonly outcome: 'no_change', readonly runId: string, readonly contextFingerprint: string }
+    | { readonly outcome: 'validated', readonly runId: string, readonly candidateFingerprint: string, readonly sourceEvidenceFingerprint: string }
+    | { readonly outcome: 'active_run', readonly runId: string }
+    | { readonly outcome: 'candidate_edit_required' | 'candidate_stale' | 'approval_mismatch', readonly runId: string }
+    | { readonly outcome: 'manual_recovery', readonly runId?: string }
+    | { readonly outcome: 'snapshot_stale', readonly runId: string }
+    | { readonly outcome: 'backup_restored', readonly runId: string, readonly contextFingerprint: string }
+    | { readonly outcome: 'no_trusted_copy', readonly runId: string }
+    | { readonly outcome: 'mechanical_failure', readonly runId: string }
+
+const TRANSACTION_SHAPES = {
+  staged: { status: 'success', nextAction: 'edit_candidate' },
+  ready_for_review: { status: 'success', nextAction: 'semantic_review' },
+  committed: { status: 'success' },
+  candidate_completed: { status: 'success' },
+  abandoned: { status: 'success' },
+  no_change: { status: 'no_change' },
+  validated: { status: 'dry_run' },
+  active_run: { status: 'incomplete', nextAction: 'resume' },
+  candidate_edit_required: { status: 'incomplete', nextAction: 'edit_candidate' },
+  candidate_stale: { status: 'incomplete', nextAction: 'validate' },
+  approval_mismatch: { status: 'incomplete', nextAction: 'semantic_review' },
+  manual_recovery: { status: 'incomplete', manualRecoveryRequired: true },
+  snapshot_stale: { status: 'failed', nextAction: 'restart_transaction' },
+  backup_restored: { status: 'failed' },
+  no_trusted_copy: { status: 'failed', manualRecoveryRequired: true },
+  mechanical_failure: { status: 'failed' },
+} as const satisfies Record<TransactionOutcome['outcome'], { readonly status: RuntimeStatus } & JsonObject>
+
+/** Builds the one legal response for a transaction outcome, deriving status and next action. */
+export function transactionResponse(
+  result: TransactionOutcome,
+  diagnostics?: readonly Diagnostic[],
+): RuntimeResponse {
+  const { status, ...derived } = TRANSACTION_SHAPES[result.outcome]
+  const sorted = diagnostics === undefined ? undefined : sortDiagnostics(diagnostics)
+  return {
+    protocol: PROTOCOL,
+    capability: 'transaction',
+    status,
+    data: { ...result, ...derived } as JsonObject,
+    ...(sorted === undefined || sorted.length === 0 ? {} : { diagnostics: sorted }),
   }
 }
 
@@ -392,9 +506,18 @@ function parseTransactionInput(action: TransactionAction, value: unknown): Trans
       evidencePaths: uniqueStrings(value.evidencePaths, 'evidencePaths', { nonEmpty: true }),
     }
   }
-  if (action === 'validate' || action === 'resume') {
+  if (action === 'validate') {
     assertExactKeys(value, ['runId'], ['runId'], `transaction.${action} input`)
     return { runId: parseRunId(value.runId) }
+  }
+  if (action === 'resume') {
+    assertExactKeys(value, ['runId', 'disposition'], ['runId'], 'transaction.resume input')
+    if (value.disposition !== undefined && value.disposition !== 'continue' && value.disposition !== 'abandon')
+      throw new RuntimeFault('REQUEST_FIELD_INVALID', 'transaction.resume disposition must be continue or abandon.')
+    return {
+      runId: parseRunId(value.runId),
+      ...(value.disposition === undefined ? {} : { disposition: value.disposition }),
+    }
   }
   assertExactKeys(value, ['runId', 'approval'], ['runId', 'approval'], 'transaction.commit input')
   if (!isRecord(value.approval))
@@ -504,40 +627,72 @@ export function sha256(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
+export interface CursorPosition extends JsonObject {
+  itemOffset: number
+  bodyByteOffset?: number
+}
+
 interface CursorCore extends JsonObject {
   protocolVersion: string
   capability: string
   inputFingerprint: string
   contextFingerprint: string
-  offset: number
+  stateFingerprint: string
+  itemOffset: number
+  bodyByteOffset?: number
 }
 
 interface CursorPayload extends CursorCore {
   integrityHash: string
 }
 
-function cursorCore(capability: Capability, input: CapabilityInput, contextFingerprint: string, offset: number): CursorCore {
+function cursorCore(
+  capability: Capability,
+  input: CapabilityInput,
+  contextFingerprint: string,
+  stateFingerprint: string,
+  position: CursorPosition,
+): CursorCore {
   return {
     protocolVersion: PROTOCOL,
     capability,
     inputFingerprint: sha256(compactJson(input as JsonValue)),
     contextFingerprint,
-    offset,
+    stateFingerprint,
+    itemOffset: position.itemOffset,
+    ...(position.bodyByteOffset === undefined ? {} : { bodyByteOffset: position.bodyByteOffset }),
   }
 }
 
-export function encodeCursor(capability: Capability, input: CapabilityInput, contextFingerprint: string, offset: number): string {
-  const core = cursorCore(capability, input, contextFingerprint, offset)
+export function encodeCursor(
+  capability: Capability,
+  input: CapabilityInput,
+  contextFingerprint: string,
+  stateFingerprint: string,
+  position: CursorPosition,
+): string {
+  const core = cursorCore(capability, input, contextFingerprint, stateFingerprint, position)
   const payload: CursorPayload = { ...core, integrityHash: sha256(compactJson(core as JsonValue)) }
   return Buffer.from(compactJson(payload), 'utf8').toString('base64url')
 }
 
-export function decodeCursor(cursor: string | undefined, capability: Capability, input: CapabilityInput, contextFingerprint: string): number {
+export function decodeCursor(
+  cursor: string | undefined,
+  capability: Capability,
+  input: CapabilityInput,
+  contextFingerprint: string,
+  stateFingerprint: string,
+): CursorPosition {
   if (cursor === undefined)
-    return 0
+    return { itemOffset: 0 }
+  if (!/^[\w-]+$/.test(cursor))
+    throw new RuntimeFault('CURSOR_INVALID', 'The continuation cursor is malformed or has been tampered with.')
   let parsed: unknown
   try {
-    parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
+    const bytes = Buffer.from(cursor, 'base64url')
+    if (bytes.toString('base64url') !== cursor)
+      throw new Error('non-canonical base64url')
+    parsed = JSON.parse(bytes.toString('utf8'))
   }
   catch {
     throw new RuntimeFault('CURSOR_INVALID', 'The continuation cursor is malformed or has been tampered with.')
@@ -545,31 +700,42 @@ export function decodeCursor(cursor: string | undefined, capability: Capability,
   if (!isRecord(parsed))
     throw new RuntimeFault('CURSOR_INVALID', 'The continuation cursor is malformed or has been tampered with.')
   const keys = Object.keys(parsed).sort(compareCodeUnits)
-  const expectedKeys = ['capability', 'contextFingerprint', 'inputFingerprint', 'integrityHash', 'offset', 'protocolVersion'].sort(compareCodeUnits)
+  const expectedKeys = [
+    'capability',
+    'contextFingerprint',
+    'inputFingerprint',
+    'integrityHash',
+    'itemOffset',
+    'protocolVersion',
+    'stateFingerprint',
+    ...(parsed.bodyByteOffset === undefined ? [] : ['bodyByteOffset']),
+  ].sort(compareCodeUnits)
   if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)
     || typeof parsed.integrityHash !== 'string'
-    || !Number.isSafeInteger(parsed.offset)
-    || (parsed.offset as number) < 0) {
+    || !/^[a-f0-9]{64}$/.test(parsed.integrityHash)
+    || !Number.isSafeInteger(parsed.itemOffset)
+    || (parsed.itemOffset as number) < 0
+    || (parsed.bodyByteOffset !== undefined
+      && (!Number.isSafeInteger(parsed.bodyByteOffset) || (parsed.bodyByteOffset as number) < 0))) {
     throw new RuntimeFault('CURSOR_INVALID', 'The continuation cursor is malformed or has been tampered with.')
   }
-  const core = cursorCore(capability, input, contextFingerprint, parsed.offset as number)
+  const position: CursorPosition = {
+    itemOffset: parsed.itemOffset as number,
+    ...(parsed.bodyByteOffset === undefined ? {} : { bodyByteOffset: parsed.bodyByteOffset as number }),
+  }
+  const core = cursorCore(capability, input, contextFingerprint, stateFingerprint, position)
   const expected = Buffer.from(sha256(compactJson(core as JsonValue)), 'hex')
-  let actual: Buffer
-  try {
-    actual = Buffer.from(parsed.integrityHash, 'hex')
-  }
-  catch {
-    throw new RuntimeFault('CURSOR_INVALID', 'The continuation cursor is malformed or has been tampered with.')
-  }
+  const actual = Buffer.from(parsed.integrityHash, 'hex')
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
     throw new RuntimeFault('CURSOR_STALE', 'The continuation cursor does not match this query or Context tree.')
   if (parsed.protocolVersion !== core.protocolVersion
     || parsed.capability !== core.capability
     || parsed.inputFingerprint !== core.inputFingerprint
-    || parsed.contextFingerprint !== core.contextFingerprint) {
+    || parsed.contextFingerprint !== core.contextFingerprint
+    || parsed.stateFingerprint !== core.stateFingerprint) {
     throw new RuntimeFault('CURSOR_STALE', 'The continuation cursor does not match this query or Context tree.')
   }
-  return parsed.offset as number
+  return position
 }
 
 export function estimateTokens(value: JsonValue): number {
@@ -578,15 +744,15 @@ export function estimateTokens(value: JsonValue): number {
 
 export interface Page<T extends JsonValue> {
   readonly items: readonly T[]
-  readonly nextOffset?: number
+  readonly nextPosition?: CursorPosition
 }
 
 export interface PaginationEnvelope<T extends JsonValue> {
   readonly response: (items: readonly T[], cursor?: string) => RuntimeResponse
-  readonly cursor: (offset: number) => string
+  readonly cursor: (position: CursorPosition) => string
 }
 
-function responseFits(response: RuntimeResponse, budget: Budget): boolean {
+export function responseFits(response: RuntimeResponse, budget: Budget): boolean {
   const value = response as unknown as JsonValue
   return Buffer.byteLength(stableJson(value), 'utf8') <= budget.bytes
     && estimateTokens(value) <= budget.estimatedTokens
@@ -595,29 +761,94 @@ function responseFits(response: RuntimeResponse, budget: Budget): boolean {
 /** Applies all public output limits to the exact serialized response without silently truncating a list. */
 export function paginate<T extends JsonValue>(
   items: readonly T[],
-  offset: number,
+  position: CursorPosition,
   budget: Budget,
   envelope: PaginationEnvelope<T>,
 ): Page<T> {
+  if (position.bodyByteOffset !== undefined)
+    throw new RuntimeFault('CURSOR_INVALID', 'The continuation cursor points inside a body where only whole items are valid.')
+  if (position.itemOffset > items.length)
+    throw new RuntimeFault('CURSOR_INVALID', 'The continuation cursor points beyond the current result stream.')
   const selected: T[] = []
-  let index = Math.min(offset, items.length)
+  let index = Math.min(position.itemOffset, items.length)
   for (; index < items.length; index += 1) {
     const item = items[index] as T
     if (selected.length >= budget.items)
       break
     const candidate = [...selected, item]
-    const nextOffset = index + 1 < items.length ? index + 1 : undefined
-    const cursor = nextOffset === undefined ? undefined : envelope.cursor(nextOffset)
+    const nextPosition = index + 1 < items.length ? { itemOffset: index + 1 } : undefined
+    const cursor = nextPosition === undefined ? undefined : envelope.cursor(nextPosition)
     if (!responseFits(envelope.response(candidate, cursor), budget)) {
-      if (selected.length === 0 && !responseFits(envelope.response([item], cursor), MAX_BUDGET))
-        throw new RuntimeFault('RESULT_ITEM_TOO_LARGE', 'A single result item exceeds the Runtime output hard limits.')
+      if (selected.length === 0) {
+        if (!responseFits(envelope.response([item], cursor), MAX_BUDGET))
+          throw new RuntimeFault('RESULT_ITEM_TOO_LARGE', 'A single result item exceeds the Runtime output hard limits.')
+        throw new RuntimeFault('BUDGET_TOO_SMALL', 'The requested output budget cannot contain the next complete result item.')
+      }
       break
     }
     selected.push(item)
   }
-  const page: Page<T> = { items: selected, ...(index < items.length ? { nextOffset: index } : {}) }
-  const cursor = page.nextOffset === undefined ? undefined : envelope.cursor(page.nextOffset)
+  const page: Page<T> = { items: selected, ...(index < items.length ? { nextPosition: { itemOffset: index } } : {}) }
+  const cursor = page.nextPosition === undefined ? undefined : envelope.cursor(page.nextPosition)
   if (!responseFits(envelope.response(page.items, cursor), budget))
     throw new RuntimeFault('BUDGET_TOO_SMALL', 'The requested output budget cannot contain the required response envelope.')
   return page
+}
+
+export interface BodyChunk extends JsonObject {
+  text: string
+  startByte: number
+  endByte: number
+  totalBytes: number
+  complete: boolean
+}
+
+/** Selects the largest UTF-8 code-point-aligned chunk that fits the exact response envelope. */
+export function fitBodyChunk(
+  body: string,
+  startByte: number,
+  budget: Budget,
+  response: (chunk: BodyChunk, cursor?: string) => RuntimeResponse,
+  cursor: (endByte: number) => string | undefined,
+): BodyChunk {
+  const boundaries = [0]
+  let byteOffset = 0
+  for (const codePoint of body) {
+    byteOffset += Buffer.byteLength(codePoint, 'utf8')
+    boundaries.push(byteOffset)
+  }
+  const startIndex = boundaries.indexOf(startByte)
+  if (startIndex < 0 || startIndex === boundaries.length - 1)
+    throw new RuntimeFault('CURSOR_INVALID', 'The continuation cursor does not point to a valid UTF-8 body boundary.')
+
+  const makeChunk = (endIndex: number): BodyChunk => {
+    const endByte = boundaries[endIndex] as number
+    const complete = endByte === byteOffset
+    return {
+      text: Buffer.from(body, 'utf8').subarray(startByte, endByte).toString('utf8'),
+      startByte,
+      endByte,
+      totalBytes: byteOffset,
+      complete,
+    }
+  }
+  const fitsAt = (endIndex: number, limit: Budget): boolean => {
+    const chunk = makeChunk(endIndex)
+    return responseFits(response(chunk, cursor(chunk.endByte)), limit)
+  }
+  if (!fitsAt(startIndex + 1, MAX_BUDGET))
+    throw new RuntimeFault('RESULT_ITEM_TOO_LARGE', 'A body code point and its result envelope exceed the Runtime output hard limits.')
+  if (!fitsAt(startIndex + 1, budget))
+    throw new RuntimeFault('BUDGET_TOO_SMALL', 'The requested output budget cannot contain a progressing body chunk.')
+
+  let low = startIndex + 1
+  let high = boundaries.length - 1
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    if (fitsAt(middle, budget))
+      low = middle
+    else
+      high = middle - 1
+  }
+  return makeChunk(low)
 }

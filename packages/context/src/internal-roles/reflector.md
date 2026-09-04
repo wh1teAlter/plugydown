@@ -10,7 +10,7 @@ to remember. One-time choices, incidental preferences, and harmless experiments 
 
 Keep a retained Feedback item short and self-contained: Context, Observed behavior, Outcome or correction, Evidence,
 and Reuse boundary. Never store a transcript. Return inline by default; write only an explicitly allowed
-`.scratch/feedback/<slug>-<short-content-hash>.md` path.
+`.scratch/feedback/<slug>-<short-identity-hash>.md` path.
 
 ## Boundaries
 

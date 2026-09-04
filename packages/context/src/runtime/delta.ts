@@ -1,15 +1,11 @@
 import type { KnowledgeGraph } from './graph.js'
-import type { DeltaComputeInput, RuntimeRequest, RuntimeResponse, Scope } from './protocol.js'
+import type { CursorPosition, DeltaComputeInput, RuntimeRequest, RuntimeResponse, Scope } from './protocol.js'
 import type { GitChange } from './repository.js'
 import type { JsonObject, JsonValue } from './stable-json.js'
 import { impactClosure, loadKnowledge } from './graph.js'
 import { decodeCursor, encodeCursor, paginate, resolvedBudget, RuntimeFault, runtimeResponse, sha256 } from './protocol.js'
-import { assertGitEvidencePath, assertSourcePattern, controlledGlobMatches, readGitEvidence } from './repository.js'
-import { compareCodeUnits } from './stable-json.js'
-
-function declarationMatches(declaration: string, changedPath: string): boolean {
-  return declaration === changedPath || (declaration.includes('*') && controlledGlobMatches(declaration, changedPath))
-}
+import { assertGitEvidencePath, assertSourcePattern, declarationMatches, readGitEvidence } from './repository.js'
+import { compactJson, compareCodeUnits } from './stable-json.js'
 
 function changedPaths(changes: readonly GitChange[]): readonly string[] {
   const paths = new Set<string>()
@@ -21,7 +17,7 @@ function changedPaths(changes: readonly GitChange[]): readonly string[] {
   return [...paths].sort(compareCodeUnits)
 }
 
-function scopeContainsDocument(scope: Scope, graph: KnowledgeGraph, documentId: string): boolean {
+function scopeContainsDocument(scope: Scope, graph: KnowledgeGraph, documentId: string, gitPaths: readonly string[]): boolean {
   const document = graph.documents.get(documentId)
   if (document === undefined)
     return false
@@ -31,9 +27,11 @@ function scopeContainsDocument(scope: Scope, graph: KnowledgeGraph, documentId: 
     return scope.ids.includes(document.domain)
   if (scope.kind === 'documents')
     return scope.ids.includes(documentId)
-  return document.codePaths.some(declaration => scope.paths.some(pattern => declaration === pattern
-    || (pattern.includes('*') && controlledGlobMatches(pattern, declaration))
-    || (declaration.includes('*') && controlledGlobMatches(declaration, pattern))))
+  const actualPaths = new Set([
+    ...(graph.sources.get(documentId) ?? []).map(file => file.path),
+    ...gitPaths.filter(candidate => document.codePaths.some(declaration => declarationMatches(declaration, candidate))),
+  ])
+  return [...actualPaths].some(candidate => scope.paths.some(pattern => declarationMatches(pattern, candidate)))
 }
 
 function validateScope(scope: Scope, graph: KnowledgeGraph): void {
@@ -82,8 +80,8 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
   assertGitEvidencePath(input.gitEvidencePath)
   if (input.scope.kind === 'paths')
     input.scope.paths.forEach(assertSourcePattern)
-  const graph = await loadKnowledge(root)
-  if (graph.contextState !== 'ready') {
+  const graph = await loadKnowledge(root, undefined, { sourcePolicy: 'all-tolerant' })
+  if (graph.formalState !== 'ready') {
     const first = graph.issues[0]
     throw new RuntimeFault(first?.code ?? 'CONTEXT_NOT_READY', first?.message ?? 'Delta requires ready formal Context.', first?.path ?? 'context')
   }
@@ -116,10 +114,14 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
   for (const [id, reasons] of direct)
     direct.set(id, [...new Set(reasons)].sort(compareCodeUnits))
   const closure = impactClosure(graph, direct)
-  const brokenEvidence: string[] = []
+  const brokenEvidence: JsonValue[] = graph.sourceIssues.map(problem => ({
+    documentId: problem.documentId,
+    code: problem.code,
+    sourcePattern: problem.sourcePattern,
+  }))
   const baseline = graph.meta?.repository?.baseline
   if (baseline !== undefined && baseline.revision !== evidence.currentRevision && !evidence.hasDiff)
-    brokenEvidence.push('repository baseline differs from HEAD but diff.bin is missing')
+    brokenEvidence.push({ code: 'GIT_DIFF_MISSING', reason: 'repository baseline differs from HEAD but diff.bin is missing' })
 
   const blockers: string[] = []
   if (baseline === undefined)
@@ -138,7 +140,7 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
     blockers.push('changed paths are unmapped')
   if (brokenEvidence.length > 0)
     blockers.push('evidence is incomplete')
-  const outsideScope = closure.filter(item => !scopeContainsDocument(input.scope, graph, item.documentId))
+  const outsideScope = closure.filter(item => !scopeContainsDocument(input.scope, graph, item.documentId, paths))
   if (outsideScope.length > 0)
     blockers.push('impact closure extends outside authorized scope')
   const uniqueBlockers = [...new Set(blockers)].sort(compareCodeUnits)
@@ -156,11 +158,22 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
     })),
     ...closure.map(item => ({ section: 'expandedImpact' as const, value: { documentId: item.documentId, reasons: [...item.reasons] } })),
     ...unmapped.sort(compareCodeUnits).map(value => ({ section: 'unmappedPaths' as const, value })),
-    ...brokenEvidence.sort(compareCodeUnits).map(value => ({ section: 'brokenEvidence' as const, value })),
+    ...brokenEvidence.sort((left, right) => compareCodeUnits(compactJson(left), compactJson(right))).map(value => ({ section: 'brokenEvidence' as const, value })),
   ]
-  const cursorFingerprint = sha256(`${graph.contextFingerprint as string}:${evidence.fingerprint}`)
-  const offset = decodeCursor(request.cursor, request.capability, request.input, cursorFingerprint)
-  const cursorFor = (nextOffset: number): string => encodeCursor(request.capability, request.input, cursorFingerprint, nextOffset)
+  const contextFingerprint = graph.contextFingerprint as string
+  const stateFingerprint = sha256(compactJson({
+    gitEvidenceFingerprint: evidence.fingerprint,
+    sourceFingerprint: graph.sourceFingerprint ?? 'source:unavailable',
+    brokenEvidence,
+  }))
+  const position = decodeCursor(request.cursor, request.capability, request.input, contextFingerprint, stateFingerprint)
+  const cursorFor = (next: CursorPosition): string => encodeCursor(
+    request.capability,
+    request.input,
+    contextFingerprint,
+    stateFingerprint,
+    next,
+  )
   const response = (pageItems: readonly SectionItem[], cursor?: string): RuntimeResponse => {
     const sections = pageData(pageItems)
     return runtimeResponse('delta.compute', cursor === undefined ? 'success' : 'incomplete', {
@@ -178,7 +191,7 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
       ...(cursor === undefined ? {} : { cursor }),
     })
   }
-  const page = paginate(stream, offset, resolvedBudget(request), { response, cursor: cursorFor })
-  const cursor = page.nextOffset === undefined ? undefined : cursorFor(page.nextOffset)
+  const page = paginate(stream, position, resolvedBudget(request), { response, cursor: cursorFor })
+  const cursor = page.nextPosition === undefined ? undefined : cursorFor(page.nextPosition)
   return response(page.items, cursor)
 }

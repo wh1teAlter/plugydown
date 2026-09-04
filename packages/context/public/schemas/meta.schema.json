@@ -32,22 +32,21 @@
       }
     },
     "convergence": {
-      "allOf": [
-        { "$ref": "#/$defs/metrics" },
-        {
+      "type": "object",
+      "required": ["source", "documentCount", "frontMatterBytes", "bodyBytes", "estimatedTokens", "perDomain"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "enum": ["init", "prune"] },
+        "documentCount": { "type": "integer", "minimum": 0 },
+        "frontMatterBytes": { "type": "integer", "minimum": 0 },
+        "bodyBytes": { "type": "integer", "minimum": 0 },
+        "estimatedTokens": { "type": "integer", "minimum": 0 },
+        "perDomain": {
           "type": "object",
-          "required": ["source", "perDomain"],
-          "properties": {
-            "source": { "enum": ["init", "prune"] },
-            "perDomain": {
-              "type": "object",
-              "propertyNames": { "$ref": "#/$defs/domainId" },
-              "additionalProperties": { "$ref": "#/$defs/metrics" }
-            }
-          }
+          "propertyNames": { "$ref": "#/$defs/domainId" },
+          "additionalProperties": { "$ref": "#/$defs/metrics" }
         }
-      ],
-      "unevaluatedProperties": false
+      }
     }
   },
   "$defs": {

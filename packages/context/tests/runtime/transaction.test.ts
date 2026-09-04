@@ -1,7 +1,7 @@
 import type { RuntimeResponse } from '../../src/runtime/protocol.js'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CLIENT_DOMAIN, createRepository, documentSource, PROTOCOL, removeRepository, REVISION_A, REVISION_C, SERVICE_DOMAIN, SERVICE_GUIDE, transactionCall, writeGitEvidence, writeMeta } from './fixture.js'
 
 const roots: string[] = []
@@ -22,6 +22,7 @@ interface PreparedRun {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(roots.splice(0).map(removeRepository))
 })
 
@@ -84,6 +85,11 @@ async function readManifest(root: string, runId: string): Promise<Record<string,
   return JSON.parse(await fs.readFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), 'utf8')) as Record<string, unknown>
 }
 
+async function updateManifest(root: string, runId: string, update: (manifest: Record<string, unknown>) => Record<string, unknown>): Promise<void> {
+  const file = path.join(root, '.scratch', 'runs', runId, 'manifest.json')
+  await fs.writeFile(file, `${JSON.stringify(update(await readManifest(root, runId)), null, 2)}\n`)
+}
+
 async function markCommitting(root: string, run: PreparedRun): Promise<void> {
   const file = path.join(root, `.scratch/runs/${run.runId}/manifest.json`)
   const manifest = await readManifest(root, run.runId)
@@ -111,7 +117,7 @@ describe('transaction lifecycle', () => {
     const inspected = await (await import('../../src/runtime/handler.js')).handleRequest(root, { protocol: PROTOCOL, capability: 'repository.inspect', input: {} })
 
     expect(second.status).toBe('incomplete')
-    expect(second.data?.activeRunId).toBe(first.runId)
+    expect(second.data).toMatchObject({ runId: first.runId, outcome: 'active_run', nextAction: 'resume' })
     expect(inspected.status).toBe('success')
     expect(await fs.readFile(path.join(root, first.candidatePath, SERVICE_DOMAIN.relativePath), 'utf8')).toBe(documentSource(SERVICE_DOMAIN))
     expect(JSON.stringify(await readManifest(root, first.runId))).not.toContain(root)
@@ -260,6 +266,71 @@ describe('transaction lifecycle', () => {
     expect(await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')).toBe(before)
     expect(await exists(root, run.candidatePath)).toBe(false)
   })
+
+  it('allows source-degraded deep Update, but rejects Prune and non-repository Init scope', async () => {
+    const root = await readyRoot()
+    await fs.rm(path.join(root, 'src/retry.ts'))
+    const updateEvidence = await writeGitEvidence(root, { id: 'degraded-update' })
+    const update = await transactionCall(root, 'begin', {
+      command: 'update',
+      mode: 'deep',
+      dryRun: false,
+      scope: { kind: 'repository' },
+      gitEvidencePath: updateEvidence,
+      evidencePaths: ['src/service.ts'],
+    })
+    expect(update).toMatchObject({ status: 'success', data: { outcome: 'staged' } })
+    await transactionCall(root, 'resume', { runId: dataString(update, 'runId'), disposition: 'abandon' })
+
+    const pruneEvidence = await writeGitEvidence(root, { id: 'degraded-prune' })
+    const prune = await transactionCall(root, 'begin', {
+      command: 'prune',
+      mode: 'deep',
+      dryRun: false,
+      scope: { kind: 'repository' },
+      gitEvidencePath: pruneEvidence,
+      evidencePaths: ['src/service.ts'],
+    })
+    expect(prune).toMatchObject({ status: 'failed', diagnostics: [{ code: 'TRANSACTION_PRECONDITION_FAILED' }] })
+
+    const empty = await createRepository()
+    roots.push(empty)
+    const initEvidence = await writeGitEvidence(empty, { id: 'invalid-init-scope' })
+    const init = await transactionCall(empty, 'begin', {
+      command: 'init',
+      mode: 'deep',
+      dryRun: false,
+      scope: { kind: 'domains', ids: ['service'] },
+      gitEvidencePath: initEvidence,
+      evidencePaths: ['src/service.ts'],
+    })
+    expect(init).toMatchObject({ status: 'failed', diagnostics: [{ code: 'TRANSACTION_SCOPE_INVALID' }] })
+  })
+
+  it('abandons only fresh staged or validated runs and cleans all owned leaves', async () => {
+    const stagedRoot = await readyRoot()
+    const staged = await beginUpdate(stagedRoot)
+    const abandoned = await transactionCall(stagedRoot, 'resume', { runId: staged.runId, disposition: 'abandon' })
+    expect(abandoned).toMatchObject({ status: 'success', data: { runId: staged.runId, outcome: 'abandoned' } })
+    expect(await exists(stagedRoot, `.scratch/runs/${staged.runId}`)).toBe(false)
+    expect(await exists(stagedRoot, staged.gitEvidencePath)).toBe(false)
+    expect(await exists(stagedRoot, '.scratch/locks/context-write')).toBe(false)
+
+    const validatedRoot = await readyRoot()
+    const validated = await prepareChanged(validatedRoot)
+    expect(await transactionCall(validatedRoot, 'resume', { runId: validated.runId, disposition: 'abandon' })).toMatchObject({
+      status: 'success',
+      data: { outcome: 'abandoned' },
+    })
+
+    const committingRoot = await readyRoot()
+    const committing = await prepareChanged(committingRoot)
+    await markCommitting(committingRoot, committing)
+    const rejected = await transactionCall(committingRoot, 'resume', { runId: committing.runId, disposition: 'abandon' })
+    expect(rejected).toMatchObject({ status: 'failed', diagnostics: [{ code: 'TRANSACTION_ABANDON_INVALID' }] })
+    expect(await exists(committingRoot, `.scratch/runs/${committing.runId}`)).toBe(true)
+    expect(await exists(committingRoot, '.scratch/locks/context-write')).toBe(true)
+  })
 })
 
 describe('transaction validation and concurrency', () => {
@@ -268,10 +339,12 @@ describe('transaction validation and concurrency', () => {
     const invalid = await beginUpdate(root)
     await fs.rm(path.join(root, invalid.candidatePath, 'service/domain.md'))
     const invalidResult = await transactionCall(root, 'validate', { runId: invalid.runId })
-    expect(invalidResult.status).toBe('failed')
+    expect(invalidResult.status).toBe('incomplete')
+    expect(invalidResult.data).toMatchObject({ outcome: 'candidate_edit_required', nextAction: 'edit_candidate' })
     expect(invalidResult.diagnostics?.map(item => item.code)).toContain('DOMAIN_DOCUMENT_MISSING')
-    expect(await exists(root, `.scratch/runs/${invalid.runId}`)).toBe(false)
-    expect(await exists(root, invalid.gitEvidencePath)).toBe(false)
+    expect(await exists(root, `.scratch/runs/${invalid.runId}`)).toBe(true)
+    expect(await exists(root, invalid.gitEvidencePath)).toBe(true)
+    await transactionCall(root, 'resume', { runId: invalid.runId, disposition: 'abandon' })
 
     const evidence = await writeGitEvidence(root, { id: 'prune' })
     const began = await transactionCall(root, 'begin', {
@@ -286,10 +359,40 @@ describe('transaction validation and concurrency', () => {
     const candidate = dataString(began, 'candidatePath')
     await fs.rm(path.join(root, candidate, 'service/manual'), { recursive: true })
     const pruned = await transactionCall(root, 'validate', { runId })
-    expect(pruned.status).toBe('failed')
+    expect(pruned.status).toBe('incomplete')
+    expect(pruned.data).toMatchObject({ outcome: 'candidate_edit_required', nextAction: 'edit_candidate' })
     expect(pruned.diagnostics?.[0]?.code).toBe('PRUNE_COVERAGE_LOST')
-    expect(await exists(root, `.scratch/runs/${runId}`)).toBe(false)
-    expect(await exists(root, evidence)).toBe(false)
+    expect(await exists(root, `.scratch/runs/${runId}`)).toBe(true)
+    expect(await exists(root, evidence)).toBe(true)
+  })
+
+  it('keeps a Prune candidate editable when live source coverage degrades after begin', async () => {
+    const root = await readyRoot()
+    const gitEvidencePath = await writeGitEvidence(root, { id: 'prune-degraded' })
+    const began = await transactionCall(root, 'begin', {
+      command: 'prune',
+      mode: 'deep',
+      dryRun: false,
+      scope: { kind: 'repository' },
+      gitEvidencePath,
+      evidencePaths: ['src/service.ts'],
+    })
+    const runId = dataString(began, 'runId')
+    // Prune requires complete live source at begin; losing a declared file afterwards must
+    // surface as an editable candidate rather than a silent pass or a hard mechanical failure.
+    await fs.rm(path.join(root, 'src/retry.ts'))
+
+    const result = await transactionCall(root, 'validate', { runId })
+
+    // The candidate's own source expansion reports the exact missing declaration first, so
+    // PRUNE_SOURCE_DEGRADED is a deeper backstop; either way the run stays editable and held.
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      data: { outcome: 'candidate_edit_required', nextAction: 'edit_candidate' },
+    })
+    expect(result.diagnostics?.map(item => item.code)).toContain('SOURCE_EXACT_MISSING')
+    expect(await exists(root, `.scratch/runs/${runId}`)).toBe(true)
+    expect(await exists(root, '.scratch/locks/context-write')).toBe(true)
   })
 
   it('stops validate when declared source or formal Context changed after begin', async () => {
@@ -312,30 +415,101 @@ describe('transaction validation and concurrency', () => {
     expect(await exists(formalRoot, formalRun.gitEvidencePath)).toBe(false)
   })
 
+  it('treats any byte replacement of the frozen Git evidence as snapshot stale', async () => {
+    const root = await readyRoot()
+    const run = await beginUpdate(root)
+    await fs.appendFile(path.join(root, run.gitEvidencePath, 'mid-operation.json'), '\n')
+
+    const result = await transactionCall(root, 'validate', { runId: run.runId })
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      data: { outcome: 'snapshot_stale', nextAction: 'restart_transaction' },
+      diagnostics: [{ code: 'GIT_EVIDENCE_CONFLICT' }],
+    })
+    expect(await exists(root, `.scratch/runs/${run.runId}`)).toBe(false)
+    expect(await exists(root, run.gitEvidencePath)).toBe(false)
+  })
+
+  it.each(['add', 'delete', 'move', 'content'] as const)('rejects an out-of-scope %s mutation and preserves the editable candidate', async (mutation) => {
+    const root = await readyRoot()
+    const gitEvidencePath = await writeGitEvidence(root, { id: `scope-${mutation}` })
+    const began = await transactionCall(root, 'begin', {
+      command: 'update',
+      mode: 'deep',
+      dryRun: false,
+      scope: { kind: 'domains', ids: ['client'] },
+      gitEvidencePath,
+      evidencePaths: ['src/client.ts'],
+    })
+    const runId = dataString(began, 'runId')
+    const candidate = dataString(began, 'candidatePath')
+    if (mutation === 'add') {
+      const added = {
+        relativePath: 'service/manual/new-guide.md',
+        id: 'service.new-guide',
+        kind: 'guide' as const,
+        domain: 'service',
+        relations: { requires: ['service'] },
+        body: '# New guide\n\nNew knowledge.\n',
+      }
+      await fs.writeFile(path.join(root, candidate, added.relativePath), documentSource(added))
+    }
+    else if (mutation === 'delete') {
+      await fs.rm(path.join(root, candidate, SERVICE_GUIDE.relativePath))
+      await fs.rmdir(path.join(root, candidate, 'service/manual'))
+    }
+    else if (mutation === 'move') {
+      await fs.rename(
+        path.join(root, candidate, SERVICE_GUIDE.relativePath),
+        path.join(root, candidate, 'service/manual/retry-moved.md'),
+      )
+    }
+    else {
+      await fs.writeFile(path.join(root, candidate, SERVICE_DOMAIN.relativePath), documentSource(changedService))
+    }
+
+    const result = await transactionCall(root, 'validate', { runId })
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      data: { outcome: 'candidate_edit_required', nextAction: 'edit_candidate' },
+      diagnostics: [{ code: 'CANDIDATE_SCOPE_VIOLATION' }],
+    })
+    expect(await exists(root, `.scratch/runs/${runId}`)).toBe(true)
+    expect(await exists(root, gitEvidencePath)).toBe(true)
+  })
+
   it('returns incomplete without switching when candidate, source content, glob set, formal Context, or approval changes', async () => {
     const candidateRoot = await readyRoot()
     const candidateRun = await prepareChanged(candidateRoot)
     await fs.appendFile(path.join(candidateRoot, candidateRun.candidatePath, SERVICE_DOMAIN.relativePath), '\n')
     const candidateResult = await transactionCall(candidateRoot, 'commit', { runId: candidateRun.runId, approval: candidateRun.approval })
     expect(candidateResult.status).toBe('incomplete')
-    expect(candidateResult.data?.nextAction).toBe('validate')
+    expect(candidateResult.data).toMatchObject({ outcome: 'candidate_stale', nextAction: 'validate' })
 
     const sourceRoot = await readyRoot()
     const sourceRun = await prepareChanged(sourceRoot)
     await fs.appendFile(path.join(sourceRoot, 'src/service.ts'), 'export const concurrent = true\n')
     const sourceResult = await transactionCall(sourceRoot, 'commit', { runId: sourceRun.runId, approval: sourceRun.approval })
-    expect(sourceResult.status).toBe('incomplete')
-    expect(sourceResult.data?.nextAction).toBe('validate')
+    expect(sourceResult.status).toBe('failed')
+    expect(sourceResult.data).toMatchObject({ outcome: 'snapshot_stale', nextAction: 'restart_transaction' })
 
     const globRoot = await readyRoot()
     const globRun = await prepareChanged(globRoot, { glob: true })
     await fs.writeFile(path.join(globRoot, 'src/new.ts'), 'export const added = true\n')
-    expect((await transactionCall(globRoot, 'commit', { runId: globRun.runId, approval: globRun.approval })).status).toBe('incomplete')
+    expect(await transactionCall(globRoot, 'commit', { runId: globRun.runId, approval: globRun.approval })).toMatchObject({
+      status: 'failed',
+      data: { outcome: 'snapshot_stale', nextAction: 'restart_transaction' },
+    })
 
     const formalRoot = await readyRoot()
     const formalRun = await prepareChanged(formalRoot)
     await fs.appendFile(path.join(formalRoot, 'context/client/domain.md'), '\n')
-    expect((await transactionCall(formalRoot, 'commit', { runId: formalRun.runId, approval: formalRun.approval })).status).toBe('incomplete')
+    expect(await transactionCall(formalRoot, 'commit', { runId: formalRun.runId, approval: formalRun.approval })).toMatchObject({
+      status: 'failed',
+      data: { outcome: 'snapshot_stale', nextAction: 'restart_transaction' },
+    })
 
     const approvalRoot = await readyRoot()
     const approvalRun = await prepareChanged(approvalRoot)
@@ -367,6 +541,23 @@ describe('transaction validation and concurrency', () => {
     expect(meta.repository?.baseline?.revision).toBe(REVISION_A)
   })
 
+  it.each(['candidateFingerprint', 'sourceEvidenceFingerprint'] as const)('rejects an approval whose %s does not bind current bytes', async (field) => {
+    const root = await readyRoot()
+    const run = await prepareChanged(root)
+    // Each fingerprint is bound independently: corrupting either one alone must be refused,
+    // so neither comparison can be dropped without a test noticing.
+    const approval = { ...run.approval, [field]: 'b'.repeat(64) }
+
+    const result = await transactionCall(root, 'commit', { runId: run.runId, approval })
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      data: { outcome: 'approval_mismatch', nextAction: 'semantic_review' },
+      diagnostics: [{ code: 'APPROVAL_MISMATCH' }],
+    })
+    expect(await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')).toBe(documentSource(SERVICE_DOMAIN))
+  })
+
   it('invalidates the old approval after a validated candidate changes', async () => {
     const root = await readyRoot()
     const run = await prepareChanged(root)
@@ -381,6 +572,58 @@ describe('transaction validation and concurrency', () => {
     expect(staleApproval.diagnostics?.[0]?.code).toBe('APPROVAL_MISMATCH')
   })
 
+  it('includes every candidate code path in approval freshness even when it was not declared at begin', async () => {
+    const root = await readyRoot()
+    const run = await prepareChanged(root)
+    await fs.appendFile(path.join(root, 'src/retry.ts'), 'export const concurrentRetry = true\n')
+
+    const result = await transactionCall(root, 'commit', { runId: run.runId, approval: run.approval })
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      data: { outcome: 'candidate_stale', nextAction: 'validate' },
+    })
+    expect((await readManifest(root, run.runId)).phase).toBe('validated')
+    expect(await exists(root, run.gitEvidencePath)).toBe(true)
+  })
+
+  it('rejects an invalid manifest without deleting the active scene', async () => {
+    const root = await readyRoot()
+    const run = await beginUpdate(root)
+    await updateManifest(root, run.runId, manifest => ({ ...manifest, unexpected: true }))
+
+    const result = await transactionCall(root, 'validate', { runId: run.runId })
+
+    expect(result).toMatchObject({ status: 'failed', diagnostics: [{ code: 'TRANSACTION_MANIFEST_INVALID' }] })
+    expect(result.data).toBeUndefined()
+    expect(await exists(root, `.scratch/runs/${run.runId}`)).toBe(true)
+    expect(await exists(root, '.scratch/locks/context-write')).toBe(true)
+  })
+
+  it('checks the current lock owner before reading a stale candidate', async () => {
+    const root = await readyRoot()
+    const run = await prepareChanged(root)
+    await fs.appendFile(path.join(root, run.candidatePath, SERVICE_DOMAIN.relativePath), '\ninvalid after validation\n')
+    const otherRunId = '22222222-2222-4222-8222-222222222222'
+    const otherDirectory = path.join(root, '.scratch', 'runs', otherRunId)
+    await fs.mkdir(otherDirectory, { recursive: true })
+    await fs.writeFile(
+      path.join(otherDirectory, 'manifest.json'),
+      `${JSON.stringify({ ...(await readManifest(root, run.runId)), runId: otherRunId }, null, 2)}\n`,
+    )
+    await fs.writeFile(path.join(root, '.scratch/locks/context-write/owner.json'), JSON.stringify({
+      schema: 'plugydown.context.lock/v1',
+      runId: otherRunId,
+    }))
+
+    const result = await transactionCall(root, 'commit', { runId: run.runId, approval: run.approval })
+
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      data: { runId: otherRunId, outcome: 'active_run', nextAction: 'resume' },
+    })
+  })
+
   it('resumes only fresh staged/validated runs and safely reacquires a lost same-run lock', async () => {
     const stagedRoot = await readyRoot()
     const stagedRun = await beginUpdate(stagedRoot)
@@ -390,8 +633,8 @@ describe('transaction validation and concurrency', () => {
     expect(staged.data?.nextAction).toBe('edit_candidate')
     await fs.appendFile(path.join(stagedRoot, 'src/service.ts'), 'export const stagedStale = true\n')
     const stagedStale = await transactionCall(stagedRoot, 'resume', { runId: stagedRun.runId })
-    expect(stagedStale.status).toBe('incomplete')
-    expect(stagedStale.data?.nextAction).toBe('regenerate_candidate')
+    expect(stagedStale.status).toBe('failed')
+    expect(stagedStale.data).toMatchObject({ outcome: 'snapshot_stale', nextAction: 'restart_transaction' })
 
     const root = await readyRoot()
     const run = await prepareChanged(root)
@@ -402,8 +645,33 @@ describe('transaction validation and concurrency', () => {
 
     await fs.appendFile(path.join(root, 'src/service.ts'), 'export const stale = true\n')
     const stale = await transactionCall(root, 'resume', { runId: run.runId })
-    expect(stale.status).toBe('incomplete')
-    expect(stale.data?.nextAction).toBe('regenerate_candidate')
+    expect(stale.status).toBe('failed')
+    expect(stale.data).toMatchObject({ outcome: 'snapshot_stale', nextAction: 'restart_transaction' })
+  })
+
+  it('rebuilds a missing staged candidate only while every begin snapshot remains fresh', async () => {
+    const root = await readyRoot()
+    const run = await beginUpdate(root)
+    await fs.rm(path.join(root, run.candidatePath), { recursive: true })
+    await fs.rm(path.join(root, '.scratch/locks/context-write'), { recursive: true })
+
+    const rebuilt = await transactionCall(root, 'resume', { runId: run.runId })
+    expect(rebuilt).toMatchObject({
+      status: 'success',
+      data: { outcome: 'staged', candidatePath: run.candidatePath, nextAction: 'edit_candidate' },
+    })
+    expect(await fs.readFile(path.join(root, run.candidatePath, SERVICE_DOMAIN.relativePath), 'utf8')).toBe(documentSource(SERVICE_DOMAIN))
+
+    const staleRoot = await readyRoot()
+    const staleRun = await beginUpdate(staleRoot)
+    await fs.rm(path.join(staleRoot, staleRun.candidatePath), { recursive: true })
+    await fs.appendFile(path.join(staleRoot, 'src/service.ts'), 'export const staleBeforeRebuild = true\n')
+    const stale = await transactionCall(staleRoot, 'resume', { runId: staleRun.runId })
+    expect(stale).toMatchObject({
+      status: 'failed',
+      data: { outcome: 'snapshot_stale', nextAction: 'restart_transaction' },
+    })
+    expect(await exists(staleRoot, `.scratch/runs/${staleRun.runId}`)).toBe(false)
   })
 
   it('requires manual recovery for corrupt or differently owned locks', async () => {
@@ -430,7 +698,11 @@ describe('transaction validation and concurrency', () => {
     }))
     const blocked = await transactionCall(ownerRoot, 'resume', { runId: run.runId })
     expect(blocked.status).toBe('incomplete')
-    expect(blocked.data?.activeRunId).toBe('11111111-1111-4111-8111-111111111111')
+    expect(blocked.data).toMatchObject({
+      runId: '11111111-1111-4111-8111-111111111111',
+      outcome: 'manual_recovery',
+      manualRecoveryRequired: true,
+    })
   })
 })
 
@@ -511,7 +783,24 @@ describe('transaction crash recovery', () => {
     expect(await exists(root, run.gitEvidencePath)).toBe(false)
   })
 
-  it('restores the trusted backup when final verification observes a corrupted switched candidate', async () => {
+  it('finalizes an already switched candidate without re-reading changed source evidence', async () => {
+    const root = await readyRoot()
+    const run = await prepareChanged(root)
+    await markCommitting(root, run)
+    const backup = path.join(root, `.scratch/runs/${run.runId}/backup/context`)
+    await fs.mkdir(path.dirname(backup), { recursive: true })
+    await fs.rename(path.join(root, 'context'), backup)
+    await fs.rename(path.join(root, run.candidatePath), path.join(root, 'context'))
+    await fs.appendFile(path.join(root, 'src/service.ts'), 'export const changedAfterSwitch = true\n')
+
+    const resumed = await transactionCall(root, 'resume', { runId: run.runId })
+
+    expect(resumed).toMatchObject({ status: 'success', data: { outcome: 'candidate_completed' } })
+    expect(await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')).toBe(documentSource(changedService))
+    expect(await exists(root, `.scratch/runs/${run.runId}`)).toBe(false)
+  })
+
+  it('preserves a corrupted switched candidate and trusted backup for manual recovery', async () => {
     const root = await readyRoot()
     const before = await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')
     const run = await prepareChanged(root)
@@ -524,12 +813,12 @@ describe('transaction crash recovery', () => {
 
     const resumed = await transactionCall(root, 'resume', { runId: run.runId })
 
-    expect(resumed.status).toBe('failed')
-    expect(resumed.data?.outcome).toBe('backup_restored')
-    expect(await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')).toBe(before)
-    expect(await exists(root, `.scratch/runs/${run.runId}`)).toBe(false)
-    expect(await exists(root, run.gitEvidencePath)).toBe(false)
-    expect(await exists(root, '.scratch/locks/context-write')).toBe(false)
+    expect(resumed.status).toBe('incomplete')
+    expect(resumed.data).toMatchObject({ outcome: 'manual_recovery', manualRecoveryRequired: true })
+    expect(await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')).not.toBe(before)
+    expect(await exists(root, `.scratch/runs/${run.runId}`)).toBe(true)
+    expect(await exists(root, run.gitEvidencePath)).toBe(true)
+    expect(await exists(root, '.scratch/locks/context-write')).toBe(true)
   })
 
   it('finishes cleanup after a committed-manifest crash window', async () => {
@@ -550,6 +839,50 @@ describe('transaction crash recovery', () => {
     expect(await exists(root, `.scratch/runs/${run.runId}`)).toBe(false)
     expect(await exists(root, run.gitEvidencePath)).toBe(false)
     expect(await exists(root, '.scratch/locks/context-write')).toBe(false)
+  })
+
+  it('honors restore intent after backup rename and never switches the still-approved candidate', async () => {
+    const root = await readyRoot()
+    const before = await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')
+    const run = await prepareChanged(root)
+    await markCommitting(root, run)
+    const backup = path.join(root, `.scratch/runs/${run.runId}/backup/context`)
+    await fs.mkdir(path.dirname(backup), { recursive: true })
+    await fs.rename(path.join(root, 'context'), backup)
+    await fs.symlink(path.join('.scratch', 'runs', run.runId, 'candidate', 'context'), path.join(root, 'context'))
+    const realRename = fs.rename.bind(fs)
+    const injected = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(from).endsWith('/backup/context'))
+        throw new TypeError('injected unknown restore failure')
+      return realRename(from, to)
+    })
+
+    await expect(transactionCall(root, 'resume', { runId: run.runId })).rejects.toThrow('injected unknown restore failure')
+    expect((await readManifest(root, run.runId)).recovery).toEqual({ intent: 'restore_backup' })
+    expect(await exists(root, run.candidatePath)).toBe(true)
+    injected.mockRestore()
+    await fs.rename(backup, path.join(root, 'context'))
+
+    const resumed = await transactionCall(root, 'resume', { runId: run.runId })
+    expect(resumed).toMatchObject({ status: 'failed', data: { outcome: 'backup_restored' } })
+    expect(await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')).toBe(before)
+    expect(await exists(root, `.scratch/runs/${run.runId}`)).toBe(false)
+  })
+
+  it('does not trust a terminal phase when directory facts still describe pre-switch state', async () => {
+    const root = await readyRoot()
+    const before = await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')
+    const run = await prepareChanged(root)
+    await markCommitted(root, run)
+
+    const resumed = await transactionCall(root, 'resume', { runId: run.runId })
+
+    expect(resumed).toMatchObject({
+      status: 'incomplete',
+      data: { outcome: 'manual_recovery', manualRecoveryRequired: true },
+    })
+    expect(await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')).toBe(before)
+    expect(await exists(root, run.candidatePath)).toBe(true)
   })
 
   it('preserves conflicting complete copies for manual recovery', async () => {
@@ -583,6 +916,82 @@ describe('transaction crash recovery', () => {
     expect(resumed.status).toBe('failed')
     expect(resumed.data).toMatchObject({ outcome: 'no_trusted_copy', manualRecoveryRequired: true })
     expect(await exists(root, `.scratch/runs/${run.runId}/manifest.json`)).toBe(true)
+    expect(await exists(root, run.gitEvidencePath)).toBe(true)
+    expect(await exists(root, '.scratch/locks/context-write')).toBe(true)
+  })
+
+  it('returns mechanical_failure and cleans when a known filesystem failure occurs before the first switch', async () => {
+    const root = await readyRoot()
+    const run = await prepareChanged(root)
+    const realRename = fs.rename.bind(fs)
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(from).endsWith('manifest.json.tmp')) {
+        const error = new Error('injected known failure') as NodeJS.ErrnoException
+        error.code = 'EACCES'
+        throw error
+      }
+      return realRename(from, to)
+    })
+
+    const result = await transactionCall(root, 'commit', { runId: run.runId, approval: run.approval })
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      data: { outcome: 'mechanical_failure' },
+      diagnostics: [{ code: 'REPOSITORY_IO_FAILED' }],
+    })
+    expect(await exists(root, `.scratch/runs/${run.runId}`)).toBe(false)
+    expect(await exists(root, run.gitEvidencePath)).toBe(false)
+    expect(await exists(root, '.scratch/locks/context-write')).toBe(false)
+  })
+
+  it('leaves no unreadable lock owner when an unknown failure escapes before the manifest exists', async () => {
+    const root = await readyRoot()
+    const gitEvidencePath = await writeGitEvidence(root)
+    const realMkdir = fs.mkdir.bind(fs)
+    const injected = vi.spyOn(fs, 'mkdir').mockImplementation(async (target, options) => {
+      if (String(target).includes('/.scratch/runs/') && !String(target).endsWith('/runs'))
+        throw new TypeError('injected unknown run staging failure')
+      return realMkdir(target, options as Parameters<typeof realMkdir>[1])
+    })
+
+    await expect(transactionCall(root, 'begin', {
+      command: 'update',
+      mode: 'deep',
+      dryRun: false,
+      scope: { kind: 'repository' },
+      gitEvidencePath,
+      evidencePaths: ['src/service.ts'],
+    })).rejects.toThrow('injected unknown run staging failure')
+    injected.mockRestore()
+
+    // No manifest was ever written, so the lock must not survive pointing at a run that
+    // can never be read: a later begin has to be able to proceed.
+    expect(await exists(root, '.scratch/locks/context-write')).toBe(false)
+    const retried = await transactionCall(root, 'begin', {
+      command: 'update',
+      mode: 'deep',
+      dryRun: false,
+      scope: { kind: 'repository' },
+      gitEvidencePath,
+      evidencePaths: ['src/service.ts'],
+    })
+    expect(retried).toMatchObject({ status: 'success', data: { outcome: 'staged' } })
+  })
+
+  it('rejects unknown switch failures as transport errors and preserves the committing scene', async () => {
+    const root = await readyRoot()
+    const run = await prepareChanged(root)
+    const realRename = fs.rename.bind(fs)
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(to).endsWith('/backup/context'))
+        throw new TypeError('injected unknown switch failure')
+      return realRename(from, to)
+    })
+
+    await expect(transactionCall(root, 'commit', { runId: run.runId, approval: run.approval })).rejects.toThrow('injected unknown switch failure')
+    expect((await readManifest(root, run.runId)).phase).toBe('committing')
+    expect(await exists(root, run.candidatePath)).toBe(true)
     expect(await exists(root, run.gitEvidencePath)).toBe(true)
     expect(await exists(root, '.scratch/locks/context-write')).toBe(true)
   })
