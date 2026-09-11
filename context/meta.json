@@ -1,0 +1,190 @@
+{
+  "$schema": "plugydown.context.meta/v1",
+  "convergence": {
+    "bodyBytes": 113341,
+    "documentCount": 25,
+    "estimatedTokens": 40787,
+    "frontMatterBytes": 9018,
+    "perDomain": {
+      "authority-workflow": {
+        "bodyBytes": 17842,
+        "documentCount": 4,
+        "estimatedTokens": 6470,
+        "frontMatterBytes": 1567
+      },
+      "delivery": {
+        "bodyBytes": 19949,
+        "documentCount": 4,
+        "estimatedTokens": 7130,
+        "frontMatterBytes": 1441
+      },
+      "knowledge-model": {
+        "bodyBytes": 13037,
+        "documentCount": 3,
+        "estimatedTokens": 4724,
+        "frontMatterBytes": 1135
+      },
+      "read-plane": {
+        "bodyBytes": 12321,
+        "documentCount": 3,
+        "estimatedTokens": 4459,
+        "frontMatterBytes": 1056
+      },
+      "repository-access": {
+        "bodyBytes": 12272,
+        "documentCount": 3,
+        "estimatedTokens": 4419,
+        "frontMatterBytes": 984
+      },
+      "runtime-protocol": {
+        "bodyBytes": 16553,
+        "documentCount": 4,
+        "estimatedTokens": 5965,
+        "frontMatterBytes": 1342
+      },
+      "write-plane": {
+        "bodyBytes": 21367,
+        "documentCount": 4,
+        "estimatedTokens": 7620,
+        "frontMatterBytes": 1493
+      }
+    },
+    "source": "init"
+  },
+  "documents": {
+    "authority-workflow": {
+      "bodyFingerprint": "22b04a4fd505fbee004dadb306b8d1065e06f9a7be9ca743d2437708cd053e6d",
+      "frontMatterFingerprint": "4dde87c6c3b8d6b5d49e29930ae985316d84d42761c380f8296ecffb25c7e8c2",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "authority-workflow.enforcement-boundary": {
+      "bodyFingerprint": "fb931994aebbe55b887efa222a3ed355752a259a8223655eab1a62958d8c56a2",
+      "frontMatterFingerprint": "45fc1f226c205f0f51441652e5222e4923bf2f6c6dcee788fd15d7142946e4bd",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "authority-workflow.roles-and-briefs": {
+      "bodyFingerprint": "63bcff010c847fa4a5986001591e7064ea8ca477f6315b77bbbb2e69fd392550",
+      "frontMatterFingerprint": "baa38fcc06332916adcba67f8977f45d35d85ad771910121325ae6a7e761099c",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "authority-workflow.scratch-lifecycle": {
+      "bodyFingerprint": "7082e1cde3963188d0fe6bbbf4888ca6f09216ca8615b5210547afc2df349cfa",
+      "frontMatterFingerprint": "6e347b9ad5c4ba939642faee2a230e5e74a01115596ac8b4c723d37a6a432a5f",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "delivery": {
+      "bodyFingerprint": "53c489f37e23ad223ba12b92a2b704490c8af898fb3333aa8b63ecac94a27f2a",
+      "frontMatterFingerprint": "ceb7e59e4f0bbe45bb0af6e0fdf77e788f33e9fd80ba49a84cce41e8b1fc8345",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "delivery.ownership-boundary": {
+      "bodyFingerprint": "7c5be1a2bf7c6aebf0e574fa15758e20840396b01905d75bb6f6a9e0e148d95a",
+      "frontMatterFingerprint": "d706f5b4cc56605feb7413dd15dce9fc7528e39de941986d8718235a8930c57e",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "delivery.packaging": {
+      "bodyFingerprint": "552a97eb3392bb8e7d75187e87405c92352119256709aee76d51ea4ce6777cc3",
+      "frontMatterFingerprint": "d7ffa826ad53749f747bc623ffb76393b0cc600547b4e4ec9de2505f5cbc2864",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "delivery.verification-and-gaps": {
+      "bodyFingerprint": "b82a4ee29c88482c80baba1bd932f81d6807dbd69e1f0d9416bb590188e0683e",
+      "frontMatterFingerprint": "8e82d1de4d587fb63d2bd05224f9044f36ed5f04c74af413cc8be195739e9d2a",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "knowledge-model": {
+      "bodyFingerprint": "3cb42bb2e719bcf1da93fe856e42f1d04e7712d4f5fd852e1b88702fdb4a3e44",
+      "frontMatterFingerprint": "0bbde9c17476b3d80e277df91a2af85c8d814f9509505a2f5757eddbb7fcdbb6",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "knowledge-model.document-grammar": {
+      "bodyFingerprint": "c08177b11144d5f57b8be3e7039e26050a65a127b0d5bb1b216da9c3d9a199cb",
+      "frontMatterFingerprint": "9f59a497681273b5e7456fb51fe9f85e59c3745d04e8c2449224ebe4cb8bb6a4",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "knowledge-model.meta-ledger": {
+      "bodyFingerprint": "b74caa33e84507ab7cf47f8a930025c439368e20ab4bb82b1b3637d192f138ee",
+      "frontMatterFingerprint": "f6d5e69749b11da0f1d84a751103ea8dea325fe22a35a59b0cb0d0f6a5e4298f",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "read-plane": {
+      "bodyFingerprint": "af0334fe430dc63d2a8fd1d24f0deffadea7232328be9a615e0cd9cbc5b56c85",
+      "frontMatterFingerprint": "da04453ba2086edb6815ae767d517bc7b80b5cbce8d00cde4c83b7313fa24050",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "read-plane.capabilities": {
+      "bodyFingerprint": "db8d6837429cccb96e635edba902dd3b21735ea2cd86055dbf786ba903b6f726",
+      "frontMatterFingerprint": "7f4f1731963b188b1dac8d6c93be366553a42de4b6cfec7dc74d7036a877e03f",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "read-plane.delta-and-light": {
+      "bodyFingerprint": "31af7a2cb33feaac650890d42325fc2bf2e38680163f39acccb56bbae2052ba7",
+      "frontMatterFingerprint": "949fa21c7099fb6712458683b32d8f8bca43a9a1657e4ba87139b78379da3eac",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "repository-access": {
+      "bodyFingerprint": "016fbbaae93db748aa518536106f426d550e7954b34d75d19dc0e094565dd68c",
+      "frontMatterFingerprint": "3468ae5d83a4861c064b8913864d9a900f142232bb195acfc9e42fa5f78b20d1",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "repository-access.git-evidence": {
+      "bodyFingerprint": "ffcffa85e9eb1f56a78e1603197fe6cd060a4098604895122378c425b0eec823",
+      "frontMatterFingerprint": "39a852608286b86497763c8dd03a668d5c7066f996f22e435329b022ff5d2ba4",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "repository-access.path-and-glob-safety": {
+      "bodyFingerprint": "995ac26c1ed6697ecc6a74905d99e69a09e093ffd12939a92a7ca2e9f65a92e6",
+      "frontMatterFingerprint": "5f4a7cb3e7d9ccd293f7671f6db65d7f0aa8b7ebfdf017fb9d71c8cf59ec8785",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "runtime-protocol": {
+      "bodyFingerprint": "bc5586b2fa4cfc7c61347da0e7945ac0a326a6239b0483a4a312c5e6ed045b01",
+      "frontMatterFingerprint": "59297db1b4cc53b308a08fe1f1a4f910916b33e66be463e29d501427452441b7",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "runtime-protocol.budgets-and-cursors": {
+      "bodyFingerprint": "ddfe73954debcb3196b8a51af58170b24f11748dce6d4fea3c3ab049913f6b5e",
+      "frontMatterFingerprint": "e7c38ecade5c7bb4cee83e8935152b39687c2fe913e7e0a025a9c3a777e7d77d",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "runtime-protocol.determinism": {
+      "bodyFingerprint": "813f34fd6525333f0628d1ecf06ce7c99fec7bb0d1ff77a2ab0f8f29d6636ce1",
+      "frontMatterFingerprint": "1007217b2add44d37359b6953203e5a556c02ff706853a0dc1f644cba8730ad6",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "runtime-protocol.wire-contract": {
+      "bodyFingerprint": "52531539834613f047313e12d4fce9851c3e0a176b3d7db4c0776b0558de5b10",
+      "frontMatterFingerprint": "59c6a8473a58c7571a7e31b7615a6c03ec498f0efbd08baa6ee13ccddfdffdc3",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "write-plane": {
+      "bodyFingerprint": "58a2acd676158981e47105ba6fec15825f539f23240cf616736929403ea62d44",
+      "frontMatterFingerprint": "fb7bdf20431f3eee704c5f652df240ad432a3e84cfa82b07a999222e4746779b",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "write-plane.outcomes-and-recovery": {
+      "bodyFingerprint": "95ce4e0a94e6fc92a67b586f349911adde17ff52c426d89e5013ea37d4c8214d",
+      "frontMatterFingerprint": "5e85208b3a1d865147a62c1b410645e0afa87b80bc3db9f78137954cac47e04b",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "write-plane.scope-authorization": {
+      "bodyFingerprint": "d414f2c37f2c9deb3617fe111156f584e5c8d7267983b591d014b656e4836d23",
+      "frontMatterFingerprint": "35c8cbfbc2aa12a4c9f8ddbf52e51725b9d0872eb55a25646deadceddd17a948",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    },
+    "write-plane.transaction-lifecycle": {
+      "bodyFingerprint": "8f20acfcc702cf39ce6c1d905f64a4e7cf58dd898f307be5f3560732b36cc932",
+      "frontMatterFingerprint": "09d2780c48d42e2bb6f3a25848cfd50f2b034fbe173181b91bfcf3f9e2515326",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    }
+  },
+  "fingerprintVersion": "1",
+  "repository": {
+    "baseline": {
+      "revision": "93f2cb22f05832685c0551adbf30340bb7beb069",
+      "sourceFingerprint": "3e6606d46062e786e0ec2e1960c22e040160fef7c1b328c37f6585d22bcb1b5d"
+    }
+  },
+  "runtimeProtocol": "plugydown.context.runtime/v1",
+  "toolVersion": "0.1.0"
+}

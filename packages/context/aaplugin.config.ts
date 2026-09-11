@@ -33,7 +33,6 @@ export default defineConfig({
         category: 'Developer Tools',
         capabilities: ['Repository knowledge', 'Incremental documentation', 'Context continuation'],
         websiteURL: 'https://github.com/wh1teAlter/plugydown',
-        supportURL: 'https://github.com/wh1teAlter/plugydown/issues',
         defaultPrompt: [
           'Use Plugydown Context to understand this repository before making changes.',
           'Initialize Plugydown Context for this repository.',

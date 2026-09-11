@@ -4,10 +4,10 @@ packages:
 # AAPlugin 依赖使用精确版本。它处于 beta，range 会在 1.0.0-beta.2 出现时静默替换构建器，
 # 而构建器变更直接改变产物字节 —— 字节等价是本产品的验收项之一。升级必须是显式动作。
 catalog:
-  '@aaplugin/extension-hooks': 1.0.0-beta.1
-  '@aaplugin/kit': 1.0.0-beta.1
-  '@aaplugin/platform-claude-code': 1.0.0-beta.1
-  '@aaplugin/platform-codex': 1.0.0-beta.1
+  '@aaplugin/extension-hooks': 1.0.0-beta.2
+  '@aaplugin/kit': 1.0.0-beta.2
+  '@aaplugin/platform-claude-code': 1.0.0-beta.2
+  '@aaplugin/platform-codex': 1.0.0-beta.2
   '@antfu/eslint-config': 9.3.0
   '@types/node': 26.2.0
   eslint: 10.8.1
