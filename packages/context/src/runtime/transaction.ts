@@ -9,11 +9,10 @@ import path from 'node:path'
 import { bodyFingerprint, FINGERPRINT_VERSION, frontMatterFingerprint, serializeMeta, sourceFingerprint, TOOL_VERSION } from './document.js'
 import { graphMetrics, loadKnowledge } from './graph.js'
 import { diagnostic, isRecord, PROTOCOL, RuntimeFault, transactionResponse } from './protocol.js'
-import { aggregateSourceFingerprint, assertGitEvidencePath, assertSourcePattern, CONTEXT_ROOT, declarationMatches, expandSourcePatternSets, filesystemOperation, fingerprintTree, LOCK_ROOT, lstatRepositoryPath, MAX_JSON_TEXT_BYTES, readGitEvidence, readUtf8File, resolveRepositoryPath, resolveRepositoryRoot, RUNS_ROOT, SCRATCH_ROOT, throwFilesystemFault } from './repository.js'
+import { aggregateSourceFingerprint, assertGitEvidencePath, assertSourcePattern, CONTEXT_ROOT, declarationMatches, expandSourcePatternSets, filesystemOperation, fingerprintTree, LOCK_ROOT, LOCK_SCHEMA, lstatRepositoryPath, MAX_JSON_TEXT_BYTES, readGitEvidence, readLockOwner, readUtf8File, resolveRepositoryPath, resolveRepositoryRoot, RUNS_ROOT, SCRATCH_ROOT, throwFilesystemFault } from './repository.js'
 import { compareCodeUnits, stableJson } from './stable-json.js'
 
 const TRANSACTION_SCHEMA = 'plugydown.context.transaction/v1'
-const LOCK_SCHEMA = 'plugydown.context.lock/v1'
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
 const HASH = /^[a-f0-9]{64}$/
 const GIT_REVISION = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
@@ -373,27 +372,8 @@ async function loadManifest(root: string, runId: string): Promise<TransactionMan
   return manifest
 }
 
-async function readLock(root: string): Promise<LockFact> {
-  try {
-    const info = await lstatRepositoryPath(root, LOCK_ROOT)
-    if (info === undefined)
-      return { state: 'absent' }
-    if (!info.isDirectory())
-      return { state: 'corrupt' }
-    const raw = JSON.parse(await readUtf8File(root, `${LOCK_ROOT}/owner.json`, MAX_JSON_TEXT_BYTES)) as unknown
-    if (!isRecord(raw) || !exactKeys(raw, ['schema', 'runId']) || raw.schema !== LOCK_SCHEMA || typeof raw.runId !== 'string' || !UUID.test(raw.runId))
-      return { state: 'corrupt' }
-    return { state: 'valid', runId: raw.runId }
-  }
-  catch (error) {
-    if (error instanceof RuntimeFault || error instanceof SyntaxError)
-      return { state: 'corrupt' }
-    throw error
-  }
-}
-
 async function classifyLock(root: string): Promise<LockFact> {
-  const lock = await readLock(root)
+  const lock = await readLockOwner(root)
   if (lock.state !== 'valid')
     return lock
   try {
@@ -423,7 +403,7 @@ async function createLock(root: string, runId: string): Promise<LockFact> {
 }
 
 async function releaseLock(root: string, runId: string): Promise<void> {
-  const lock = await readLock(root)
+  const lock = await readLockOwner(root)
   if (lock.state === 'valid' && lock.runId === runId) {
     const absolute = await resolveRepositoryPath(root, LOCK_ROOT)
     await filesystemOperation(() => fs.rm(absolute, { recursive: true }), LOCK_ROOT)

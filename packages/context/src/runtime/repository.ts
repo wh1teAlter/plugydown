@@ -3,7 +3,7 @@ import type { Diagnostic } from './protocol.js'
 import { createHash } from 'node:crypto'
 import { createReadStream, promises as fs } from 'node:fs'
 import path from 'node:path'
-import { RuntimeFault, sha256 } from './protocol.js'
+import { isRecord, RuntimeFault, sha256 } from './protocol.js'
 import { compactJson, compareCodeUnits } from './stable-json.js'
 
 export const CONTEXT_ROOT = 'context'
@@ -12,6 +12,7 @@ export const EVIDENCE_ROOT = `${SCRATCH_ROOT}/evidence`
 export const FEEDBACK_ROOT = `${SCRATCH_ROOT}/feedback`
 export const RUNS_ROOT = `${SCRATCH_ROOT}/runs`
 export const LOCK_ROOT = `${SCRATCH_ROOT}/locks/context-write`
+export const LOCK_SCHEMA = 'plugydown.context.lock/v1'
 
 export const MAX_MARKDOWN_BYTES = 1024 * 1024
 export const MAX_FRONT_MATTER_BYTES = 64 * 1024
@@ -22,7 +23,10 @@ export const MAX_SOURCE_BYTES = 512 * 1024 * 1024
 
 const VARIABLE = /\$|%[A-Z_]\w*%/i
 const UNSUPPORTED_GLOB = /[?[\]{}!]/
-const FORBIDDEN_SOURCE_SEGMENTS = new Set(['.git', '.scratch', 'context', 'node_modules'])
+const RUN_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
+// Spec 02 §7 forbids the repository-root `.git/`, `.scratch/` and `context/`, but *any* `node_modules/`.
+// Matching all four on every segment would reject legitimate paths such as `packages/context/**`.
+const FORBIDDEN_SOURCE_ROOTS = new Set(['.git', '.scratch', 'context'])
 const SCRATCH_LEAF_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const KNOWN_FILESYSTEM_CODES = new Set([
   'ENOENT',
@@ -123,15 +127,39 @@ export function assertSourcePattern(pattern: string): void {
     pathFault('GLOB_SYNTAX_INVALID', 'A source pattern uses unsupported glob syntax.', pattern)
   if (segments.filter(segment => segment === '**').length > 1 || segments.some(segment => segment.includes('**') && segment !== '**'))
     pathFault('GLOB_RECURSION_INVALID', 'A source pattern may contain one complete recursive segment.', pattern)
-  if (segments.some(segment => FORBIDDEN_SOURCE_SEGMENTS.has(segment)))
+  if (FORBIDDEN_SOURCE_ROOTS.has(segments[0] ?? '') || segments.includes('node_modules'))
     pathFault('SOURCE_ROOT_FORBIDDEN', 'A source pattern points into a forbidden repository root.', pattern)
 }
 
-/** Validates an exact source path used as a selector rather than a declaration glob. */
-export function assertSourcePath(candidate: string): void {
-  assertSourcePattern(candidate)
-  if (hasGlob(candidate))
-    pathFault('PATH_GLOB_INVALID', 'A source path selector must not contain glob syntax.', candidate)
+export type LockOwner
+  = | { readonly state: 'absent' }
+    | { readonly state: 'valid', readonly runId: string }
+    | { readonly state: 'corrupt' }
+
+/**
+ * Single source of truth for write-lock owner validity. Both the transaction plane and
+ * `repository.inspect` read the lock through here so the two cannot diverge on what counts
+ * as a live owner.
+ */
+export async function readLockOwner(root: string): Promise<LockOwner> {
+  try {
+    const info = await lstatRepositoryPath(root, LOCK_ROOT)
+    if (info === undefined)
+      return { state: 'absent' }
+    if (!info.isDirectory())
+      return { state: 'corrupt' }
+    const raw = JSON.parse(await readUtf8File(root, `${LOCK_ROOT}/owner.json`, MAX_JSON_TEXT_BYTES)) as unknown
+    if (!isRecord(raw) || Object.keys(raw).length !== 2 || raw.schema !== LOCK_SCHEMA
+      || typeof raw.runId !== 'string' || !RUN_ID.test(raw.runId)) {
+      return { state: 'corrupt' }
+    }
+    return { state: 'valid', runId: raw.runId }
+  }
+  catch (error) {
+    if (error instanceof RuntimeFault || error instanceof SyntaxError)
+      return { state: 'corrupt' }
+    throw error
+  }
 }
 
 function isInside(parent: string, child: string): boolean {

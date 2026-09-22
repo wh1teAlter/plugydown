@@ -51,7 +51,7 @@ describe('read queries', () => {
     const root = await ready()
     const runId = '00000000-0000-4000-8000-000000000001'
     await fs.mkdir(path.join(root, `.scratch/locks/context-write`), { recursive: true })
-    await fs.writeFile(path.join(root, `.scratch/locks/context-write/owner.json`), JSON.stringify({ runId }))
+    await fs.writeFile(path.join(root, `.scratch/locks/context-write/owner.json`), JSON.stringify({ schema: 'plugydown.context.lock/v1', runId }))
     await fs.mkdir(path.join(root, `.scratch/runs/${runId}`), { recursive: true })
     await fs.writeFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), JSON.stringify({ runId, command: 'update', phase: 'staged' }))
 
@@ -64,7 +64,7 @@ describe('read queries', () => {
     const root = await ready()
     const runId = '00000000-0000-4000-8000-000000000002'
     await fs.mkdir(path.join(root, '.scratch/locks/context-write'), { recursive: true })
-    await fs.writeFile(path.join(root, '.scratch/locks/context-write/owner.json'), JSON.stringify({ runId }))
+    await fs.writeFile(path.join(root, '.scratch/locks/context-write/owner.json'), JSON.stringify({ schema: 'plugydown.context.lock/v1', runId }))
     await fs.mkdir(path.join(root, `.scratch/runs/${runId}`), { recursive: true })
     await fs.writeFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), JSON.stringify({ runId, command: '/tmp', phase: '/tmp' }))
 
@@ -73,6 +73,23 @@ describe('read queries', () => {
     expect(inspect.data?.activeRun).toBeUndefined()
     expect(inspect.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'ACTIVE_RUN_INVALID', severity: 'warning' })]))
     expect(JSON.stringify(inspect)).not.toContain('/tmp')
+  })
+
+  it('rejects a lock owner that the transaction plane would call corrupt', async () => {
+    const root = await ready()
+    const runId = '00000000-0000-4000-8000-000000000003'
+    await fs.mkdir(path.join(root, '.scratch/locks/context-write'), { recursive: true })
+    await fs.mkdir(path.join(root, `.scratch/runs/${runId}`), { recursive: true })
+    await fs.writeFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), JSON.stringify({ runId, command: 'update', phase: 'staged' }))
+
+    // A well-formed manifest must not make an owner without the lock schema look live.
+    for (const owner of [{ runId }, { schema: 'plugydown.context.lock/v1', runId, extra: 1 }]) {
+      await fs.writeFile(path.join(root, '.scratch/locks/context-write/owner.json'), JSON.stringify(owner))
+      const inspect = await call(root, 'repository.inspect', {})
+
+      expect(inspect.data?.activeRun).toBeUndefined()
+      expect(inspect.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'WRITE_LOCK_INVALID' })]))
+    }
   })
 
   it('provides L1 Domain metadata, L2 Document metadata, and only L3 bodies', async () => {
@@ -115,6 +132,20 @@ describe('read queries', () => {
 
     const byCode = await call(root, 'frontier.query', { depth: 2, selectors: { codePaths: ['src/retry.ts'] } })
     expect((byCode.data?.items as Array<Record<string, unknown>>).map(item => item.id)).toEqual(['service.retry'])
+  })
+
+  it('selects every Document whose declaration falls inside a code path glob', async () => {
+    const root = await ready()
+
+    const wide = await call(root, 'frontier.query', { depth: 2, selectors: { codePaths: ['src/**'] } })
+    expect((wide.data?.items as Array<Record<string, unknown>>).map(item => item.id))
+      .toEqual(['client', 'service', 'service.retry'])
+
+    const narrow = await call(root, 'frontier.query', { depth: 2, selectors: { codePaths: ['src/client.ts'] } })
+    expect((narrow.data?.items as Array<Record<string, unknown>>).map(item => item.id)).toEqual(['client'])
+
+    const elsewhere = await call(root, 'frontier.query', { depth: 2, selectors: { codePaths: ['packages/other/**'] } })
+    expect(elsewhere.data?.items).toEqual([])
   })
 
   it('derives targeted source freshness for compact continuation', async () => {

@@ -55,6 +55,22 @@ describe('repository safety', () => {
   })
 
   it.each([
+    'packages/context/src/runtime.ts',
+    'packages/context/**',
+    'tools/.scratch/build.ts',
+  ])('accepts a reserved name below the repository root: %s', async (codePath) => {
+    const document = { ...SERVICE_DOMAIN, codePaths: [codePath] }
+    const root = await repository(document)
+    await fs.mkdir(path.join(root, 'packages/context/src'), { recursive: true })
+    await fs.writeFile(path.join(root, 'packages/context/src/runtime.ts'), 'runtime\n')
+    await fs.mkdir(path.join(root, 'tools/.scratch'), { recursive: true })
+    await fs.writeFile(path.join(root, 'tools/.scratch/build.ts'), 'build\n')
+    await writeMeta(root, [document])
+
+    expect((await validate(root)).status).toBe('success')
+  })
+
+  it.each([
     ['src/missing.ts', 'SOURCE_EXACT_MISSING'],
     ['src/*.missing', 'SOURCE_GLOB_ZERO_MATCH'],
     ['src', 'SOURCE_NOT_REGULAR_FILE'],

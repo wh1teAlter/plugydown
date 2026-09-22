@@ -25,22 +25,21 @@ import {
   sha256,
 } from './protocol.js'
 import {
-  assertSourcePath,
-  controlledGlobMatches,
+  assertSourcePattern,
+  declarationMatches,
   decodeUtf8,
   FEEDBACK_ROOT,
   LOCK_ROOT,
-  lstatRepositoryPath,
   MAX_JSON_TEXT_BYTES,
   pathExists,
   readDirectory,
+  readLockOwner,
   readRegularBytes,
   readUtf8File,
   RUNS_ROOT,
 } from './repository.js'
 import { compactJson, compareCodeUnits } from './stable-json.js'
 
-const RUN_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
 const TRANSACTION_COMMANDS = new Set(['init', 'update', 'prune'])
 const TRANSACTION_PHASES = new Set(['staged', 'validated', 'committing', 'committed', 'restored', 'recovery_required', 'failed'])
 
@@ -63,29 +62,22 @@ function requireFormalReady(graph: KnowledgeGraph): void {
 }
 
 async function activeRun(root: string): Promise<{ readonly value?: JsonObject, readonly diagnostics: readonly Diagnostic[] }> {
-  if (!await pathExists(root, LOCK_ROOT))
+  const lock = await readLockOwner(root)
+  if (lock.state === 'absent')
     return { diagnostics: [] }
+  if (lock.state === 'corrupt')
+    return { diagnostics: [diagnostic('WRITE_LOCK_INVALID', 'The Context write lock owner is invalid.', 'warning', LOCK_ROOT)] }
+  const manifestPath = `${RUNS_ROOT}/${lock.runId}/manifest.json`
   try {
-    const info = await lstatRepositoryPath(root, LOCK_ROOT)
-    if (info === undefined || !info.isDirectory())
-      return { diagnostics: [diagnostic('WRITE_LOCK_INVALID', 'The Context write lock is not a regular directory.', 'warning', LOCK_ROOT)] }
-    const owner = JSON.parse(await readUtf8File(root, `${LOCK_ROOT}/owner.json`, MAX_JSON_TEXT_BYTES)) as unknown
-    if (typeof owner !== 'object' || owner === null || Array.isArray(owner)
-      || typeof (owner as Record<string, unknown>).runId !== 'string'
-      || !RUN_ID.test((owner as Record<string, unknown>).runId as string)) {
-      return { diagnostics: [diagnostic('WRITE_LOCK_INVALID', 'The Context write lock owner is invalid.', 'warning', LOCK_ROOT)] }
-    }
-    const runId = (owner as { runId: string }).runId
-    const manifestPath = `${RUNS_ROOT}/${runId}/manifest.json`
     const manifest = JSON.parse(await readUtf8File(root, manifestPath, MAX_JSON_TEXT_BYTES)) as unknown
     if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest))
       return { diagnostics: [diagnostic('ACTIVE_RUN_INVALID', 'The active transaction manifest is invalid.', 'warning', manifestPath)] }
     const value = manifest as Record<string, unknown>
-    if (value.runId !== runId || typeof value.command !== 'string' || !TRANSACTION_COMMANDS.has(value.command)
+    if (value.runId !== lock.runId || typeof value.command !== 'string' || !TRANSACTION_COMMANDS.has(value.command)
       || typeof value.phase !== 'string' || !TRANSACTION_PHASES.has(value.phase)) {
       return { diagnostics: [diagnostic('ACTIVE_RUN_INVALID', 'The active transaction manifest identity is invalid.', 'warning', manifestPath)] }
     }
-    return { value: { runId, command: value.command, phase: value.phase }, diagnostics: [] }
+    return { value: { runId: lock.runId, command: value.command, phase: value.phase }, diagnostics: [] }
   }
   catch (error) {
     if (error instanceof RuntimeFault || error instanceof SyntaxError)
@@ -157,8 +149,12 @@ export async function repositoryInspect(root: string, request: RuntimeRequest): 
   return response(page.items, cursor)
 }
 
-function pathSelects(document: ContextDocument, selectedPath: string): boolean {
-  return document.codePaths.some(pattern => pattern === selectedPath || (pattern.includes('*') && controlledGlobMatches(pattern, selectedPath)))
+function pathSelects(document: ContextDocument, selector: string): boolean {
+  // ponytail: two-way declarationMatches approximates set overlap between a declaration and a
+  // selector that may itself be a glob. A mid-segment wildcard on both sides (`packages/*/a.ts`
+  // selected by `packages/foo/**`) is missed; upgrade to interval intersection if that shows up.
+  return document.codePaths.some(pattern =>
+    declarationMatches(pattern, selector) || declarationMatches(selector, pattern))
 }
 
 function frontierCandidates(graph: KnowledgeGraph, input: FrontierQueryInput): readonly { readonly document: ContextDocument, readonly reasons: readonly string[] }[] {
@@ -242,7 +238,7 @@ interface FrontierItem {
 
 export async function frontierQuery(root: string, request: RuntimeRequest): Promise<RuntimeResponse> {
   const input = request.input as FrontierQueryInput
-  input.selectors?.codePaths?.forEach(assertSourcePath)
+  input.selectors?.codePaths?.forEach(assertSourcePattern)
   const graph = await loadKnowledge(root, undefined, { sourcePolicy: 'formal-only' })
   requireFormalReady(graph)
   const contextFingerprint = graph.contextFingerprint as string
