@@ -9,6 +9,9 @@ relations:
     - knowledge-model
   related:
     - runtime-protocol.budgets-and-cursors
+code:
+  paths:
+    - packages/context/src/runtime/queries.ts
 ---
 
 # Read plane

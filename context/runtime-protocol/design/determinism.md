@@ -7,6 +7,9 @@ domain: runtime-protocol
 relations:
   requires:
     - runtime-protocol
+code:
+  paths:
+    - packages/context/src/runtime/stable-json.ts
 ---
 
 # Determinism

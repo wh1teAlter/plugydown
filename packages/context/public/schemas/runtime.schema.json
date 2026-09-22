@@ -1407,7 +1407,7 @@
                 "changedPaths",
                 "directImpact",
                 "expandedImpact",
-                "unmappedPaths",
+                "unreferencedPaths",
                 "brokenEvidence",
                 "light",
                 "repositoryBaselineEligible"
@@ -1508,7 +1508,7 @@
                     }
                   }
                 },
-                "unmappedPaths": {
+                "unreferencedPaths": {
                   "type": "array",
                   "items": {
                     "type": "string",

@@ -8,6 +8,9 @@ relations:
   related:
     - write-plane.scope-authorization
     - read-plane
+code:
+  paths:
+    - packages/context/src/skills/context/SKILL.md
 ---
 
 # Authority workflow

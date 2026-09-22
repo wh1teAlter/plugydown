@@ -7,6 +7,11 @@ domain: knowledge-model
 relations:
   requires:
     - knowledge-model
+code:
+  paths:
+    - packages/context/src/runtime/document.ts
+    - packages/context/public/schemas/document.schema.json
+    - packages/context/public/schemas/meta.schema.json
 ---
 
 # Document grammar

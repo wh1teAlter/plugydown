@@ -7,6 +7,9 @@ domain: knowledge-model
 relations:
   related:
     - runtime-protocol.determinism
+code:
+  paths:
+    - packages/context/src/runtime/document.ts
 ---
 
 # Knowledge model
@@ -53,9 +56,8 @@ Exactly two levels. The Domain root may hold only `domain.md`. Category director
 
 ## Self-hosting limitation
 
-This repository cannot declare `code.paths` for its own source. `context` is a forbidden source-pattern segment and
-this product's source lives under `packages/context/`, so no legal pattern can name it. Globs anchored at `packages`
-fail for a different reason — they walk into pnpm's `node_modules` symlinks and hit `PATH_SYMLINK`. Both were verified
-empirically. Consequence: every Document in this Context omits `code`, and source locations are recorded as prose in
-bodies instead. The mechanism is described in `repository-access.path-and-glob-safety`; the effects on this Context are
-described in `knowledge-model.meta-ledger`.
+`code.paths` may name this product's source as exact files under `packages/context/`. `.git`, `.scratch`, and `context`
+are forbidden only as the first segment; nested names such as `packages/context/src/runtime/document.ts` are legal.
+Globs anchored at `packages` still fail to expand because `listAnchorFiles` walks into pnpm `node_modules` symlinks and
+hits `PATH_SYMLINK`. See `repository-access.path-and-glob-safety` for the mechanism and `knowledge-model.meta-ledger`
+for the remaining glob-expansion cost.

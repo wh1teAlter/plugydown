@@ -7,6 +7,11 @@ domain: repository-access
 relations:
   requires:
     - repository-access
+code:
+  paths:
+    - packages/context/src/runtime/repository.ts
+    - packages/context/public/schemas/document.schema.json
+    - packages/context/public/schemas/runtime.schema.json
 ---
 
 # Path and glob safety
@@ -52,25 +57,32 @@ mapping from declaration to file set depend on link state, which would make sour
    no negation.
 3. At most one `**`, and `**` must occupy a whole segment. `src/**/**/*.ts` and `src/a**b/*.ts` are both
    `GLOB_RECURSION_INVALID`.
-4. No segment may be `.git`, `.scratch`, `context`, or `node_modules` — `SOURCE_ROOT_FORBIDDEN`.
+4. The first segment must not be `.git`, `.scratch`, or `context`, and no segment may be `node_modules` —
+   `SOURCE_ROOT_FORBIDDEN`. Nested reserved names such as `packages/context/**` and `tools/.scratch/build.ts` are
+   legal; root patterns such as `.git/config`, `.scratch/input.md`, `context/service/domain.md`, and
+   `src/node_modules/pkg.ts` are not.
 
-`assertSourcePath` is the selector variant: same rules, plus no glob syntax at all (`PATH_GLOB_INVALID`). Used where a
-concrete file is expected, such as `frontier.query` `selectors.codePaths`.
+There is no separate exact-path validator. `code.paths`, `scope.paths`, and `frontier.query` `selectors.codePaths` all
+use `assertSourcePattern`; globs are allowed. `assertSourcePath`, `PATH_GLOB_INVALID`, and schema `$defs.sourcePath`
+do not exist. Both published schemas encode the same first-segment-versus-`node_modules` rule in `$defs.sourcePattern`.
 
 Matching is implemented by `controlledGlobMatches` — a recursive segment matcher where `**` consumes zero or more
-segments and `*` within a segment becomes `.*` with everything else regex-escaped. `declarationMatches` short-circuits on
-exact string equality first, so a declaration without `*` never enters the matcher.
+segments and `*` within a segment becomes `.*` with everything else regex-escaped. `declarationMatches(declaration,
+candidate)` is one-way: exact string equality, or glob-match when the declaration contains `*`. A declaration without
+`*` never enters the matcher.
 
-### The self-hosting consequence
+### The glob-expansion limitation
 
-`context` being a forbidden segment means this product cannot declare its own source, which lives at
-`packages/context/src/…`. The obvious workaround — anchor at `packages` and glob down — fails for an unrelated reason:
-`listAnchorFiles` walks the entire anchor directory before filtering, and in a pnpm workspace that walk reaches
-`node_modules` symlinks, which are refused with `PATH_SYMLINK` rather than skipped. Both behaviours verified empirically.
+Declaration and expansion are different. Exact non-glob paths under `packages/context/` are legal and expand by lstat
+of that file only. Globs whose first segment is `packages` — including `packages/context/**` and
+`packages/context/src/runtime/*.ts` — cannot expand in this working tree: `expandSourcePatternSets` uses the first
+path segment as the walk anchor, `listAnchorFiles` walks the whole anchor before filtering, and pnpm's
+`packages/context/node_modules` symlinks are refused with `PATH_SYMLINK` rather than skipped.
 
-The forbidden-segment rule is not obviously wrong — it stops knowledge from declaring knowledge as its own source, which
-would make fingerprints self-referential. But combined with unconditional symlink refusal during anchor walking it makes
-self-hosting impossible, and nothing in the code acknowledges the interaction.
+The first-segment rule stops knowledge from declaring the live `context/` tree as its own source, which would make
+fingerprints self-referential. Combined with unconditional symlink refusal during anchor walking, it still prevents
+glob coverage of this product's source under a `packages` anchor. Exact file declarations remain the working coverage
+path.
 
 ## Resource ceilings
 

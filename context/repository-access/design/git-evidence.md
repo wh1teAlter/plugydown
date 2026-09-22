@@ -7,6 +7,9 @@ domain: repository-access
 relations:
   requires:
     - repository-access
+code:
+  paths:
+    - packages/context/src/runtime/repository.ts
 ---
 
 # Git evidence

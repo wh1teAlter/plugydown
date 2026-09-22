@@ -9,14 +9,22 @@ relations:
     - delivery
   related:
     - authority-workflow.roles-and-briefs
+code:
+  paths:
+    - packages/context/aaplugin.config.ts
+    - packages/context/package.json
 ---
 
 # Packaging
 
 ## The build configuration
 
-`packages/context/aaplugin.config.ts` declares one plugin named `context` at version `0.1.0`, two platforms, one runtime
-entry, two extensions, and a public asset copy.
+`packages/context/package.json` is the single source of truth for package identity: version `0.1.1`, description
+`Persistent repository knowledge and engineering workflows.`, author name `wh1teAlter`, license MIT, homepage and
+repository `https://github.com/wh1teAlter/plugydown`, keywords `plugydown`, `repository-knowledge`, `ai-workflow`,
+and `"private": true`. `aaplugin.config.ts` imports `pkg` from `./package.json` with `{ type: 'json' }` and uses those
+fields; remaining config-only fields are `name: 'context'` and `displayName: 'Plugydown Context'`. The config declares
+two platforms, one runtime entry, two extensions, and a public asset copy.
 
 ```
 platforms:  claudeCode({...}), codex({...})

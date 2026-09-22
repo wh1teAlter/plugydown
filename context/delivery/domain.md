@@ -4,13 +4,17 @@ id: delivery
 description: How the monorepo is packaged for two hosts by a single builder, the exact-version dependency policy, the verification gate, and what the repository does not do.
 kind: domain
 domain: delivery
+code:
+  paths:
+    - packages/context/aaplugin.config.ts
+    - packages/context/package.json
 ---
 
 # Delivery
 
 A pnpm monorepo with one package, `@plugydown/context`, which AAPlugin builds into four artifacts: a plugin and a
 marketplace entry for each of Claude Code and Codex. Root package is `plugydown-workspace`, private, ESM, pnpm 10.34.5,
-Node `^20.19.0 || ^22.13.0 || >=23.5.0`. 45 tracked files at the recorded HEAD.
+Node `^20.19.0 || ^22.13.0 || >=23.5.0`. 71 tracked files.
 
 ## What lives here
 
@@ -42,10 +46,10 @@ dependency policy, and the byte-equivalence requirement that the rest of this Co
 Two tool choices are recorded *decisions* there rather than accidents: no Turborepo, and no Changesets (there is
 currently no npm publish pipeline for Changesets to drive).
 
-## Observed state at HEAD
+## Observed state
 
-Observed passing: `pnpm lint` (0 problems), `pnpm typecheck` (0 errors), `pnpm test` (158 tests across 6 files),
-`pnpm build` (`success (claude-code, codex)`), `pnpm validate`, `pnpm inspect`. Two consecutive builds were observed to
-produce 72 `dist/` files with identical checksums.
-
-These are point-in-time observations, not standing guarantees — there is no CI, so nothing re-checks any of them.
+A previous recording observed `pnpm lint` (0 problems), `pnpm typecheck` (0 errors), `pnpm build` (`success
+(claude-code, codex)`), `pnpm validate`, and `pnpm inspect` succeeding, and two consecutive builds producing 72 `dist/`
+files with identical checksums. Those remain point-in-time observations — there is no CI, and this recording did not
+re-run the suite. The filtered test include `tests/runtime/*.test.ts` and `coverage.enabled: false` remain true; see
+`delivery.verification-and-gaps`.

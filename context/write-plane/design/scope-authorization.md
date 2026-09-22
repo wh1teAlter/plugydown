@@ -8,6 +8,9 @@ relations:
   requires:
     - write-plane
     - write-plane.transaction-lifecycle
+code:
+  paths:
+    - packages/context/src/runtime/transaction.ts
 ---
 
 # Scope authorization

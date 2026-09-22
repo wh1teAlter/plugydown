@@ -52,7 +52,7 @@ function validateScope(scope: Scope, graph: KnowledgeGraph): void {
 }
 
 interface SectionItem extends JsonObject {
-  section: 'changedPaths' | 'directImpact' | 'expandedImpact' | 'unmappedPaths' | 'brokenEvidence'
+  section: 'changedPaths' | 'directImpact' | 'expandedImpact' | 'unreferencedPaths' | 'brokenEvidence'
   value: JsonValue
 }
 
@@ -60,14 +60,14 @@ function pageData(items: readonly SectionItem[]): {
   readonly changedPaths: readonly JsonValue[]
   readonly directImpact: readonly JsonValue[]
   readonly expandedImpact: readonly JsonValue[]
-  readonly unmappedPaths: readonly JsonValue[]
+  readonly unreferencedPaths: readonly JsonValue[]
   readonly brokenEvidence: readonly JsonValue[]
 } {
   const result: Record<SectionItem['section'], JsonValue[]> = {
     changedPaths: [],
     directImpact: [],
     expandedImpact: [],
-    unmappedPaths: [],
+    unreferencedPaths: [],
     brokenEvidence: [],
   }
   for (const item of items)
@@ -89,7 +89,7 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
   const evidence = await readGitEvidence(root, input.gitEvidencePath)
   const paths = changedPaths(evidence.changes)
   const direct = new Map<string, string[]>()
-  const unmapped: string[] = []
+  const unreferenced: string[] = []
   for (const changedPath of paths) {
     if (changedPath.startsWith('context/') || changedPath.startsWith('.scratch/'))
       continue
@@ -108,8 +108,11 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
         direct.set(document.id, reasons)
       }
     }
+    // No Document cites this path as evidence, so no recorded knowledge can have gone stale
+    // because of it. Reported so a Recorder can judge whether an anchor is warranted; per D32
+    // only broken evidence blocks Light.
     if (!mapped)
-      unmapped.push(changedPath)
+      unreferenced.push(changedPath)
   }
   for (const [id, reasons] of direct)
     direct.set(id, [...new Set(reasons)].sort(compareCodeUnits))
@@ -136,18 +139,18 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
     blockers.push('a cross-Domain contract is uncertain')
   if (evidence.midOperation)
     blockers.push('Git is in a mid-operation state')
-  if (unmapped.length > 0)
-    blockers.push('changed paths are unmapped')
   if (brokenEvidence.length > 0)
     blockers.push('evidence is incomplete')
   const outsideScope = closure.filter(item => !scopeContainsDocument(input.scope, graph, item.documentId, paths))
   if (outsideScope.length > 0)
     blockers.push('impact closure extends outside authorized scope')
   const uniqueBlockers = [...new Set(blockers)].sort(compareCodeUnits)
+  // Unlike Light, the baseline keeps the unreferenced check: advancing it asserts the recorded
+  // source state covers this revision, which is false while changes sit outside every declaration.
   const baselineEligible = input.scope.kind === 'repository'
     && !evidence.midOperation
     && brokenEvidence.length === 0
-    && unmapped.length === 0
+    && unreferenced.length === 0
     && input.taskEvidence.scopeComplete
 
   const stream: SectionItem[] = [
@@ -157,7 +160,7 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
       value: { documentId, changedPaths: paths.filter(changedPath => reasons.some(reason => reason.endsWith(` ${changedPath}`))), reasons },
     })),
     ...closure.map(item => ({ section: 'expandedImpact' as const, value: { documentId: item.documentId, reasons: [...item.reasons] } })),
-    ...unmapped.sort(compareCodeUnits).map(value => ({ section: 'unmappedPaths' as const, value })),
+    ...unreferenced.sort(compareCodeUnits).map(value => ({ section: 'unreferencedPaths' as const, value })),
     ...brokenEvidence.sort((left, right) => compareCodeUnits(compactJson(left), compactJson(right))).map(value => ({ section: 'brokenEvidence' as const, value })),
   ]
   const contextFingerprint = graph.contextFingerprint as string
@@ -183,7 +186,7 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
         changedPaths: [...sections.changedPaths],
         directImpact: [...sections.directImpact],
         expandedImpact: [...sections.expandedImpact],
-        unmappedPaths: [...sections.unmappedPaths],
+        unreferencedPaths: [...sections.unreferencedPaths],
         brokenEvidence: [...sections.brokenEvidence],
         light: { eligible: uniqueBlockers.length === 0, blockers: uniqueBlockers },
         repositoryBaselineEligible: baselineEligible,

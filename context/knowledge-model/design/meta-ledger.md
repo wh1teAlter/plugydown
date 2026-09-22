@@ -10,6 +10,11 @@ relations:
     - knowledge-model.document-grammar
   related:
     - runtime-protocol.determinism
+code:
+  paths:
+    - packages/context/src/runtime/document.ts
+    - packages/context/public/schemas/document.schema.json
+    - packages/context/public/schemas/meta.schema.json
 ---
 
 # Meta ledger
@@ -45,7 +50,7 @@ an issue, and partial shapes are rejected rather than repaired.
 
 `fingerprintVersion` is `'1'` and `toolVersion` is `'0.1.0'`, both constants in `document.ts`. Changing how any
 fingerprint is computed requires bumping `fingerprintVersion`, otherwise every existing ledger silently becomes wrong
-rather than visibly stale.
+rather than visibly stale. `toolVersion` is `TOOL_VERSION` in `document.ts`, not the npm package version.
 
 ## The three fingerprint kinds
 
@@ -100,15 +105,9 @@ compares them (`META_SOURCE_FINGERPRINT_MISMATCH`). A tree can be `formalState: 
 That is a real, reachable state and it is why `graph.validate` exists as a separate capability rather than being folded
 into loading.
 
-## Effect of the self-hosting limitation on this Context
+## Effect of the glob-expansion limitation on this Context
 
-Because no Document here can declare `code.paths` (see `repository-access.path-and-glob-safety`), every
-`sourceFingerprint` in this repository's own ledger is the hash of an empty declaration set. Two consequences worth
-knowing before relying on tooling against this Context:
-
-- `delta.compute` maps no changed path to any Document, so every changed path is reported as unmapped, which is itself a
-  Light-eligibility blocker. Deep is effectively the only mode available here.
-- `graph.validate` still passes, because an empty declaration set expands cleanly.
-
-Source-to-knowledge traceability in this Context is therefore prose-only and unverified by machine. That is a product
-limitation, not an authoring choice.
+Exact `code.paths` under `packages/context/` expand and produce a non-empty `sourceFingerprint`. Globs whose first
+segment is `packages` still cannot expand in this working tree (see `repository-access.path-and-glob-safety`), so
+Documents must declare exact files rather than `packages/context/**` if they want `delta.compute` to map those files.
+Empty declarations still expand cleanly and `graph.validate` still passes; they just map nothing.

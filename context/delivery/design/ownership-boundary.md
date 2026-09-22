@@ -10,6 +10,9 @@ relations:
   related:
     - delivery.packaging
     - delivery.verification-and-gaps
+code:
+  paths:
+    - AGENTS.md
 ---
 
 # Ownership boundary
@@ -73,10 +76,10 @@ The constitution prescribes a five-step procedure rather than leaving it to judg
 5. If a capability cannot ship before the gap closes, **declare the degradation explicitly**. Silent omission is
    forbidden.
 
-Step 5's spirit — declare a degradation rather than silently omit it — is the same discipline this Context applies to its
-own self-hosting limitation, which is declared explicitly rather than quietly worked around. Note that the procedure
-itself is scoped to AAPlugin framework gaps: the self-hosting limitation is a property of this product's own Runtime,
-not of the framework, so it is an analogy rather than a compliance relationship. See
+Step 5's spirit — declare a degradation rather than silently omit it — is the same discipline this Context applies to
+the remaining glob-expansion limitation on `packages` anchors: exact `code.paths` under `packages/context/` are legal,
+but globs whose first segment is `packages` cannot expand in this working tree. That limitation is a property of this
+product's own Runtime, not of the framework, so the procedure is an analogy rather than a compliance relationship. See
 `repository-access.path-and-glob-safety` and `knowledge-model.meta-ledger`.
 
 Step 2 is worth noting for a different reason: `.scratch/investigations/` is load-bearing in this procedure, and it is the

@@ -7,6 +7,11 @@ domain: authority-workflow
 relations:
   requires:
     - authority-workflow
+code:
+  paths:
+    - packages/context/src/internal-roles/investigator.md
+    - packages/context/src/internal-roles/recorder.md
+    - packages/context/src/internal-roles/reflector.md
 ---
 
 # Roles and Briefs

@@ -4,6 +4,9 @@ id: repository-access
 description: The filesystem trust boundary — path safety, symlink refusal, the controlled glob language, resource ceilings, and strict parsing of host-collected Git evidence.
 kind: domain
 domain: repository-access
+code:
+  paths:
+    - packages/context/src/runtime/repository.ts
 ---
 
 # Repository access
@@ -39,8 +42,13 @@ data and get turned into filesystem operations. This Domain is the layer that re
 
 ## Self-hosting limitation
 
-`context` is a forbidden source-pattern segment, and this product's own source lives under `packages/context/`. There is
-no legal pattern that names it. Anchoring at `packages` instead fails on pnpm's `node_modules` symlinks, which
-`listAnchorFiles` refuses with `PATH_SYMLINK` rather than skipping. Both verified empirically. This repository therefore
-cannot declare `code.paths` for itself; see `repository-access.path-and-glob-safety` for the mechanism and
-`knowledge-model.meta-ledger` for what it costs.
+`.git`, `.scratch`, and `context` are forbidden only as the **first** path segment; `node_modules` is forbidden at any
+level. Nested reserved names such as `packages/context/src/runtime.ts` and `tools/.scratch/build.ts` are legal. Root
+patterns such as `.git/config`, `.scratch/input.md`, `context/service/domain.md`, and `src/node_modules/pkg.ts` still
+fail with `SOURCE_ROOT_FORBIDDEN`.
+
+The remaining limitation is glob expansion, not declaration. `expandSourcePatternSets` uses the first path segment as
+the walk anchor, and `listAnchorFiles` refuses symlinks with `PATH_SYMLINK` rather than skipping. A glob whose first
+segment is `packages` (including `packages/context/**`) therefore cannot expand in this working tree because
+`packages/context/node_modules` contains pnpm symlinks. Exact non-glob file paths under `packages/context/` expand by
+lstat of that file only. See `repository-access.path-and-glob-safety`.

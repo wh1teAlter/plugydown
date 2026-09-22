@@ -9,6 +9,10 @@ relations:
     - runtime-protocol
   related:
     - write-plane
+code:
+  paths:
+    - packages/context/src/runtime/protocol.ts
+    - packages/context/public/schemas/runtime.schema.json
 ---
 
 # Wire contract
@@ -48,6 +52,8 @@ Six read capabilities plus one write capability. The list in `protocol.ts` is th
 | `growth.measure` | — | exactly `{}` |
 | `feedback.match` | — | four non-empty strings |
 | `transaction` | required `begin`\|`validate`\|`commit`\|`resume` | action-owned |
+
+`frontier.query` `selectors.codePaths` uses the same `sourcePattern` language as `scope.paths`.
 
 `action` is required for `transaction` and forbidden for everything else. `budget` and `cursor` are accepted only by the
 five paged capabilities; `graph.validate` and `transaction` reject them with `REQUEST_FIELD_INVALID`. That rejection is

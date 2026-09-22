@@ -9,6 +9,9 @@ relations:
     - authority-workflow
   related:
     - write-plane.outcomes-and-recovery
+code:
+  paths:
+    - packages/context/src/runtime/repository.ts
 ---
 
 # Scratch lifecycle

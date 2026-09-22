@@ -10,6 +10,9 @@ relations:
     - repository-access
   related:
     - read-plane.delta-and-light
+code:
+  paths:
+    - packages/context/src/runtime/transaction.ts
 ---
 
 # Write plane

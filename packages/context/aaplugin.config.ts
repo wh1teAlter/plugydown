@@ -3,20 +3,21 @@ import { defineConfig } from '@aaplugin/kit'
 import claudeCode from '@aaplugin/platform-claude-code'
 import codex from '@aaplugin/platform-codex'
 import internalRoles from './extension/internal-roles.js'
+import pkg from './package.json' with { type: 'json' }
 
+// `package.json` is the single source of truth for package identity. Only fields with no
+// npm equivalent are declared here: the plugin name (npm's is the scoped `@plugydown/context`)
+// and the human-facing display name.
 export default defineConfig({
   name: 'context',
-  version: '0.1.0',
-  description: 'Persistent repository knowledge and engineering workflows.',
+  version: pkg.version,
+  description: pkg.description,
   displayName: 'Plugydown Context',
-  license: 'MIT',
-  author: {
-    name: 'wh1teAlter',
-    url: 'https://github.com/wh1teAlter',
-  },
-  homepage: 'https://github.com/wh1teAlter/plugydown',
-  repository: 'https://github.com/wh1teAlter/plugydown',
-  keywords: ['plugydown', 'repository-knowledge', 'ai-workflow'],
+  license: pkg.license,
+  author: pkg.author,
+  homepage: pkg.homepage,
+  repository: pkg.repository,
+  keywords: pkg.keywords,
   platforms: [
     claudeCode({
       marketplace: {
@@ -29,10 +30,10 @@ export default defineConfig({
       interface: {
         shortDescription: 'Persistent repository knowledge for coding agents.',
         longDescription: 'Route, validate, and maintain durable repository knowledge with bounded context and explicit workflows.',
-        developerName: 'wh1teAlter',
+        developerName: pkg.author.name,
         category: 'Developer Tools',
         capabilities: ['Repository knowledge', 'Incremental documentation', 'Context continuation'],
-        websiteURL: 'https://github.com/wh1teAlter/plugydown',
+        websiteURL: pkg.homepage,
         defaultPrompt: [
           'Use Plugydown Context to understand this repository before making changes.',
           'Initialize Plugydown Context for this repository.',

@@ -9,6 +9,9 @@ relations:
     - read-plane
     - repository-access.git-evidence
     - knowledge-model.meta-ledger
+code:
+  paths:
+    - packages/context/src/runtime/delta.ts
 ---
 
 # Delta and Light eligibility

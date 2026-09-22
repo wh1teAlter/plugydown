@@ -10,6 +10,11 @@ relations:
   related:
     - write-plane.scope-authorization
     - read-plane.delta-and-light
+code:
+  paths:
+    - packages/context/src/commands/update.md
+    - packages/context/README.md
+    - packages/context/public/schemas/runtime.schema.json
 ---
 
 # Enforcement boundary

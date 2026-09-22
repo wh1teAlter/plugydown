@@ -8,6 +8,9 @@ relations:
   requires:
     - runtime-protocol
     - runtime-protocol.determinism
+code:
+  paths:
+    - packages/context/src/runtime/protocol.ts
 ---
 
 # Budgets and cursors

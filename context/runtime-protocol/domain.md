@@ -4,6 +4,9 @@ id: runtime-protocol
 description: The single-shot stdin/stdout wire contract of the private Plugydown Context Runtime, its closed capability set, and its determinism guarantees.
 kind: domain
 domain: runtime-protocol
+code:
+  paths:
+    - packages/context/src/runtime/protocol.ts
 ---
 
 # Runtime protocol

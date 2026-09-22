@@ -9,6 +9,9 @@ relations:
     - delivery
   related:
     - authority-workflow.enforcement-boundary
+code:
+  paths:
+    - pnpm-workspace.yaml
 ---
 
 # Verification and gaps
@@ -22,8 +25,8 @@ pnpm check = lint && typecheck && test && build
 Root scripts fan out with `pnpm -r --if-present run <name>`. The package supplies `typecheck` (`tsc --noEmit`), `test`
 (`vitest run`), `build`, `validate`, `inspect`, and `dev`; `lint` is root-level `eslint .`.
 
-Observed at the recorded HEAD: lint 0 problems, typecheck 0 errors, 158 tests across 6 files passing, build reporting
-`success (claude-code, codex)`, `validate` and `inspect` succeeding.
+A previous recording observed lint 0 problems, typecheck 0 errors, build reporting `success (claude-code, codex)`, and
+`validate` and `inspect` succeeding. That was a point-in-time observation; this recording did not re-run the suite.
 
 Note that `check` does **not** include `validate` or `inspect`. Those are separate invocations.
 
@@ -41,7 +44,7 @@ No carets, no tildes. `catalogMode: manual` and `cleanupUnusedCatalogs: true`.
 The rationale is recorded in a comment in that file and mandated by `AGENTS.md`, and it is a genuine causal chain rather
 than a style preference:
 
-1. All four `@aaplugin/*` packages are pinned at `1.0.0-beta.1`.
+1. All four `@aaplugin/*` packages are pinned at `1.0.0-beta.3`.
 2. A range would silently pick up the next beta and swap the builder.
 3. A builder change directly changes artifact bytes.
 4. Byte-equivalence of the build is a product acceptance criterion, established in `AGENTS.md`.
@@ -49,9 +52,6 @@ than a style preference:
 Therefore upgrading must be an explicit, reviewable action. Step 4 has been observed to hold: two consecutive builds
 produced 72 `dist/` files with matching checksums. That was a point-in-time observation, not a standing guarantee, and
 nothing re-checks it — see the CI gap below.
-
-A bump of all four `@aaplugin/*` pins to `1.0.0-beta.2` exists as an **uncommitted working-tree change** and is not part
-of the recorded baseline. The baseline state is `beta.1`.
 
 The same policy applies to `eslint`, `typescript`, `vitest`, `@antfu/eslint-config`, `@types/node`, and `yaml`. `yaml` is
 the only runtime dependency of the package; everything else is a devDependency. That matters — the shipped Runtime's only
@@ -75,14 +75,14 @@ compares the schema to the implementation. It has drifted in six confirmed ways:
 
 Items 2 and 3 are the sharp ones: a consumer that actually enforced this schema would *reject valid Runtime responses*.
 
-**The code plus the 158 tests are the real contract.** Treat `runtime.schema.json` as stale documentation. Either wire a
-validator into `pnpm check` or stop shipping the file; leaving it in place unvalidated is the worst of the three options,
-because it looks authoritative.
+**The code plus the Runtime tests are the real contract.** Treat `runtime.schema.json` as stale documentation. Either
+wire a validator into `pnpm check` or stop shipping the file; leaving it in place unvalidated is the worst of the three
+options, because it looks authoritative.
 
 `document.schema.json` and `meta.schema.json` are also unvalidated by any tooling, but they mirror the implementation
-faithfully at HEAD, so they are useful reference. Note that `document.schema.json` even encodes the forbidden source
-segments (`.git`, `.scratch`, `context`, `node_modules`) into a single regex — impressive, and a second place that must be
-edited if the segment list ever changes.
+faithfully at HEAD, so they are useful reference. `document.schema.json` and `runtime.schema.json` encode the forbidden
+source roots so that `.git`, `.scratch`, and `context` fail only as the first segment, and `node_modules` fails at any
+level — a second place that must be edited if the rule ever changes.
 
 ## What this repository does not do
 
@@ -105,10 +105,10 @@ Recorded because their absence is easy to assume away:
 - `include: ['tests/runtime/*.test.ts']` — the suite is **filtered by default**. Only that one directory, one level deep,
   is collected. A test placed anywhere else, including a nested subdirectory, is silently not run. `pnpm test` passing is
   therefore not evidence that every test file in the repository passed.
-- `coverage: { enabled: false }` — coverage is off by default, so nothing reports which branches the 158 tests miss.
-  `AGENTS.md` requires new features to add tests by risk and names five must-cover areas (transaction failure paths and
-  fault injection, the three recovery outcomes, concurrency checks, path-safety refusal, budget-overflow cursors). With
-  coverage disabled there is no mechanical check that those areas stay covered.
+- `coverage: { enabled: false }` — coverage is off by default, so nothing reports which branches the filtered suite
+  misses. `AGENTS.md` requires new features to add tests by risk and names five must-cover areas (transaction failure
+  paths and fault injection, the three recovery outcomes, concurrency checks, path-safety refusal, budget-overflow
+  cursors). With coverage disabled there is no mechanical check that those areas stay covered.
 
 `testTimeout` is 30 seconds, which is generous and suits the filesystem-heavy transaction tests.
 

@@ -8,6 +8,9 @@ relations:
   requires:
     - read-plane
     - knowledge-model.meta-ledger
+code:
+  paths:
+    - packages/context/src/runtime/queries.ts
 ---
 
 # Read capabilities
@@ -49,8 +52,10 @@ Selectors compose differently per depth. At depth 1 they *filter* the Domain lis
 depth 2 and 3 they *seed*, so multiple selectors union, and each seed carries human-readable `reasons` explaining why it
 is present. Domain Documents sort first, then by id.
 
-`selectors.codePaths` entries must be concrete paths, not globs (`assertSourcePath`); they are matched against each
-Document's declarations, so a `code.paths` glob on the Document side still matches.
+`selectors.codePaths` entries are `sourcePattern` values — globs allowed, same language as `code.paths` and
+`scope.paths` (`assertSourcePattern`). Matching is two-way via `pathSelects`: a Document is selected when
+`declarationMatches(pattern, selector)` or `declarationMatches(selector, pattern)`. That approximates set overlap; a
+mid-segment wildcard on both sides (`packages/*/a.ts` selected by `packages/foo/**`) is missed.
 
 `requiresClosure: true` walks `requires` transitively via `requiresClosure` in `graph.ts`, recording each id's reasons —
 `selected`, or `required by <id>`. Termination depends on the acyclicity guaranteed in `knowledge-model`.

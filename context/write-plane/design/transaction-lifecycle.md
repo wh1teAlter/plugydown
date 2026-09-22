@@ -9,6 +9,9 @@ relations:
     - write-plane
   related:
     - runtime-protocol.determinism
+code:
+  paths:
+    - packages/context/src/runtime/transaction.ts
 ---
 
 # Transaction lifecycle
@@ -62,13 +65,17 @@ belongs to someone else. Inside it, `owner.json` holds exactly `{schema: 'plugyd
 A lock is never expired by time or PID. There is no timeout anywhere. The only ways it goes away are a terminal cleanup
 by its own run, or a human deciding.
 
-### Known asymmetry in lock-owner validation
+### Lock-owner validation
 
-`transaction.ts` requires the exact key set plus the schema string. `queries.ts` (`activeRun`) checks only that `runId` is
-a UUID. So a lock owner file containing just `{"runId":"…"}` reports as a live `activeRun` from `repository.inspect` while
-classifying as `corrupt` in the transaction plane. A test writes exactly that shape and expects the loose behaviour, so it
-is intentional at least in effect. Whether the divergence was a deliberate design choice is unverified. Practical
-consequence: `repository.inspect` reporting an active run is not proof that a transaction can be resumed.
+`readLockOwner` in `repository.ts` is the single implementation. Call sites: `queries.ts` `activeRun`; `transaction.ts`
+`classifyLock` and `releaseLock`. `LOCK_SCHEMA` is `plugydown.context.lock/v1` and lives in `repository.ts`.
+
+Valid: the lock path is a directory, `owner.json` is a record with **exactly two keys**, `schema === LOCK_SCHEMA`, and
+`runId` is a UUID v4 (`[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}`). Absent: the path is
+missing. Corrupt: not a directory, parse/IO/`RuntimeFault`, extra or missing keys, wrong schema, or a bad UUID.
+`classifyLock` then maps a valid owner plus a missing, unreadable, or mismatched manifest to `orphan`. A lock owner
+that is missing `schema` or carries an extra key is `WRITE_LOCK_INVALID` from `repository.inspect` and is not an
+`activeRun`.
 
 ## Staging the candidate
 
