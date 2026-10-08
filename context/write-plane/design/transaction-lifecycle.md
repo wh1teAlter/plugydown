@@ -20,7 +20,7 @@ code:
 
 | Action | Input | Purpose |
 |---|---|---|
-| `begin` | `command`, `mode`, `dryRun`, `scope`, `gitEvidencePath`, `evidencePaths` | acquire the lock, snapshot reality, stage a candidate |
+| `begin` | `command`, `mode`, `dryRun`, `scope`, `gitEvidencePath`, `evidencePaths`, optional `reaffirmedDocumentIds` | acquire the lock, snapshot reality, stage a candidate |
 | `validate` | `runId` | prove the candidate, derive Meta, produce the two fingerprints |
 | `commit` | `runId`, `approval` | re-prove, switch directories, verify |
 | `resume` | `runId`, optional `disposition` | continue or abandon an existing run |
@@ -47,6 +47,11 @@ which is what makes a hand-edited or truncated manifest fail rather than mislead
 - a `dryRun: true` manifest in any phase past `validated`
 - `snapshot.contextState: 'present'` without `contextFingerprint`, or vice versa
 - a `committing` restore intent when the snapshot recorded no live Context to restore
+- a `reaffirmedDocumentIds` entry that is empty, duplicated, or not a well-formed Document id
+
+`reaffirmedDocumentIds` is one of the base facts rather than a phase-gated one: it is recorded at `begin`, survives
+re-validation, and is re-proved on every read, so the permission a run was granted cannot be widened by editing the
+manifest between steps.
 
 ## The lock
 
@@ -90,9 +95,18 @@ The candidate lives at `.scratch/runs/<run-id>/candidate/context/`.
 - `init` — must be `deep`, must be `repository` scope, requires `formalState: absent`
 - `update` — requires `formalState: ready`
 - `prune` — must be `deep`, requires `formalState: ready` **and** `sourceState: ready`
+- `reaffirmedDocumentIds` — `update` only; every id must exist and fall inside the authorized scope
 
 Prune's extra source requirement exists because it is the only command that can *remove* knowledge, and removing coverage
-you cannot currently see would be unaccountable.
+you cannot currently see would be unaccountable. The reaffirm restrictions are narrower: Init has no prior ledger to
+settle, Prune already demands ready source evidence, an id naming no Document is a typo worth failing on, and an id
+outside the scope would settle a ledger the caller never asked to touch. All four reject with
+`TRANSACTION_SCOPE_INVALID` before the lock is taken, so a rejected `begin` leaves nothing behind.
+
+`reaffirmedDocumentIds` is frozen here along with everything else, which is why it reads as *permission* rather than a
+claim: it allows those Documents' ledgers to be recomputed when their Markdown is unchanged. A Recorder who then finds
+one of them genuinely wrong edits it and refreshes through the normal path — an assertion would have deadlocked, since
+`validate` and `commit` accept only a `runId` and offer no way to withdraw it.
 
 Note that `mode` is otherwise inert; see `read-plane.delta-and-light`.
 

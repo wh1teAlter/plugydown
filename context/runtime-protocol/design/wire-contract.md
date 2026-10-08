@@ -53,6 +53,10 @@ Six read capabilities plus one write capability. The list in `protocol.ts` is th
 | `feedback.match` | — | four non-empty strings |
 | `transaction` | required `begin`\|`validate`\|`commit`\|`resume` | action-owned |
 
+`transaction.begin` is the only action with an optional input field: `reaffirmedDocumentIds`, a unique list of Document
+ids. Every other action's input is exactly its required set, which is what keeps a run's terms unchangeable once
+`begin` has frozen them into the manifest.
+
 `frontier.query` `selectors.codePaths` uses the same `sourcePattern` language as `scope.paths`.
 
 `action` is required for `transaction` and forbidden for everything else. `budget` and `cursor` are accepted only by the

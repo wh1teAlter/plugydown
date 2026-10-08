@@ -19,12 +19,16 @@ code:
 
 ## The build configuration
 
-`packages/context/package.json` is the single source of truth for package identity: version `0.2.0`, description
-`Persistent repository knowledge and engineering workflows.`, author name `wh1teAlter`, license MIT, homepage and
-repository `https://github.com/wh1teAlter/plugydown`, keywords `plugydown`, `repository-knowledge`, `ai-workflow`,
-and `"private": true`. `aaplugin.config.ts` imports `pkg` from `./package.json` with `{ type: 'json' }` and uses those
-fields; remaining config-only fields are `name: 'context'` and `displayName: 'Plugydown Context'`. The config declares
-two platforms, one runtime entry, two extensions, and a public asset copy.
+`packages/context/package.json` is the single source of truth for package identity. `aaplugin.config.ts` imports `pkg`
+from `./package.json` with `{ type: 'json' }` and forwards seven fields verbatim: `version`, `description`, `license`,
+`author`, `homepage`, `repository`, and `keywords`. The Codex block reuses two of them for `developerName` and
+`websiteURL`. Only two identity fields are declared in the config itself — `name: 'context'`, because the npm name is
+the scoped `@plugydown/context` and a plugin name cannot carry a scope, and `displayName`, which has no npm equivalent.
+Platform marketplace `tags`, `capabilities`, and the Codex descriptions are per-platform copy, not duplicates of
+`keywords`. The config declares two platforms, one runtime entry, two extensions, and a public asset copy.
+
+Field *values* are deliberately not restated here. Reciting the version would make this document wrong at every release
+while the mechanism it describes stayed correct; read `package.json` for the current values.
 
 ```
 platforms:  claudeCode({...}), codex({...})

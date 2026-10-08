@@ -108,10 +108,15 @@ differs from HEAD. The two `.bin` files are NUL-delimited and must not be decode
 
 | Action | Input |
 |---|---|
-| `begin` | `command`, `mode`, `dryRun`, `scope`, `gitEvidencePath`, `evidencePaths` |
+| `begin` | `command`, `mode`, `dryRun`, `scope`, `gitEvidencePath`, `evidencePaths`; may add `reaffirmedDocumentIds` |
 | `validate` | `runId` |
 | `resume` | `runId`; may add `disposition: continue\|abandon` |
 | `commit` | `runId` plus `approval: {approved:true, candidateFingerprint, sourceEvidenceFingerprint, summary}` |
+
+Pass `reaffirmedDocumentIds` when a declared source moved but you re-read the Document and it is still correct. Without
+it there is no way to settle that ledger: no Markdown edit means no refresh, so `validate` answers `no_change` while
+`graph.validate` keeps failing. `update` only, and every id must exist and sit inside the authorized scope. Listing a
+Document does not commit you to leaving it alone — edit it if review says so, and it refreshes anyway.
 
 ## Statuses
 

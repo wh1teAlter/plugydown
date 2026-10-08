@@ -55,6 +55,11 @@ then authorizes the Document if any of those paths matches any scope pattern. In
 deletions: a file that no longer exists cannot be matched by expansion, but it does appear in the Git evidence, so the
 Document that used to own it is still authorizable.
 
+`authorizedDocumentIds` takes only the candidate-side path map it actually reads, not a whole source-facts record, which
+is what lets `begin` call it with an empty map: at that point no candidate exists yet, so the live tree is passed as both
+sides. `begin` uses it to prove every `reaffirmedDocumentIds` entry is inside the grant — reaffirming outside scope would
+settle a ledger the authorization never covered.
+
 ## Detecting out-of-scope mutation
 
 `scopeMutationIssues` walks every id in either tree and flags those that are unauthorized **and** not `sameDocument` on
