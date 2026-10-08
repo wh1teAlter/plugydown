@@ -19,7 +19,7 @@ code:
 
 ## The build configuration
 
-`packages/context/package.json` is the single source of truth for package identity: version `0.1.1`, description
+`packages/context/package.json` is the single source of truth for package identity: version `0.2.0`, description
 `Persistent repository knowledge and engineering workflows.`, author name `wh1teAlter`, license MIT, homepage and
 repository `https://github.com/wh1teAlter/plugydown`, keywords `plugydown`, `repository-knowledge`, `ai-workflow`,
 and `"private": true`. `aaplugin.config.ts` imports `pkg` from `./package.json` with `{ type: 'json' }` and uses those

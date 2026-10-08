@@ -75,12 +75,12 @@
     "delivery": {
       "bodyFingerprint": "31e03fe0997f8ea68e9f70a3f572c2b6354202a9d8417c7034098618b5677c4c",
       "frontMatterFingerprint": "4b89ab9354428c174579ade6eb43482b7ecf6e3fcff8b41cc08f1639434cba3d",
-      "sourceFingerprint": "7d94efb51f7662a1db24bdceb41c05c39fa690e606c5956c306f1cf70d8a1223"
+      "sourceFingerprint": "cb809458ae55f9c3865c2c1d0e42c43fd3f4e399c32457e4848875358d0170f4"
     },
     "delivery.build-and-acceptance": {
       "bodyFingerprint": "db6eb5e6db9239feef70b05d583f22a30c21046f7f61408acf6b9f090acfe6a4",
       "frontMatterFingerprint": "9e7c7b67f2e7215c4544d6dba2d00666843bdc6b9a86e8acfa4a1610895be8a5",
-      "sourceFingerprint": "10dd3d762380b0a65636b29f86ea8fb627e0082ed8739cd2467d7c390b59de19"
+      "sourceFingerprint": "6eaba4a4bdc07df98a9ba030846653554c3f4681e4852d479007a819afa5edd3"
     },
     "delivery.ownership-boundary": {
       "bodyFingerprint": "584ed5e0dbb6ea24a494119684cfdf047584b44dbedd2e2e885b295f8e1f74e9",
@@ -88,9 +88,9 @@
       "sourceFingerprint": "a3866a3a2f68e334170ba0e3d332b643eb14351da4c23f756f611824dd298b37"
     },
     "delivery.packaging": {
-      "bodyFingerprint": "5211c7f110f22f5f8e345878c59cb604fb575acb5497955852e4efc1bd1ce4da",
+      "bodyFingerprint": "cbcd65af1136e32527b9bd96944758dae9f67acd191f86e51f765a972f25d6c2",
       "frontMatterFingerprint": "f22263e393b3744f1854a4a05b3004f27be49ebcc5f132befa61339efaa8282e",
-      "sourceFingerprint": "7d94efb51f7662a1db24bdceb41c05c39fa690e606c5956c306f1cf70d8a1223"
+      "sourceFingerprint": "cb809458ae55f9c3865c2c1d0e42c43fd3f4e399c32457e4848875358d0170f4"
     },
     "delivery.verification-and-gaps": {
       "bodyFingerprint": "f934c527717be36eeb73d1b75a2d83811637233529b533d6ad8bc8adfac08cfd",

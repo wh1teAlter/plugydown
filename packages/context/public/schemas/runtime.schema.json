@@ -690,6 +690,15 @@
                     "$ref": "#/$defs/sourcePattern"
                   },
                   "minItems": 1
+                },
+                "reaffirmedDocumentIds": {
+                  "type": "array",
+                  "maxItems": 10000,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/$defs/documentId"
+                  },
+                  "minItems": 1
                 }
               }
             },

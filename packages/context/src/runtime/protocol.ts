@@ -98,6 +98,12 @@ export interface TransactionBeginInput {
   readonly scope: Scope
   readonly gitEvidencePath: string
   readonly evidencePaths: readonly string[]
+  /**
+   * Documents the caller has reviewed against their current declared sources and found still
+   * accurate. Permission to recompute their ledgers, not an assertion that they stay unedited:
+   * a Document edited later refreshes through the normal path.
+   */
+  readonly reaffirmedDocumentIds?: readonly string[]
 }
 
 export interface TransactionValidateInput { readonly runId: string }
@@ -492,7 +498,7 @@ function parseTransactionInput(action: TransactionAction, value: unknown): Trans
     throw new RuntimeFault('REQUEST_INPUT_INVALID', `transaction.${action} input must be an object.`)
   if (action === 'begin') {
     const fields = ['command', 'mode', 'dryRun', 'scope', 'gitEvidencePath', 'evidencePaths'] as const
-    assertExactKeys(value, fields, fields, 'transaction.begin input')
+    assertExactKeys(value, [...fields, 'reaffirmedDocumentIds'], fields, 'transaction.begin input')
     if (value.command !== 'init' && value.command !== 'update' && value.command !== 'prune')
       throw new RuntimeFault('REQUEST_FIELD_INVALID', 'transaction.begin command is unknown.')
     if (value.mode !== 'light' && value.mode !== 'deep')
@@ -504,6 +510,9 @@ function parseTransactionInput(action: TransactionAction, value: unknown): Trans
       scope: parseScope(value.scope),
       gitEvidencePath: text(value.gitEvidencePath, 'gitEvidencePath', 1_024),
       evidencePaths: uniqueStrings(value.evidencePaths, 'evidencePaths', { nonEmpty: true }),
+      ...(value.reaffirmedDocumentIds === undefined
+        ? {}
+        : { reaffirmedDocumentIds: uniqueIds(value.reaffirmedDocumentIds, 'reaffirmedDocumentIds', DOCUMENT_ID, 'Document', true) }),
     }
   }
   if (action === 'validate') {
