@@ -22,6 +22,7 @@ Node `^20.19.0 || ^22.13.0 || >=23.5.0`. 71 tracked files.
 - `delivery.ownership-boundary` — what AAPlugin owns, the eight prohibitions, and the capability-gap procedure.
 - `delivery.verification-and-gaps` — the verification gate, the dependency policy, the unvalidated schema, and what the
   repository does not produce.
+- `delivery.build-and-acceptance` — the operator SOP for the six gates, the dead `verify` script, and dual-build checksum.
 
 ## One builder, no exceptions
 

@@ -95,3 +95,10 @@ manageable limitation into an unknown one.
 Whether the Light/Deep inertness is a deliberate staging decision or an incomplete implementation is **unverified**. The
 mode is threaded all the way through parsing, the manifest type, and manifest re-validation, which is more plumbing than
 an unused field usually gets — but nothing consumes it and no comment explains why.
+
+## Review record
+
+The `runtime.schema.json` rename of `unmappedPaths` to `unreferencedPaths` was reviewed against this document and
+changes nothing here. The unvalidated-schema finding above does not name any payload field, and the rename did not add
+a validator: no JSON-Schema validator is routed at the published schemas, and `ajv` remains only an `eslint` transitive
+dependency. The three enforcement gaps stand as recorded.

@@ -30,6 +30,8 @@ be entered through a request that already parsed.
 - `runtime-protocol.budgets-and-cursors` — output ceilings, the never-truncate rule, and the sealed cursor.
 - `runtime-protocol.determinism` — byte-level output stability, what is normalized, and the one deliberate
   non-determinism.
+- `runtime-protocol.capability-invocation` — how to invoke each capability and distinguish transport failure from a
+  Runtime status.
 
 ## Invariants that hold across the whole Domain
 

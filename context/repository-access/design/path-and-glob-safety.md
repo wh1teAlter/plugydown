@@ -114,3 +114,10 @@ other expansion problem is attributed to its owning Document as a recoverable is
 
 A zero-match glob is an error (`SOURCE_GLOB_ZERO_MATCH`), and a missing exact declaration is
 `SOURCE_EXACT_MISSING`. Silence would let knowledge claim coverage it does not have.
+
+## Review record
+
+The `runtime.schema.json` rename of `unmappedPaths` to `unreferencedPaths` was reviewed against this document and
+changes nothing here. The rename touched a `delta.compute` response field, not the path language: both published
+schemas still expose exactly one path definition, `$defs.sourcePattern`, carrying the same first-segment-versus-
+`node_modules` rule, and `assertSourcePath`, `PATH_GLOB_INVALID`, and `$defs.sourcePath` remain absent.

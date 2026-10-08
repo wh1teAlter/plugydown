@@ -13,7 +13,7 @@ relations:
 code:
   paths:
     - packages/context/src/runtime/document.ts
-    - packages/context/public/schemas/document.schema.json
+    - packages/context/src/runtime/graph.ts
     - packages/context/public/schemas/meta.schema.json
 ---
 

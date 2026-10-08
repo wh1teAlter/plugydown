@@ -11,6 +11,7 @@ relations:
 code:
   paths:
     - packages/context/src/runtime/queries.ts
+    - packages/context/src/runtime/graph.ts
 ---
 
 # Read capabilities

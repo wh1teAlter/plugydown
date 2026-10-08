@@ -102,3 +102,10 @@ filter must never be the weaker of the two. Anyone editing one must edit the oth
 Domain ids match `^[a-z0-9]+(-[a-z0-9]+)*$`; Document ids are dot-separated runs of that same shape. Fingerprints must
 be 64 lowercase hex characters. `runId` must be a v4 UUID — the Runtime rejects any id it did not generate the shape of.
 These are checked at parse time, so downstream code never handles a malformed identifier.
+
+## Review record
+
+The `runtime.schema.json` rename of `unmappedPaths` to `unreferencedPaths` was reviewed against this document and
+changes nothing here. This document maps capabilities to their *inputs*; the rename altered a `delta.compute` response
+field. The six-read-plus-one-write capability set and every input shape above still match `protocol.ts` and the
+`handler.ts` dispatch.

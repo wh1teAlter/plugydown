@@ -10,6 +10,7 @@ relations:
 code:
   paths:
     - packages/context/src/runtime/document.ts
+    - packages/context/src/runtime/graph.ts
 ---
 
 # Knowledge model
