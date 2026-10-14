@@ -17,6 +17,7 @@ code:
     - packages/context/vitest.config.ts
     - AGENTS.md
     - .github/workflows/ci.yml
+    - .github/workflows/release.yml
 ---
 
 # Build and acceptance
@@ -65,12 +66,17 @@ Byte-equivalence is an acceptance criterion. Run `pnpm build` twice and compare 
 (gitignored). Mismatch is a product failure, not a flake. Generated output must not contain timestamps or absolute
 paths.
 
-CI runs this for you on pushes to `main` and `dev`, on pull requests, and on release tags: the gates up to `validate`,
-then a second build whose `dist/` file hashes and `pnpm inspect` report are diffed against the first. A local double
-build is still the quickest way to reproduce a CI mismatch.
+CI runs this for you on pushes to `main` and `dev` and on pull requests, and as the first stage of a release: the gates
+up to `validate`, then a second build whose `dist/` file hashes and `pnpm inspect` report are diffed against the first.
+A local double build is still the quickest way to reproduce a CI mismatch.
+
+## Publishing
+
+To publish, bump the version in `packages/context/package.json`, merge to `main`, then run the release workflow by hand
+(a dry run is available). The detail lives in `delivery.verification-and-gaps`.
 
 ## What this SOP does not cover
 
 The filtered-suite and coverage gaps, how the published schemas are validated, the exact-version catalog policy
-(`@aaplugin/*` at `1.0.0-beta.3`), and the release job that publishes the per-platform release branches are recorded
-in `delivery.verification-and-gaps`. Do not treat a green `pnpm check` as having closed those.
+(`@aaplugin/*` at `1.0.0-beta.3`), and the release workflow that publishes the per-platform release branches are
+recorded in `delivery.verification-and-gaps`. Do not treat a green `pnpm check` as having closed those.

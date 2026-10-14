@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: delivery.verification-and-gaps
-description: The verification gate and the CI that runs it, the exact-version dependency policy and its stated rationale, how the published JSON Schemas are held to the implementation, the release job, and what the repository still does not do.
+description: The verification gate and the CI that runs it, the exact-version dependency policy and its stated rationale, how the published JSON Schemas are held to the implementation, the release workflow, and what the repository still does not do.
 kind: decision
 domain: delivery
 relations:
@@ -13,6 +13,7 @@ code:
   paths:
     - pnpm-workspace.yaml
     - .github/workflows/ci.yml
+    - .github/workflows/release.yml
     - packages/context/tests/runtime/fixture.ts
     - packages/context/vitest.config.ts
 ---
@@ -32,9 +33,9 @@ Note that `check` does **not** include `validate` or `inspect`. Those are separa
 
 ## CI
 
-`.github/workflows/ci.yml` triggers on pushes to `main` and `dev`, on pull requests, and on `context--v*` tags. Its
-`verify` job installs with `--frozen-lockfile` and runs lint, typecheck, test, build, and validate on Node 24, the
-only supported version. It is a single job, with no version matrix.
+`.github/workflows/ci.yml` triggers on pushes to `main` and `dev` and on pull requests, and the release workflow also
+calls it. Its `verify` job installs with `--frozen-lockfile` and runs lint, typecheck, test, build, and validate on
+Node 24, the only supported version. It is a single job, with no version matrix, and it never publishes.
 
 It then proves the build deterministic. It records the SHA-256 of every file under `packages/context/dist` together with
 the `pnpm inspect` report, builds again, records both again, and diffs the two records. Any difference fails the job.
@@ -45,13 +46,23 @@ Last, a smoke step sends a `graph.validate` request to each platform's built Run
 (`dist/<platform>/marketplace/runtime/context/main.mjs`) and fails unless it answers `success`. The tests exercise the
 Runtime as source; this step exercises the bundle that actually ships.
 
-### The release job
+### The release workflow
 
-On a `context--v*` tag, a `release` job runs after `verify` passes. It builds on Node 24.x and fails unless the tag's
-version equals the version in `packages/context/package.json`. It then publishes each platform's built marketplace
-(`dist/<platform>/marketplace`), unmodified, as the tree of the branches `release-claude-code` and `release-codex`,
-continuing each branch's history and skipping the commit when the branch already holds that build. Installers clone a Git
-ref, never an archive, and `main` stays free of generated artifacts.
+`.github/workflows/release.yml` runs only on `workflow_dispatch`, with one boolean input, `dry_run`; nothing else starts
+a release. A concurrency group allows one release at a time. It has three jobs:
+
+- `prepare` refuses to run unless started on `main`, reads the version from `packages/context/package.json`, derives the
+  tag `context--v<version>`, and refuses if that tag already exists. Installs refresh only when the version moves, so a
+  second build under one version would never reach anyone who already installed it.
+- `verify` calls `ci.yml`, so every CI check runs on the exact commit being released.
+- `publish` builds on Node 24.x and pushes each platform's built marketplace (`dist/<platform>/marketplace`),
+  unmodified, as the tree of the branches `release-claude-code` and `release-codex`, continuing each branch's
+  history and skipping a branch that already holds the build. It then creates the tag and a GitHub Release with
+  `gh release create`, with notes generated from merged PRs.
+
+Branches are pushed before the tag, so a run that fails partway leaves no tag and can be re-run. With `dry_run`, the run
+reports what each branch would receive and pushes, tags and releases nothing. Installers clone a Git ref, never an
+archive, and `main` stays free of generated artifacts.
 
 ## Exact versions, by decision
 
@@ -98,9 +109,9 @@ the rule ever changes.
 Recorded because their absence is easy to assume away:
 
 - **No version-bump or npm publishing tooling.** Both packages are private, and the version is raised by editing
-  `package.json`, which the release job then requires the tag to match. The absence of Changesets is a **recorded
-  decision** in `AGENTS.md`, not an oversight: there is currently no npm publish pipeline for it to drive. Turborepo is
-  refused by the same document.
+  `package.json`, from which the release workflow derives the tag and refuses a version already tagged. The absence of
+  Changesets is a **recorded decision** in `AGENTS.md`, not an oversight: there is currently no npm publish pipeline for
+  it to drive. Turborepo is refused by the same document.
 
 ## Two gaps inside the test gate
 
