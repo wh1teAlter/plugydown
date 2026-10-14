@@ -11,19 +11,18 @@ permissions:
 
 jobs:
   verify:
-    name: verify (node ${{ matrix.node }})
+    # The full development gate. It runs on one Node: the lint toolchain requires Node 22 or later
+    # (eslint-plugin-unicorn calls Set.prototype.union), and every build is byte-identical across Node
+    # versions anyway, so repeating it per version would test the tools rather than the product.
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # The floor of each range in `engines`, plus the current LTS.
-        node: [20.19.0, 22.13.0, 24.x]
     steps:
       - uses: actions/checkout@v7
+      # pnpm comes from the `packageManager` field. Corepack is avoided because the copy bundled
+      # with older Node releases predates npm's signing-key rotation and cannot verify pnpm.
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node }}
-      - run: corepack enable
+          node-version: 24.x
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
@@ -41,20 +40,46 @@ jobs:
           snapshot > second.txt
           diff first.txt second.txt
 
+  runtime:
+    # The plugin's Runtime runs on whatever Node the user has, so its behavior is checked on the floor
+    # of every range the package declares in `engines`.
+    name: runtime (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20.19.0, 22.13.0]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - name: The shipped Runtime answers on this Node
+        run: |
+          for platform in claude-code codex; do
+            echo '{"protocol":"plugydown.context.runtime/v1","capability":"graph.validate","input":{}}' \
+              | node "packages/context/dist/$platform/marketplace/runtime/context/main.mjs" \
+              | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const r=JSON.parse(s);console.log(process.argv[1],r.status);process.exit(r.status==="success"?0:1)})' "$platform"
+          done
+
   release:
     # Publishes each platform's built marketplace, byte for byte, as the root of its own branch.
     # Installers clone a Git ref, never an archive, and main stays free of generated artifacts.
-    needs: verify
+    needs: [verify, runtime]
     if: startsWith(github.ref, 'refs/tags/context--v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 24.x
-      - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: The tag names the version that was built
