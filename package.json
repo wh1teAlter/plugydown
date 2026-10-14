@@ -16,7 +16,6 @@
     "validate": "pnpm -r --if-present run validate",
     "inspect": "pnpm -r --if-present run inspect",
     "dev": "pnpm --filter @plugydown/context run dev",
-    "verify": "pnpm -r --if-present run verify",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build"
   },
   "devDependencies": {

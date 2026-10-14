@@ -33,8 +33,8 @@ context/
 ```text
 .scratch/
 ├── evidence/<evidence-id>/
-├── feedback/<slug>-<short-content-hash>.md
-├── investigations/<slug>-<short-content-hash>.md
+├── feedback/<slug>-<short-identity-hash>.md
+├── investigations/<slug>-<short-identity-hash>.md
 ├── runs/<run-id>/
 └── locks/context-write/
 ```

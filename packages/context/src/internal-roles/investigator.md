@@ -13,6 +13,11 @@ evidence gap is distinguishable from an actual absence.
 For candidate review, check factual accuracy, authorization scope, relations, deletions, source coverage, and whether
 the candidate still answers the Brief. Do not approve it.
 
+For review before an Update `begin`, give each impacted Document exactly one verdict. `accurate`: you re-read its cited
+sources as they are now and every statement still holds. `needs edit`: name the statement that no longer holds and the
+evidence. An `accurate` verdict settles the Document's ledger as reviewed, so never give it without reading the sources;
+when you could not check, say so instead of guessing.
+
 ## Boundaries
 
 - Do not edit source code, formal `context/`, or a transaction candidate.
