@@ -118,6 +118,7 @@ function baseFacts(manifest: TransactionManifest): ManifestBase {
     scope: manifest.scope,
     gitEvidencePath: manifest.gitEvidencePath,
     evidencePaths: manifest.evidencePaths,
+    ...(manifest.reaffirmedDocumentIds === undefined ? {} : { reaffirmedDocumentIds: manifest.reaffirmedDocumentIds }),
     snapshot: manifest.snapshot,
   }
 }
@@ -432,10 +433,6 @@ async function treeFact(root: string, relative: string): Promise<TreeFact> {
   }
 }
 
-function allCodePatterns(graph: KnowledgeGraph): readonly string[] {
-  return [...new Set([...graph.documents.values()].flatMap(document => document.codePaths))].sort(compareCodeUnits)
-}
-
 interface TransactionSourceFacts {
   readonly expansion: SourceExpansionResult
   readonly ledgers: ReadonlyMap<string, DocumentLedger>
@@ -499,7 +496,7 @@ async function transactionSourceFacts(root: string, graph: KnowledgeGraph, decla
   }
 }
 
-async function validateBeginMode(input: TransactionBeginInput, live: KnowledgeGraph, git: GitEvidence): Promise<void> {
+async function validateBeginInput(input: TransactionBeginInput, live: KnowledgeGraph, git: GitEvidence): Promise<void> {
   if (input.command === 'init') {
     if (input.mode !== 'deep')
       throw new RuntimeFault('TRANSACTION_MODE_INVALID', 'Init must use deep mode.')
@@ -578,7 +575,7 @@ async function transactionBegin(root: string, input: TransactionBeginInput): Pro
       ? 'all-strict'
       : 'all-tolerant' })
   const git = await readGitEvidence(root, input.gitEvidencePath)
-  await validateBeginMode(input, live, git)
+  await validateBeginInput(input, live, git)
   const evidenceFingerprint = await declaredEvidenceFingerprint(root, input.evidencePaths)
   const runId = randomUUID()
   let acquired: LockFact
@@ -696,26 +693,11 @@ function scopeMutationIssues(live: KnowledgeGraph, candidate: KnowledgeGraph, au
   return [...ids].filter(id => !authorized.has(id) && !sameDocument(live.documents.get(id), candidate.documents.get(id))).sort(compareCodeUnits)
 }
 
-function changesMapped(graph: KnowledgeGraph, git: GitEvidence): boolean {
-  const declarations = allCodePatterns(graph)
-  return git.changes.every((change) => {
-    const candidates = [change.path, ...(change.previousPath === undefined ? [] : [change.previousPath])]
-    return candidates.every(candidate => candidate.startsWith('context/') || candidate.startsWith('.scratch/')
-      || declarations.some(declaration => declarationMatches(declaration, candidate)))
-  })
-}
-
 function convergenceBaseline(graph: KnowledgeGraph, source: 'init' | 'prune'): ConvergenceBaseline {
   const metrics = graphMetrics(graph)
   return { source, ...metrics.current, perDomain: metrics.perDomain }
 }
 
-/**
- * Documents whose source ledger this transaction may advance: authorized by scope and
- * actually rewritten in the candidate. An authorized but byte-identical sibling keeps its
- * live entry, so its pending source impact stays visible to the next delta instead of
- * being silently marked in sync.
- */
 /**
  * A Document owes a fresh ledger when the Recorder edited it, which is how the Runtime tells
  * reviewed knowledge from unreviewed — a stale ledger on an untouched Document is the only record
@@ -754,9 +736,15 @@ function deriveMeta(
   const historyComplete = previousBaseline === undefined
     || previousBaseline.revision === git.currentRevision
     || git.hasDiff
+  // Advancing claims every Document was proven against the source at this revision. A Document
+  // left stale — authorized but neither edited nor reaffirmed — would drop out of every later
+  // delta once the history before this revision is gone, so it pins the baseline instead.
+  // Unreferenced changes do not: no Document cites them, so no recorded fingerprint covers them.
+  const settled = [...graph.documents.keys()].every(id =>
+    documents[id]?.sourceFingerprint === candidateSources.ledgers.get(id)?.sourceFingerprint)
   const scopeCanAdvance = manifest.scope.kind === 'repository'
     && !git.midOperation
-    && changesMapped(graph, git)
+    && settled
     && historyComplete
   const repository = manifest.command === 'init' || (manifest.command === 'update' && scopeCanAdvance)
     ? { baseline: { revision: git.currentRevision, sourceFingerprint: candidateSources.repositorySourceFingerprint } }

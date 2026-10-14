@@ -8,21 +8,22 @@ code:
   paths:
     - packages/context/aaplugin.config.ts
     - packages/context/package.json
+    - .github/workflows/ci.yml
 ---
 
 # Delivery
 
 A pnpm monorepo with one package, `@plugydown/context`, which AAPlugin builds into four artifacts: a plugin and a
 marketplace entry for each of Claude Code and Codex. Root package is `plugydown-workspace`, private, ESM, pnpm 10.34.5,
-Node `^20.19.0 || ^22.13.0 || >=23.5.0`. 71 tracked files.
+Node 24 or later, for development and for the plugin's Runtime alike.
 
 ## What lives here
 
 - `delivery.packaging` — the one builder, dual-platform emission, role delivery per host, and the session-start hook.
 - `delivery.ownership-boundary` — what AAPlugin owns, the eight prohibitions, and the capability-gap procedure.
-- `delivery.verification-and-gaps` — the verification gate, the dependency policy, the unvalidated schema, and what the
-  repository does not produce.
-- `delivery.build-and-acceptance` — the operator SOP for the six gates, the dead `verify` script, and dual-build checksum.
+- `delivery.verification-and-gaps` — the verification gate, CI and the release job, the dependency policy, how the
+  published schemas are validated, and what the repository does not do.
+- `delivery.build-and-acceptance` — the operator SOP for the six gates, how CI runs them, and dual-build checksum.
 
 ## One builder, no exceptions
 
@@ -35,7 +36,8 @@ one code path from source to artifact.
 
 ## Both packages are private
 
-Root and `@plugydown/context` are both `"private": true`. Nothing here publishes to a registry.
+Root and `@plugydown/context` are both `"private": true`. Nothing here publishes to a registry; installers clone a Git
+ref instead, from the release branches CI publishes (see below).
 
 ## The engineering constitution
 
@@ -47,10 +49,12 @@ dependency policy, and the byte-equivalence requirement that the rest of this Co
 Two tool choices are recorded *decisions* there rather than accidents: no Turborepo, and no Changesets (there is
 currently no npm publish pipeline for Changesets to drive).
 
-## Observed state
+## Continuous integration
 
-A previous recording observed `pnpm lint` (0 problems), `pnpm typecheck` (0 errors), `pnpm build` (`success
-(claude-code, codex)`), `pnpm validate`, and `pnpm inspect` succeeding, and two consecutive builds producing 72 `dist/`
-files with identical checksums. Those remain point-in-time observations — there is no CI, and this recording did not
-re-run the suite. The filtered test include `tests/runtime/*.test.ts` and `coverage.enabled: false` remain true; see
-`delivery.verification-and-gaps`.
+`.github/workflows/ci.yml` runs lint, typecheck, test, build, and validate on Node 24 for every push to `main` or `dev`,
+every pull request, and every `context--v*` tag. It then builds a second time and diffs the hash of every `dist/` file
+plus the `pnpm inspect` report against the first build, so byte-equivalence is checked rather than assumed, and finally
+sends a request to each platform's built Runtime to confirm the shipped bundle answers. On a `context--v*` tag whose
+version matches the built `package.json` version, a release job publishes each platform's built marketplace, unmodified,
+to the branches `release-claude-code` and `release-codex`. The filtered test include `tests/runtime/*.test.ts` and
+`coverage.enabled: false` still limit what a green run proves; see `delivery.verification-and-gaps`.

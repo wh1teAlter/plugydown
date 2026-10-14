@@ -1,9 +1,15 @@
+import type { ValidateFunction } from 'ajv/dist/2020.js'
 import type { RuntimeResponse, TransactionAction } from '../../src/runtime/protocol.js'
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { Ajv2020 } from 'ajv/dist/2020.js'
+import { parse as parseYaml } from 'yaml'
+import documentSchema from '../../public/schemas/document.schema.json' with { type: 'json' }
+import metaSchema from '../../public/schemas/meta.schema.json' with { type: 'json' }
+import runtimeSchema from '../../public/schemas/runtime.schema.json' with { type: 'json' }
 import { handleRequest } from '../../src/runtime/handler.js'
 
 export const PROTOCOL = 'plugydown.context.runtime/v1'
@@ -148,7 +154,8 @@ async function allFiles(root: string, relative: string): Promise<readonly string
     const entries = await fs.readdir(path.join(root, current), { withFileTypes: true }).catch(() => [])
     for (const entry of entries) {
       const next = `${current}/${entry.name}`
-      if (entry.isDirectory())
+      // Mirrors the Runtime: source expansion never enters node_modules at any depth.
+      if (entry.isDirectory() && entry.name !== 'node_modules')
         await visit(next)
       else if (entry.isFile())
         result.push(next)
@@ -339,10 +346,76 @@ export function runtimeRequest(capability: string, input: unknown, options: { re
   return { protocol: PROTOCOL, capability, input, ...options }
 }
 
+// The published schemas are a contract for consumers, so every Runtime response the suite produces is
+// held to `runtime.schema.json`, and every Meta and Document front matter the Runtime commits is held to
+// its schema. Drift between the implementation and the shipped schemas then fails the test that caused it.
+const ajv = new Ajv2020({ allErrors: true, strict: true })
+ajv.addSchema(runtimeSchema, 'runtime')
+const conformsToRuntime = ajv.getSchema('runtime') as ValidateFunction
+const conformsToMeta = ajv.compile(metaSchema)
+const conformsToDocument = ajv.compile(documentSchema)
+
+function conform(validate: ValidateFunction, value: unknown, subject: string): void {
+  if (!validate(value))
+    throw new Error(`${subject} violates its published schema:\n${ajv.errorsText(validate.errors, { separator: '\n' })}\n${JSON.stringify(value).slice(0, 600)}`)
+}
+
+interface ResponseVariant { readonly properties?: { readonly capability?: { readonly const?: string, readonly enum?: readonly string[] }, readonly status?: { readonly const?: string, readonly enum?: readonly string[] } } }
+
+/**
+ * Response variants form one large `oneOf`, so a failure lists every branch it did not match. Report
+ * the closest branch for this capability and status instead, which names the field that drifted.
+ */
+function conformResponse(response: RuntimeResponse): void {
+  // Not `response` itself: the validator is a type guard and would narrow it to never below.
+  if (conformsToRuntime(response as unknown))
+    return
+  const variants = (runtimeSchema as unknown as { oneOf: readonly [unknown, { oneOf: readonly ResponseVariant[] }] }).oneOf[1].oneOf
+  const accepts = (rule: { readonly const?: string, readonly enum?: readonly string[] } | undefined, value: string): boolean =>
+    rule === undefined || rule.const === value || (rule.enum?.includes(value) ?? false)
+  const candidates = variants
+    .map((variant, index) => ({ variant, index }))
+    .filter(({ variant }) => accepts(variant.properties?.capability, response.capability) && accepts(variant.properties?.status, response.status))
+    .map(({ index }) => {
+      const validate = ajv.getSchema(`runtime#/oneOf/1/oneOf/${index}`) as ValidateFunction
+      validate(response)
+      return { index, errors: validate.errors ?? [] }
+    })
+    .sort((left, right) => left.errors.length - right.errors.length)
+  const closest = candidates[0]
+  const detail = closest === undefined
+    ? 'no response variant accepts this capability and status'
+    : `closest variant oneOf[1].oneOf[${closest.index}]:\n${ajv.errorsText(closest.errors, { separator: '\n' })}`
+  throw new Error(`Runtime response violates its published schema; ${detail}\n${JSON.stringify(response).slice(0, 600)}`)
+}
+
+/**
+ * `handleRequest` with its response checked against the published Runtime schema. A request the
+ * Runtime accepted must conform too; rejected requests are deliberately malformed in many tests.
+ */
+export async function handle(root: string, request: unknown): Promise<RuntimeResponse> {
+  const response = await handleRequest(root, request)
+  conformResponse(response)
+  if (response.status !== 'failed')
+    conform(conformsToRuntime, request, 'Accepted Runtime request')
+  return response
+}
+
+async function conformCommittedContext(root: string): Promise<void> {
+  conform(conformsToMeta, JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8')), 'Committed meta.json')
+  for (const file of (await allFiles(root, 'context')).filter(item => item.endsWith('.md'))) {
+    const frontMatter = /^---\n([\s\S]*?)\n---\n/.exec((await fs.readFile(path.join(root, file), 'utf8')).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n'))
+    conform(conformsToDocument, parseYaml(frontMatter?.[1] ?? '') as unknown, `Committed ${file} front matter`)
+  }
+}
+
 export async function call(root: string, capability: string, input: unknown, options: { readonly budget?: unknown, readonly cursor?: string } = {}): Promise<RuntimeResponse> {
-  return handleRequest(root, runtimeRequest(capability, input, options))
+  return handle(root, runtimeRequest(capability, input, options))
 }
 
 export async function transactionCall(root: string, action: TransactionAction, input: unknown): Promise<RuntimeResponse> {
-  return handleRequest(root, { protocol: PROTOCOL, capability: 'transaction', action, input })
+  const response = await handle(root, { protocol: PROTOCOL, capability: 'transaction', action, input })
+  if (action === 'commit' && response.status === 'success')
+    await conformCommittedContext(root)
+  return response
 }

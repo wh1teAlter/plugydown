@@ -75,7 +75,7 @@ Collect from the business repository root:
 
 ```sh
 git rev-parse HEAD > "$evidence_dir/head.txt"
-git status --porcelain=v2 --branch -z > "$evidence_dir/status.bin"
+git status --porcelain=v2 --branch -z --untracked-files=all > "$evidence_dir/status.bin"
 git diff --name-status -z "$baseline"...HEAD > "$evidence_dir/diff.bin"
 ```
 
@@ -100,10 +100,17 @@ files. `delta.compute` and a following transaction may share the same evidence l
     "dryRun": false,
     "scope": {"kind":"repository"},
     "gitEvidencePath": ".scratch/evidence/<evidence-id>",
-    "evidencePaths": ["src/**/*.ts"]
+    "evidencePaths": ["src/**/*.ts"],
+    "reaffirmedDocumentIds": ["domain.document-id"]
   }
 }
 ```
+
+`reaffirmedDocumentIds` is optional and Update-only. List the Documents that review before `begin` confirmed are still
+accurate against their changed sources; their ledgers are then settled without an edit. Every ID must exist and sit
+inside the authorized scope, or `begin` fails with `TRANSACTION_SCOPE_INVALID` before taking the lock. It is fixed at
+`begin` like every other input, and it permits rather than forbids: a listed Document may still be edited. Without it,
+an accurate Document whose sources moved cannot be settled at all — no edit means no ledger refresh.
 
 Call `validate` or `resume` with only `runId`. Call `commit` with `runId` and an approval containing exactly
 `approved: true`, the returned `candidateFingerprint`, the returned `sourceEvidenceFingerprint`, and a short nonempty
@@ -139,11 +146,15 @@ continue or when `manualRecoveryRequired`/`no_trusted_copy` needs human recovery
 ## Status handling
 
 - `success`: use the complete result.
-- `no_change`: report that formal bytes were unchanged; the run is already cleaned.
+- `no_change`: report that formal bytes were unchanged; the run is already cleaned. If review found Documents still
+  accurate but they were not passed as `reaffirmedDocumentIds`, they remain pending; begin again listing them.
 - `dry_run`: report validation without a formal write; the run is already cleaned and cannot resume.
 - `incomplete`: follow only the returned cursor, `nextAction`, active run, evidence, authorization, review, or recovery need.
 - `failed`: stop the affected workflow and report diagnostics. If `manualRecoveryRequired` is true, preserve the named
   recovery leaves and lock; otherwise clean any host-owned leaf that Runtime could not own.
+
+A `success` may carry warnings. `DOCUMENT_REVIEW_PENDING` from `graph.validate` names a Document whose cited sources
+changed since it was last reviewed: an Update signal, never damage. Errors such as `META_DOCUMENT_*` do mean damage.
 
 Transaction outcomes are distinct results, never one generic retry:
 

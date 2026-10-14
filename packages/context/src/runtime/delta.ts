@@ -109,8 +109,8 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
       }
     }
     // No Document cites this path as evidence, so no recorded knowledge can have gone stale
-    // because of it. Reported so a Recorder can judge whether an anchor is warranted; per D32
-    // only broken evidence blocks Light.
+    // because of it. Reported so a Recorder can judge whether an anchor is warranted; it blocks
+    // neither Light nor the baseline — only broken evidence and unreviewed Documents do.
     if (!mapped)
       unreferenced.push(changedPath)
   }
@@ -145,12 +145,12 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
   if (outsideScope.length > 0)
     blockers.push('impact closure extends outside authorized scope')
   const uniqueBlockers = [...new Set(blockers)].sort(compareCodeUnits)
-  // Unlike Light, the baseline keeps the unreferenced check: advancing it asserts the recorded
-  // source state covers this revision, which is false while changes sit outside every declaration.
+  // Whether a repository-scope Update could advance the baseline at all. It still advances only if
+  // that Update leaves no Document pending review — every directImpact entry edited or reaffirmed —
+  // which the commit, not this read, decides.
   const baselineEligible = input.scope.kind === 'repository'
     && !evidence.midOperation
     && brokenEvidence.length === 0
-    && unreferenced.length === 0
     && input.taskEvidence.scopeComplete
 
   const stream: SectionItem[] = [

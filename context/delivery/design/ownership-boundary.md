@@ -13,6 +13,7 @@ relations:
 code:
   paths:
     - AGENTS.md
+    - packages/context/src/runtime/repository.ts
 ---
 
 # Ownership boundary
@@ -77,10 +78,11 @@ The constitution prescribes a five-step procedure rather than leaving it to judg
    forbidden.
 
 Step 5's spirit — declare a degradation rather than silently omit it — is the same discipline this Context applies to
-the remaining glob-expansion limitation on `packages` anchors: exact `code.paths` under `packages/context/` are legal,
-but globs whose first segment is `packages` cannot expand in this working tree. That limitation is a property of this
-product's own Runtime, not of the framework, so the procedure is an analogy rather than a compliance relationship. See
-`repository-access.path-and-glob-safety` and `knowledge-model.meta-ledger`.
+limits of the product's own Runtime. Such a limit is a property of this product, not of the framework, so the procedure
+is an analogy rather than a compliance relationship. Glob expansion under `packages/` is not currently one of them:
+`expandGlob` in `packages/context/src/runtime/repository.ts` prunes its walk to the directories a pattern can still
+match and never enters `node_modules`, so `packages/foo/src/**` expands in this working tree. See
+`repository-access.path-and-glob-safety`.
 
 Step 2 is worth noting for a different reason: `.scratch/investigations/` is load-bearing in this procedure, and it is the
 one scratch collection with **zero Runtime representation**. See `authority-workflow.scratch-lifecycle`.
@@ -91,7 +93,8 @@ These are decisions with stated reasons, not gaps:
 
 - **No Turborepo.** pnpm workspace plus catalog is the whole build orchestration.
 - **No Changesets** — there is currently no npm publish pipeline for it to drive. Recording this matters: the absence of
-  release tooling in `delivery.verification-and-gaps` is a consequence of this decision, not an oversight.
+  version-bump and npm publishing tooling in `delivery.verification-and-gaps` is a consequence of this decision, not an
+  oversight.
 - **No npm or yarn.**
 - `tsc` is for `--noEmit` type checking only and **must not produce any delivered bytes**.
 - The build has exactly one path: `aaplugin build`.

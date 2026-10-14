@@ -70,6 +70,51 @@ describe('repository safety', () => {
     expect((await validate(root)).status).toBe('success')
   })
 
+  it('expands a package glob in a pnpm-style monorepo without opening unrelated siblings', async () => {
+    const document = { ...SERVICE_DOMAIN, codePaths: ['packages/foo/src/**', 'packages/foo/**'] }
+    const root = await repository(document)
+    await fs.mkdir(path.join(root, 'packages/foo/src'), { recursive: true })
+    await fs.writeFile(path.join(root, 'packages/foo/src/a.ts'), 'a\n')
+    // pnpm links workspace packages into every node_modules; the glob never asks about them.
+    await fs.mkdir(path.join(root, 'packages/bar/node_modules'), { recursive: true })
+    await fs.symlink(path.join(root, 'packages/foo'), path.join(root, 'packages/bar/node_modules/foo'))
+    // `**` must not reach into node_modules either, even a real directory full of links.
+    await fs.mkdir(path.join(root, 'packages/foo/node_modules/dep'), { recursive: true })
+    await fs.writeFile(path.join(root, 'packages/foo/node_modules/dep/index.js'), 'dep\n')
+    await fs.symlink(path.join(root, 'packages/bar'), path.join(root, 'packages/foo/node_modules/bar'))
+    // A sibling tree the glob cannot match is never even listed, so an unreadable one is harmless.
+    const unrelated = path.join(root, 'packages/bar/build')
+    await fs.mkdir(unrelated)
+    await fs.chmod(unrelated, 0o000)
+    await writeMeta(root, [document])
+
+    try {
+      const response = await validate(root)
+      expect(response.status).toBe('success')
+      expect(response.diagnostics ?? []).toEqual([])
+    }
+    finally {
+      await fs.chmod(unrelated, 0o755)
+    }
+  })
+
+  it.each([
+    ['refuses a symlink the glob would select', 'packages/foo/src/*.ts', 'packages/foo/src/link.ts', 'failed'],
+    ['refuses a symlink the glob must descend through', 'packages/foo/**/*.ts', 'packages/foo/src/lib', 'failed'],
+    ['leaves unopened a symlink the glob can never reach', 'packages/foo/src/*.ts', 'packages/foo/src/notes', 'success'],
+  ] as const)('%s', async (_, pattern, linkPath, status) => {
+    const document = { ...SERVICE_DOMAIN, codePaths: [pattern] }
+    const root = await repository(document)
+    await fs.mkdir(path.join(root, 'packages/foo/src'), { recursive: true })
+    await fs.writeFile(path.join(root, 'packages/foo/src/a.ts'), 'a\n')
+    await fs.symlink(path.join(root, 'packages/foo'), path.join(root, linkPath))
+    await writeMeta(root, [document])
+
+    const response = await validate(root)
+    expect(response.status).toBe(status)
+    expect(response.diagnostics?.some(item => item.code === 'PATH_SYMLINK') ?? false).toBe(status === 'failed')
+  })
+
   it.each([
     ['src/missing.ts', 'SOURCE_EXACT_MISSING'],
     ['src/*.missing', 'SOURCE_GLOB_ZERO_MATCH'],

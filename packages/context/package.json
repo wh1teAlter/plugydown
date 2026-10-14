@@ -1,7 +1,7 @@
 {
   "name": "@plugydown/context",
   "type": "module",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Persistent repository knowledge and engineering workflows.",
   "author": {
@@ -17,7 +17,7 @@
     "ai-workflow"
   ],
   "engines": {
-    "node": "^20.19.0 || ^22.13.0 || >=23.5.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "dev": "aaplugin dev",
@@ -36,6 +36,7 @@
     "@aaplugin/platform-claude-code": "catalog:",
     "@aaplugin/platform-codex": "catalog:",
     "@types/node": "catalog:",
+    "ajv": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

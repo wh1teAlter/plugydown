@@ -40,8 +40,8 @@ unique, valid Document ids if present. An empty list is an error, not a no-op �
 `relations:` key with no sub-keys is `DOCUMENT_RELATIONS_INVALID`.
 
 Parsing accumulates issues rather than stopping at the first, so one malformed Document reports everything wrong with it
-at once. Four conditions short-circuit with a single issue because nothing further can be trusted: over-size file, missing
-front matter, unparseable YAML, and YAML that parses but is not an object.
+at once. Five conditions short-circuit with a single issue because nothing further can be trusted: over-size file, missing
+front matter, front matter over its 64 KiB limit, unparseable YAML, and YAML that parses but is not an object.
 
 ## Size limits
 
@@ -63,7 +63,8 @@ Filenames must match `^[a-z0-9]+(-[a-z0-9]+)*\.md$`. No underscores, no uppercas
 
 Directory scanning in `graph.ts` adds the structural rules: unknown entries in the Context root, unknown directories
 inside a Domain, non-`.md` files inside a category, and empty category directories
-(`DOCUMENT_CATEGORY_EMPTY`) are all issues. Symlinks are reported as `KNOWLEDGE_SYMLINK` rather than followed.
+(`DOCUMENT_CATEGORY_EMPTY`) are all issues. Symlinks are reported as `KNOWLEDGE_SYMLINK` rather than followed, except a
+`domain.md` that is not a regular file, which is `DOCUMENT_NOT_REGULAR_FILE`.
 
 ## Relations
 
@@ -76,8 +77,9 @@ Validated across the whole loaded graph in `graph.ts`:
   Detection is a colour-marking DFS over ids sorted by code unit, so the reported set is deterministic.
 - `domain` naming a Domain directory that does not exist → `DOCUMENT_DOMAIN_UNKNOWN`
 
-`related` may form cycles freely. Only `requires` must be acyclic, because `read-plane` walks it transitively to build
-prerequisite closures and would otherwise not terminate.
+`related` may form cycles freely. Only `requires` must be acyclic, because it is a prerequisite ordering: a cycle would
+leave no Document a reader could read first. The `read-plane` closure walk does not depend on this — it expands each id
+once and terminates on a cycle — so the rule is about meaning, not about keeping the walk finite.
 
 ## Semantic guidance for authors
 

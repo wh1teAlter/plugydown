@@ -17,6 +17,18 @@ Choose Domain boundaries, Document kind, relations, `code.paths`, body granulari
 durable statement. Record invariants, causality, contracts, decisions, repeatable procedures, and easy-to-misuse
 boundaries—not source listings, task narration, per-change history, raw Feedback, or generic explanation.
 
+Declare `code.paths` as the sources a Document's statements rest on, not as coverage. Prefer source directories
+(`packages/foo/src/**`) to package roots: generated output is usually ignored by Git, so its changes never reach the
+evidence that tells you a Document went stale.
+
+Write prose that survives routine change. Do not recite values an automated step rewrites — release versions, hashes,
+counts, generated identifiers; describe the mechanism and name where the current value lives. A `reference` whose
+purpose is exact current facts, such as capability names, required fields, or error codes, quotes them exactly; its
+going stale when they change is the correct signal.
+
+Do not edit a Document only to refresh its ledger. A reviewed, still-accurate Document is settled through
+`reaffirmedDocumentIds`, and an edit made for the bookkeeping is the per-change history excluded above.
+
 For convergence, account for every affected fact: its origin, survival location, uniqueness, relation changes, source
 coverage, and verification. Do not hide growth by moving knowledge outside the retrieval path.
 

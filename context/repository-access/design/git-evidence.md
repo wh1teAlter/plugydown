@@ -10,6 +10,7 @@ relations:
 code:
   paths:
     - packages/context/src/runtime/repository.ts
+    - packages/context/src/skills/context/references/runtime.md
 ---
 
 # Git evidence
@@ -64,7 +65,10 @@ Light-eligibility blocker in `read-plane`, and it prevents `deriveMeta` from adv
 
 - headers `# branch.oid`, `# branch.head`, `# branch.upstream`, `# branch.ab` — each at most once, each shape-checked.
   Any other `# ` header is `GIT_STATUS_INVALID`.
-- `? path` untracked, `! path` ignored (skipped)
+- `? path` untracked, `! path` ignored (skipped). A `? dir/` record fails with `GIT_STATUS_UNTRACKED_COLLAPSED`: Git's
+  default untracked mode collapses a new directory to its name, hiding which files are new, and `delta.compute` must map
+  files. The message names the fix, `--untracked-files=all`, and the shipped recipe already passes it:
+  `git status --porcelain=v2 --branch -z --untracked-files=all`.
 - `1 XY …` ordinary, where the change kind comes from X unless X is `.`, in which case Y
 - `2 XY …` rename or copy, which consumes the *following* record as the previous path; a missing or empty one is an error
 - `u …` unmerged, recorded as modified

@@ -24,8 +24,9 @@ export const MAX_SOURCE_BYTES = 512 * 1024 * 1024
 const VARIABLE = /\$|%[A-Z_]\w*%/i
 const UNSUPPORTED_GLOB = /[?[\]{}!]/
 const RUN_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
-// Spec 02 §7 forbids the repository-root `.git/`, `.scratch/` and `context/`, but *any* `node_modules/`.
-// Matching all four on every segment would reject legitimate paths such as `packages/context/**`.
+// Only the repository-root `.git/`, `.scratch/` and `context/` are off limits — they hold Git, transaction
+// and knowledge state, not source — whereas `node_modules/` is refused at any depth. Matching all four on
+// every segment would reject legitimate monorepo paths such as `packages/context/**`.
 const FORBIDDEN_SOURCE_ROOTS = new Set(['.git', '.scratch', 'context'])
 const SCRATCH_LEAF_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const KNOWN_FILESYSTEM_CODES = new Set([
@@ -366,27 +367,62 @@ async function hashRegularFile(root: string, candidate: string, remainingBytes: 
   return { hash: hash.digest('hex'), size: info.size }
 }
 
-async function listAnchorFiles(root: string, anchor: string, visitedFiles = new Set<string>()): Promise<readonly string[]> {
-  const files: string[] = []
+/** True while some path below `segments` could still match `parts`. */
+function couldContainMatch(parts: readonly string[], segments: readonly string[]): boolean {
+  const visit = (part: number, segment: number): boolean => {
+    if (segment === segments.length)
+      return part < parts.length
+    if (part === parts.length)
+      return false
+    if (parts[part] === '**')
+      return visit(part + 1, segment) || visit(part, segment + 1)
+    return segmentMatches(parts[part] as string, segments[segment] as string) && visit(part + 1, segment + 1)
+  }
+  return visit(0, 0)
+}
+
+/**
+ * Walks only the directories a controlled glob can still match. Unrelated siblings — another
+ * package's symlinked `node_modules`, a build output tree — are never opened, so they can neither
+ * fail the glob nor count against the file ceiling. `node_modules` is never entered at any depth:
+ * a pattern may not name it, so `**` must not reach into it either.
+ * A symlink or special entry is refused only where it could be a result or must be descended
+ * through; one the pattern can never reach is left unopened rather than followed.
+ */
+async function expandGlob(root: string, pattern: string, visitedFiles: Set<string>): Promise<readonly string[]> {
+  const parts = pattern.split('/')
+  // The first segment is always literal (GLOB_ANCHOR_INVALID); pruning narrows everything below it.
+  const base = parts[0] as string
+  const info = await lstatRepositoryPath(root, base)
+  if (info === undefined || !info.isDirectory())
+    return []
+  const matches: string[] = []
   const visit = async (relative: string): Promise<void> => {
     for (const entry of await readDirectory(root, relative)) {
+      if (entry.name === 'node_modules')
+        continue
       const child = `${relative}/${entry.name}`
+      const descends = couldContainMatch(parts, child.split('/'))
+      const selected = controlledGlobMatches(pattern, child)
       if (entry.kind === 'directory') {
-        await visit(child)
+        if (descends)
+          await visit(child)
       }
       else if (entry.kind === 'file') {
+        if (!selected)
+          continue
         visitedFiles.add(child)
         if (visitedFiles.size > MAX_SOURCE_FILES)
           throw new RuntimeFault('SOURCE_FILE_LIMIT_EXCEEDED', 'A source expansion exceeds the file-count limit.')
-        files.push(child)
+        matches.push(child)
       }
-      else {
+      else if (selected || descends) {
         pathFault(entry.kind === 'symlink' ? 'PATH_SYMLINK' : 'PATH_SPECIAL_FILE', 'A source expansion encountered a non-ordinary entry.', child, true)
       }
     }
   }
-  await visit(anchor)
-  return files.sort(compareCodeUnits)
+  await visit(base)
+  return matches.sort(compareCodeUnits)
 }
 
 export interface SourceFile {
@@ -428,7 +464,7 @@ export async function expandSourcePatternSets(root: string, sets: readonly Sourc
   const selectedByOwner = new Map<string, Set<string>>()
   const issues: SourceExpansionIssue[] = []
   const visitedFiles = new Set<string>()
-  const anchorCache = new Map<string, Promise<readonly string[]>>()
+  const globCache = new Map<string, Promise<readonly string[]>>()
 
   for (const set of orderedSets) {
     const selected = selectedByOwner.get(set.owner) ?? new Set<string>()
@@ -448,16 +484,14 @@ export async function expandSourcePatternSets(root: string, sets: readonly Sourc
           selected.add(pattern)
           continue
         }
-        const anchor = pattern.split('/')[0] as string
-        const anchorInfo = await lstatRepositoryPath(root, anchor)
-        if (anchorInfo === undefined || !anchorInfo.isDirectory())
-          pathFault('SOURCE_GLOB_ZERO_MATCH', 'A source glob matched no regular files.', pattern, true)
-        let anchorFiles = anchorCache.get(anchor)
-        if (anchorFiles === undefined) {
-          anchorFiles = listAnchorFiles(root, anchor, visitedFiles)
-          anchorCache.set(anchor, anchorFiles)
+        // ponytail: cached per pattern, so two overlapping globs walk their shared directories twice;
+        // file hashing is still once per path. Share walks by literal prefix if that ever shows up.
+        let expansion = globCache.get(pattern)
+        if (expansion === undefined) {
+          expansion = expandGlob(root, pattern, visitedFiles)
+          globCache.set(pattern, expansion)
         }
-        const matches = (await anchorFiles).filter(candidate => controlledGlobMatches(pattern, candidate))
+        const matches = await expansion
         if (matches.length === 0)
           pathFault('SOURCE_GLOB_ZERO_MATCH', 'A source glob matched no regular files.', pattern, true)
         matches.forEach(candidate => selected.add(candidate))
@@ -598,6 +632,10 @@ function parsePorcelainEvidence(bytes: Uint8Array): PorcelainEvidence {
       throw new RuntimeFault('GIT_STATUS_INVALID', 'Git status evidence contains an unknown header.', 'status.bin')
     }
     if (record.startsWith('? ')) {
+      // Git's default untracked mode collapses a new directory to `dir/`, hiding which files are new;
+      // delta must map files, so name the fix rather than failing on the trailing slash as unsafe.
+      if (record.endsWith('/'))
+        throw new RuntimeFault('GIT_STATUS_UNTRACKED_COLLAPSED', 'Git status evidence lists an untracked directory instead of its files; collect it with --untracked-files=all.', 'status.bin')
       changes.push({ path: validateGitPath(record.slice(2)), kind: 'untracked' })
       continue
     }

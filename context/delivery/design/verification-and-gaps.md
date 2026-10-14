@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: delivery.verification-and-gaps
-description: The verification gate and its one dead script, the exact-version dependency policy and its stated rationale, the unvalidated drifted runtime schema, and what the repository does not produce.
+description: The verification gate and the CI that runs it, the exact-version dependency policy and its stated rationale, how the published JSON Schemas are held to the implementation, the release job, and what the repository still does not do.
 kind: decision
 domain: delivery
 relations:
@@ -12,6 +12,9 @@ relations:
 code:
   paths:
     - pnpm-workspace.yaml
+    - .github/workflows/ci.yml
+    - packages/context/tests/runtime/fixture.ts
+    - packages/context/vitest.config.ts
 ---
 
 # Verification and gaps
@@ -25,16 +28,30 @@ pnpm check = lint && typecheck && test && build
 Root scripts fan out with `pnpm -r --if-present run <name>`. The package supplies `typecheck` (`tsc --noEmit`), `test`
 (`vitest run`), `build`, `validate`, `inspect`, and `dev`; `lint` is root-level `eslint .`.
 
-A previous recording observed lint 0 problems, typecheck 0 errors, build reporting `success (claude-code, codex)`, and
-`validate` and `inspect` succeeding. That was a point-in-time observation; this recording did not re-run the suite.
+Note that `check` does **not** include `validate` or `inspect`. Those are separate invocations, and CI runs them.
 
-Note that `check` does **not** include `validate` or `inspect`. Those are separate invocations.
+## CI
 
-### `verify` is a no-op
+`.github/workflows/ci.yml` triggers on pushes to `main` and `dev`, on pull requests, and on `context--v*` tags. Its
+`verify` job installs with `--frozen-lockfile` and runs lint, typecheck, test, build, and validate on Node 24, the
+only supported version. It is a single job, with no version matrix.
 
-The root `verify` script is `pnpm -r --if-present run verify`, and no package defines a `verify` script. Because of
-`--if-present`, it silently skips everything and exits successfully. Anyone wiring `pnpm verify` into a hook or a
-pipeline gets a green result that verified nothing. Use `pnpm check` instead.
+It then proves the build deterministic. It records the SHA-256 of every file under `packages/context/dist` together with
+the `pnpm inspect` report, builds again, records both again, and diffs the two records. Any difference fails the job.
+This is the byte-equivalence acceptance criterion from `AGENTS.md` enforced mechanically, on every run, rather than
+observed once.
+
+Last, a smoke step sends a `graph.validate` request to each platform's built Runtime
+(`dist/<platform>/marketplace/runtime/context/main.mjs`) and fails unless it answers `success`. The tests exercise the
+Runtime as source; this step exercises the bundle that actually ships.
+
+### The release job
+
+On a `context--v*` tag, a `release` job runs after `verify` passes. It builds on Node 24.x and fails unless the tag's
+version equals the version in `packages/context/package.json`. It then publishes each platform's built marketplace
+(`dist/<platform>/marketplace`), unmodified, as the tree of the branches `release-claude-code` and `release-codex`,
+continuing each branch's history and skipping the commit when the branch already holds that build. Installers clone a Git
+ref, never an archive, and `main` stays free of generated artifacts.
 
 ## Exact versions, by decision
 
@@ -49,54 +66,41 @@ than a style preference:
 3. A builder change directly changes artifact bytes.
 4. Byte-equivalence of the build is a product acceptance criterion, established in `AGENTS.md`.
 
-Therefore upgrading must be an explicit, reviewable action. Step 4 has been observed to hold: two consecutive builds
-produced 72 `dist/` files with matching checksums. That was a point-in-time observation, not a standing guarantee, and
-nothing re-checks it — see the CI gap below.
+Therefore upgrading must be an explicit, reviewable action. The byte-equivalence in step 4 is checked on every CI run by
+the double-build diff above.
 
-The same policy applies to `eslint`, `typescript`, `vitest`, `@antfu/eslint-config`, `@types/node`, and `yaml`. `yaml` is
-the only runtime dependency of the package; everything else is a devDependency. That matters — the shipped Runtime's only
-third-party code is a YAML parser.
+The same policy applies to `eslint`, `typescript`, `vitest`, `@antfu/eslint-config`, `@types/node`, `yaml`, and `ajv`.
+The `ajv` here is major version 8, a direct devDependency of the package pinned in the catalog; it is distinct from the
+ajv 6 that `eslint` pulls in transitively. `yaml` is the only runtime dependency of the package; everything else is a
+devDependency, `ajv` included. That matters — the shipped Runtime's only third-party code is a YAML parser.
 
-## The unvalidated schema
+## The published schemas are validated
 
-`packages/context/public/schemas/runtime.schema.json` is shipped as if it were the wire contract. **It is validated by
-nothing.** No JSON-Schema validator is wired to these schemas: `ajv@6.15.0` is present in the tree, but only as an
-`eslint` transitive dependency, and nothing routes it at these files. So no test, no build step, and no runtime check
-compares the schema to the implementation. It has drifted in six confirmed ways:
+`packages/context/public/schemas/` ships `document.schema.json`, `meta.schema.json`, and `runtime.schema.json`, and the
+test suite holds all three to the implementation. `packages/context/tests/runtime/fixture.ts` compiles each with ajv's
+2020-12 build in strict mode, and every test reaches the Runtime through its helpers, which check:
 
-| # | Schema says | Implementation does |
-|---|---|---|
-| 1 | `frontier.query` `body` is a string | emits an object (the `BodyChunk` with `text`/`startByte`/`endByte`/`totalBytes`/`complete`) |
-| 2 | `repository.inspect` `context` has `additionalProperties: false` without `sourceState` | also emits `sourceState` |
-| 3 | `selected[].state` omits `source_unavailable` | also emits `source_unavailable` |
-| 4 | `growth.measure` `perDomain` is an object | emits an array |
-| 5 | `delta.compute` `brokenEvidence` items are strings | emits objects |
-| 6 | `transaction.resume` input has no `disposition` | accepts `disposition: continue\|abandon` |
+- every Runtime response against `runtime.schema.json`
+- every request the Runtime accepted against the same schema (rejected requests are deliberately malformed in many tests,
+  so they are not checked)
+- after each successful commit, the committed `meta.json` against `meta.schema.json` and every committed Document's front
+  matter against `document.schema.json`
 
-Items 2 and 3 are the sharp ones: a consumer that actually enforced this schema would *reject valid Runtime responses*.
+A schema that drifts from the implementation therefore fails the test that exposed it. The check is only as wide as the
+suite: a response shape no test produces is not compared, so the code plus the tests remain the final contract.
 
-**The code plus the Runtime tests are the real contract.** Treat `runtime.schema.json` as stale documentation. Either
-wire a validator into `pnpm check` or stop shipping the file; leaving it in place unvalidated is the worst of the three
-options, because it looks authoritative.
-
-`document.schema.json` and `meta.schema.json` are also unvalidated by any tooling, but they mirror the implementation
-faithfully at HEAD, so they are useful reference. `document.schema.json` and `runtime.schema.json` encode the forbidden
-source roots so that `.git`, `.scratch`, and `context` fail only as the first segment, and `node_modules` fails at any
-level — a second place that must be edited if the rule ever changes.
+`document.schema.json` and `runtime.schema.json` encode the forbidden source roots so that `.git`, `.scratch`, and
+`context` fail only as the first segment, and `node_modules` fails at any level — a second place that must be edited if
+the rule ever changes.
 
 ## What this repository does not do
 
 Recorded because their absence is easy to assume away:
 
-- **No CI.** There is no `.github/` directory and no pipeline configuration of any kind. Every check is local and manual.
-  `AGENTS.md` does specify what routine CI must be — offline, invoking no model — so the absence is a gap against a
-  recorded intent, not an undecided question.
-- **No release or publish script.** No version bumping, no packing step. Both packages are private. The absence of
-  Changesets is a **recorded decision** in `AGENTS.md`, not an oversight: there is currently no npm publish pipeline for
-  it to drive. Turborepo is refused by the same document.
-- **No produced release artifact.** The root `README.md` states that the install source is a GitHub Release archive, but
-  nothing in the repository produces one. Release construction is manual and unrecorded — the procedure exists only in
-  whoever's head last performed it.
+- **No version-bump or npm publishing tooling.** Both packages are private, and the version is raised by editing
+  `package.json`, which the release job then requires the tag to match. The absence of Changesets is a **recorded
+  decision** in `AGENTS.md`, not an oversight: there is currently no npm publish pipeline for it to drive. Turborepo is
+  refused by the same document.
 
 ## Two gaps inside the test gate
 
@@ -112,5 +116,5 @@ Recorded because their absence is easy to assume away:
 
 `testTimeout` is 30 seconds, which is generous and suits the filesystem-heavy transaction tests.
 
-The combination of "byte-equivalence is an acceptance criterion" and "no CI verifies it" is the notable tension in this
-Domain. The dependency policy exists to protect a property that nothing automatically checks.
+CI inherits both gaps: it runs the same filtered suite with coverage off, so a green pipeline proves what a green local
+`pnpm test` proves and no more.

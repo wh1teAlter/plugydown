@@ -21,7 +21,7 @@ Six capabilities answer questions about the repository without changing anything
 
 ## The zero-write guarantee
 
-All 15 mutating filesystem calls in the Runtime live in `transaction.ts`. Neither `queries.ts` nor `delta.ts` nor
+Every mutating filesystem call in the Runtime lives in `transaction.ts`. Neither `queries.ts` nor `delta.ts` nor
 `graph.ts` nor `repository.ts` writes, creates, renames, or removes anything. A read capability cannot corrupt a
 repository even when it fails partway through, and a caller never needs to consider recovery after a read.
 
@@ -39,7 +39,7 @@ repository even when it fails partway through, and a caller never needs to consi
 | `frontier.query` | yes |
 | `growth.measure` | yes |
 | `delta.compute` | yes |
-| `graph.validate` | yes, plus ready source and no ledger drift |
+| `graph.validate` | yes, plus ready source; ledger drift is a warning, not a failure |
 
 The two permissive ones are the entry points. Everything that returns knowledge refuses to answer from a damaged tree
 rather than returning a partial view, because a partial view of knowledge is indistinguishable from complete knowledge to

@@ -50,8 +50,10 @@ which is what makes a hand-edited or truncated manifest fail rather than mislead
 - a `reaffirmedDocumentIds` entry that is empty, duplicated, or not a well-formed Document id
 
 `reaffirmedDocumentIds` is one of the base facts rather than a phase-gated one: it is recorded at `begin`, survives
-re-validation, and is re-proved on every read, so the permission a run was granted cannot be widened by editing the
-manifest between steps.
+re-validation (`baseFacts` carries it forward), and has its shape re-checked on every read. Shape is all `parseManifest`
+checks; that each id names a real Document inside the authorized scope was proven only at `begin`. What bounds the effect
+of a hand-edited list is later: `refreshedDocumentIds` refreshes a Document only if scope also authorizes it, so a listed
+id outside the scope settles nothing.
 
 ## The lock
 
@@ -90,7 +92,7 @@ The candidate lives at `.scratch/runs/<run-id>/candidate/context/`.
 - `update` and `prune` `fs.cp` the live `context/` tree with `errorOnExist: true`, `force: false`,
   `preserveTimestamps: false`.
 
-`begin` preconditions, from `validateBeginMode`:
+`begin` preconditions, from `validateBeginInput`:
 
 - `init` — must be `deep`, must be `repository` scope, requires `formalState: absent`
 - `update` — requires `formalState: ready`
@@ -132,12 +134,17 @@ during resume, and inside recovery. Each has its own failure: `FORMAL_CONTEXT_CO
 6. compute authorized Documents and reject out-of-scope mutations (`CANDIDATE_SCOPE_VIOLATION`)
 7. for `prune`, require live `sourceState: ready` and no lost coverage (`PRUNE_COVERAGE_LOST`)
 8. derive Meta and write it into the candidate
-9. **reload the candidate with Meta required** and re-expand source. If the recomputed source evidence fingerprint
-   differs from step 5's, the source moved mid-validation → `candidate_edit_required` with `CANDIDATE_SOURCE_STALE`
+9. **reload the candidate with Meta required** and re-expand source. A reload that is not `ready` →
+   `candidate_edit_required` with its diagnostics. If re-expansion has issues, or the recomputed source evidence
+   fingerprint differs from step 5's, the source moved mid-validation → `candidate_edit_required`, carrying only
+   whatever diagnostics the reload and expansion produced — there is no code for the mismatch itself. Then, for every
+   refreshed Document, the `sourceFingerprint` written into Meta must equal the one just recomputed, or the outcome is
+   `candidate_edit_required` with `CANDIDATE_SOURCE_STALE`
 10. re-prove the snapshot once more, then record `phase: validated` with the two fingerprints
 
 Step 9 is the subtle one: validation reads the world twice and refuses to certify a candidate whose source shifted
-between the reads.
+between the reads. `CANDIDATE_SOURCE_STALE` is the per-Document half of that check, not the evidence-fingerprint
+comparison.
 
 Two terminal shortcuts: if the candidate fingerprint equals the live snapshot fingerprint, the outcome is `no_change` and
 artifacts are cleaned. If `dryRun`, the outcome is `validated` and artifacts are cleaned — a dry run can never become a

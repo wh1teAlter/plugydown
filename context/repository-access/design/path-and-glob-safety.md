@@ -71,18 +71,21 @@ segments and `*` within a segment becomes `.*` with everything else regex-escape
 candidate)` is one-way: exact string equality, or glob-match when the declaration contains `*`. A declaration without
 `*` never enters the matcher.
 
-### The glob-expansion limitation
+### Glob expansion walks only what a pattern can match
 
-Declaration and expansion are different. Exact non-glob paths under `packages/context/` are legal and expand by lstat
-of that file only. Globs whose first segment is `packages` — including `packages/context/**` and
-`packages/context/src/runtime/*.ts` — cannot expand in this working tree: `expandSourcePatternSets` uses the first
-path segment as the walk anchor, `listAnchorFiles` walks the whole anchor before filtering, and pnpm's
-`packages/context/node_modules` symlinks are refused with `PATH_SYMLINK` rather than skipped.
+Declaration and expansion are different steps. `expandGlob` starts at the pattern's first segment, which is always a
+literal directory, and recurses with `couldContainMatch`: it lists a directory only while the pattern can still match
+somewhere below it. Unrelated siblings — another package's pnpm-symlinked `node_modules`, a build output tree — are never
+opened, so they can neither fail the glob nor count against the file ceiling. `node_modules` is skipped at any depth,
+not refused: a pattern may not name it, so `**` must not reach into it either.
+
+A symlink or special entry is handled differently. It is refused (`PATH_SYMLINK`, `PATH_SPECIAL_FILE`) only where it
+would itself be selected or must be descended through to reach a match; one the pattern can never reach is left unopened.
+Either way it is never followed. Exact non-glob paths expand by lstat of that file only.
 
 The first-segment rule stops knowledge from declaring the live `context/` tree as its own source, which would make
-fingerprints self-referential. Combined with unconditional symlink refusal during anchor walking, it still prevents
-glob coverage of this product's source under a `packages` anchor. Exact file declarations remain the working coverage
-path.
+fingerprints self-referential. It does not restrict `packages/`: a glob such as `packages/foo/src/**` expands in this
+working tree.
 
 ## Resource ceilings
 
@@ -92,7 +95,7 @@ path.
 | `MAX_FRONT_MATTER_BYTES` | 64 KiB | one front-matter block |
 | `MAX_JSON_TEXT_BYTES` | 4 MiB | Meta, manifest, lock owner, tree files |
 | `MAX_GIT_EVIDENCE_BYTES` | 16 MiB | one Git evidence file |
-| `MAX_SOURCE_FILES` | 10000 | one expansion, counted across all owners |
+| `MAX_SOURCE_FILES` | 10000 | selected files in one expansion, counted across all owners; a file selected twice counts once |
 | `MAX_SOURCE_BYTES` | 512 MiB | one expansion, accumulated |
 
 The file-count and byte ceilings are shared across an entire expansion, not per pattern, so a Document cannot evade them
@@ -108,16 +111,10 @@ other expansion problem is attributed to its owning Document as a recoverable is
 `expandSourcePatternSets` takes every owner's patterns at once and:
 
 - sorts owners by id, so ordering is deterministic
-- caches anchor listings, so two Documents globbing the same anchor walk it once
+- caches each walk by pattern (`globCache`), so two Documents declaring the same pattern walk once; different patterns
+  that overlap walk their shared directories separately
 - hashes each unique file exactly once via a streaming SHA-256, so overlapping declarations do not multiply cost
 - attributes a failure to *every* owner that selected the failing file
 
 A zero-match glob is an error (`SOURCE_GLOB_ZERO_MATCH`), and a missing exact declaration is
 `SOURCE_EXACT_MISSING`. Silence would let knowledge claim coverage it does not have.
-
-## Review record
-
-The `runtime.schema.json` rename of `unmappedPaths` to `unreferencedPaths` was reviewed against this document and
-changes nothing here. The rename touched a `delta.compute` response field, not the path language: both published
-schemas still expose exactly one path definition, `$defs.sourcePattern`, carrying the same first-segment-versus-
-`node_modules` rule, and `assertSourcePath`, `PATH_GLOB_INVALID`, and `$defs.sourcePath` remain absent.

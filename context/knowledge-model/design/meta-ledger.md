@@ -14,6 +14,8 @@ code:
   paths:
     - packages/context/src/runtime/document.ts
     - packages/context/src/runtime/graph.ts
+    - packages/context/src/runtime/transaction.ts
+    - packages/context/src/runtime/queries.ts
     - packages/context/public/schemas/meta.schema.json
 ---
 
@@ -66,12 +68,18 @@ not look like an editorial change.
 ## Two baselines, two purposes
 
 `repository.baseline` records the Git revision and aggregate source fingerprint at the last point the Runtime could
-honestly claim the whole repository was accounted for. `deriveMeta` advances it only for `init`, or for `update` when
-*all* of these hold: repository scope, no Git mid-operation, every changed path maps to some Document's declarations, and
-history is complete — meaning no previous baseline exists at all, or the previous baseline equals HEAD, or a diff was
-supplied. A scoped update therefore leaves
-the baseline alone — claiming repository-wide freshness from a partial look would be a lie, and `delta.compute` reads
-this field to decide Light eligibility.
+honestly claim the whole repository was accounted for. `deriveMeta` always advances it for `init`, and for `update` only
+when *all* of these hold: repository scope, no Git mid-operation, history is complete — meaning no previous baseline
+exists at all, or the previous baseline equals HEAD, or a diff was supplied — and, in the candidate being committed,
+every Document's ledger `sourceFingerprint` equals its current one, so none is left pending review. A Document whose
+cited sources changed must therefore have been edited or listed in `reaffirmedDocumentIds`. Changed paths that no
+Document cites no longer matter: no recorded fingerprint covers them. A scoped update leaves the baseline alone —
+claiming repository-wide freshness from a partial look would be a lie — and `delta.compute` reads this field to decide
+Light eligibility.
+
+The gate produces an invariant that `delta.compute` relies on: the baseline never moves past a stale ledger, so every
+stale ledger is reachable from `baseline..HEAD`, and `directImpact` is the complete review queue. This holds for sources
+Git tracks; a change to an ignored file never reaches Git evidence at all.
 
 `convergence` is a size baseline written only by `init` and `prune`. `growth.measure` subtracts it from current metrics
 to show drift since the last deliberate convergence. An `update` never touches it, so growth is measured against
@@ -100,14 +108,15 @@ When Meta is required, `loadKnowledge` cross-checks:
 - for every id, recomputed front-matter and body fingerprints must equal the recorded ones
   (`META_DOCUMENT_FINGERPRINT_MISMATCH`)
 
-Source fingerprints are deliberately *not* checked here — they need filesystem expansion, so only `graph.validate`
-compares them (`META_SOURCE_FINGERPRINT_MISMATCH`). A tree can be `formalState: ready` while its source ledger is stale.
-That is a real, reachable state and it is why `graph.validate` exists as a separate capability rather than being folded
-into loading.
+Source fingerprints are deliberately *not* checked here — they need filesystem expansion, so they are compared only
+where expansion is already paid for. `graph.validate` reports each difference as the warning `DOCUMENT_REVIEW_PENDING`
+and still succeeds; `repository.inspect` freshness for selected ids and `delta.compute` compare them too. A tree can be
+`formalState: ready` while its source ledger is stale. That is a real, reachable state — the normal one in an active
+repository — and it is why the comparison lives in those capabilities rather than being folded into loading.
 
-## Effect of the glob-expansion limitation on this Context
+## Source declarations in this Context
 
-Exact `code.paths` under `packages/context/` expand and produce a non-empty `sourceFingerprint`. Globs whose first
-segment is `packages` still cannot expand in this working tree (see `repository-access.path-and-glob-safety`), so
-Documents must declare exact files rather than `packages/context/**` if they want `delta.compute` to map those files.
-Empty declarations still expand cleanly and `graph.validate` still passes; they just map nothing.
+Exact `code.paths` and globs under `packages/` both expand and produce a non-empty `sourceFingerprint`: `expandGlob`
+walks only the directories a pattern can still match and never enters `node_modules` (see
+`repository-access.path-and-glob-safety`). Documents may therefore declare a source directory such as
+`packages/context/src/**`. Documents with no declarations expand cleanly to an empty file set; they just map nothing.

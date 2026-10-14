@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+    tags: ['context--v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Node 24 is the only supported version, for development and for the plugin's Runtime alike.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Installs the pnpm pinned by the `packageManager` field.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm validate
+      - name: Two consecutive builds produce identical artifacts and reports
+        run: |
+          snapshot() {
+            (cd packages/context && find dist -type f -print0 | sort -z | xargs -0 sha256sum)
+            pnpm --silent --filter @plugydown/context run inspect
+          }
+          snapshot > first.txt
+          pnpm build
+          snapshot > second.txt
+          diff first.txt second.txt
+      - name: The shipped Runtime of each platform answers a request
+        run: |
+          for platform in claude-code codex; do
+            echo '{"protocol":"plugydown.context.runtime/v1","capability":"graph.validate","input":{}}' \
+              | node "packages/context/dist/$platform/marketplace/runtime/context/main.mjs" \
+              | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const r=JSON.parse(s);console.log(process.argv[1],r.status);process.exit(r.status==="success"?0:1)})' "$platform"
+          done
+
+  release:
+    # Publishes each platform's built marketplace, byte for byte, as the root of its own branch.
+    # Installers clone a Git ref, never an archive, and main stays free of generated artifacts.
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/context--v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: The tag names the version that was built
+        run: |
+          built=$(node -p "require('./packages/context/package.json').version")
+          test "${GITHUB_REF_NAME#context--v}" = "$built" || { echo "tag $GITHUB_REF_NAME does not match version $built"; exit 1; }
+      - name: Publish release branches
+        env:
+          REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+        run: |
+          publish() {
+            platform=$1
+            branch=release-$platform
+            work=$(mktemp -d)
+            cp -R "packages/context/dist/$platform/marketplace/." "$work/"
+            cd "$work"
+            git init -q
+            git checkout -q -b "$branch"
+            # Continue the branch's history; its tree is replaced wholesale by this build.
+            if git fetch -q --depth=1 "$REMOTE" "$branch" 2>/dev/null; then git reset -q --soft FETCH_HEAD; fi
+            git add -A
+            if git rev-parse -q --verify FETCH_HEAD >/dev/null && git diff --cached --quiet FETCH_HEAD; then
+              echo "$branch already holds this build"
+            else
+              git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+                commit -q -m "context ${GITHUB_REF_NAME#context--v} ($platform) from ${GITHUB_SHA::12}"
+              git push -q "$REMOTE" "HEAD:refs/heads/$branch"
+            fi
+            cd - >/dev/null
+          }
+          publish claude-code
+          publish codex

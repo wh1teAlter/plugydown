@@ -7,7 +7,7 @@ Codex 的插件。子包是**产品**，不是框架；框架能力属于上游 
 
 ## 技术与工具约束
 
-- Node.js `^20.19.0 || ^22.13.0 || >=23.5.0`，ESM-only；
+- Node.js `>=24.0.0`，ESM-only；
 - pnpm workspace + catalog，不使用 npm/yarn，**不引入 Turborepo**；
 - **不引入 Changesets**（当前无 npm 发布流水线可驱动）；
 - `@antfu/eslint-config` 负责 lint 与格式；

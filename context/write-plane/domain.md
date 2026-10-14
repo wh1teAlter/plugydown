@@ -18,7 +18,7 @@ code:
 # Write plane
 
 Every write in this product happens inside one transaction implemented in
-`packages/context/src/runtime/transaction.ts`. All 15 mutating filesystem calls in the Runtime live in that one file.
+`packages/context/src/runtime/transaction.ts`. Every mutating filesystem call in the Runtime lives in that one file.
 Live `context/` is never edited in place by anyone — not by a role, not by the Runtime. It is replaced by a rename.
 
 ## Why this Domain exists

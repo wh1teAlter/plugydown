@@ -47,6 +47,9 @@ Update signal. Continue a cursor only while the next page is useful.
 - `incomplete`: follow only the returned stable `nextAction`, cursor, active-run, evidence, review, or recovery need.
 - `failed`: stop the affected workflow and report diagnostics; never present it as completion.
 
+A `success` may carry warnings. `DOCUMENT_REVIEW_PENDING` means a Document's cited sources changed since it was last
+reviewed — an Update signal, never damage.
+
 A Transport failure is separate from these statuses. Preserve an existing active/recoverable run and stop; if no run
 was established, remove only this workflow's now-unused evidence/Investigation leaf. For a read, report a short failure
 rather than treating it as absent knowledge or no change.
@@ -81,7 +84,8 @@ Only explicit Init, Update, or Prune authorization permits formal writes. All th
 ```text
 resolve authorization and scope
 → collect Git evidence and deterministic signals
-→ transaction.begin
+→ Update only: review impacted Documents; keep the IDs found still accurate
+→ transaction.begin (Update passes those IDs as reaffirmedDocumentIds)
 → one Recorder edits the complete candidate
 → transaction.validate
 → semantic review of the validated candidate

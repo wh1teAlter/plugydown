@@ -85,7 +85,8 @@ fact has a named survival location — is prose only.
 
 `deriveMeta` needs a ledger entry for every Document in the candidate. It has two sources: freshly computed entries from
 the candidate expansion, and the live Meta's existing entries. The choice is made by `refreshedDocumentIds`, which returns
-Documents that are **both** authorized by scope **and** actually rewritten in the candidate (not `sameDocument`).
+Documents that are authorized by scope **and** either actually rewritten in the candidate (not `sameDocument`) **or**
+listed in the run's `reaffirmedDocumentIds`.
 
 Everything else keeps its live entry verbatim.
 
@@ -94,8 +95,15 @@ prose was not touched. If the transaction refreshed its ledger anyway, the new l
 fingerprint — and the Document would then look synchronized when in fact nobody had reconciled the prose with the new
 source. The pending impact would vanish from the next `delta.compute`, silently.
 
-By refreshing only Documents that were actually rewritten, an authorized-but-unchanged sibling keeps its stale ledger
-entry, and the next delta still reports it as impacted. Staleness is preserved rather than laundered.
+By refreshing only Documents that were rewritten or explicitly reaffirmed, an authorized-but-unchanged sibling keeps its
+stale ledger entry, and the next delta still reports it as impacted. Staleness is preserved rather than laundered. The
+Runtime never infers a reaffirmation: `reaffirmedDocumentIds` is the caller saying it checked, and the Runtime cannot
+verify that — see `authority-workflow.enforcement-boundary`.
+
+The same rule gates the repository baseline. `deriveMeta` advances it only when no Document is left pending review —
+every ledger's `sourceFingerprint` equals its current one — so an untouched stale sibling pins the baseline in place
+instead of dropping out of later deltas once the history before the new revision is gone. See
+`knowledge-model.meta-ledger` for the full set of conditions.
 
 If a required ledger entry cannot be found from either source, `deriveMeta` raises `CANDIDATE_LEDGER_INCOMPLETE` — it
 refuses rather than inventing an entry. This is a **defensive guard, not a reachable outcome** on the obvious route: the
@@ -104,3 +112,4 @@ scope check runs before `deriveMeta`, so a scoped update that introduces a Docum
 
 Validation then re-checks the derived result: for every refreshed id, the Meta entry written into the candidate must match
 the freshly recomputed source fingerprint, or the outcome is `candidate_edit_required` with `CANDIDATE_SOURCE_STALE`.
+A reaffirmed id outside the authorized set is never refreshed, so listing one settles nothing.

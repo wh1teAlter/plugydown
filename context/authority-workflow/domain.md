@@ -11,6 +11,7 @@ relations:
 code:
   paths:
     - packages/context/src/skills/context/SKILL.md
+    - packages/context/src/commands/update.md
 ---
 
 # Authority workflow
@@ -32,6 +33,8 @@ The prose lives in:
 - `authority-workflow.roles-and-briefs` — separation of duties, the Role Brief, and the write contract.
 - `authority-workflow.scratch-lifecycle` — the five scratch collections, naming, and ownership.
 - `authority-workflow.enforcement-boundary` — the explicit list of what the Runtime enforces versus what is convention.
+- `authority-workflow.describe-mechanisms-not-rewritten-values` — why Documents describe a mechanism and name where its
+  current value lives, rather than quote a value an automated step rewrites.
 
 ## The central claim
 
@@ -47,7 +50,8 @@ All three commands use the same sequence, from `SKILL.md`:
 ```
 resolve authorization and scope
 → collect Git evidence and deterministic signals
-→ transaction.begin
+→ Update only: review impacted Documents; keep the IDs found still accurate
+→ transaction.begin (Update passes those IDs as reaffirmedDocumentIds)
 → one Recorder edits the complete candidate
 → transaction.validate
 → semantic review of the validated candidate
@@ -59,4 +63,5 @@ resolve authorization and scope
 
 Of that sequence the Runtime enforces the ordering of `begin` → `validate` → `commit`, the fingerprint binding, and the
 scope check. It does not enforce that exactly one Recorder edited the candidate, that a review happened, or that the
-approver was not the author.
+approver was not the author. The Update-only review is likewise convention: the Runtime checks that each reaffirmed id
+names a Document inside the authorized scope, not that anyone read it.

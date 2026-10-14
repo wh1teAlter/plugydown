@@ -830,6 +830,12 @@
                 "runId": {
                   "type": "string",
                   "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "disposition": {
+                  "enum": [
+                    "continue",
+                    "abandon"
+                  ]
                 }
               }
             },
@@ -953,6 +959,13 @@
                     "fingerprint": {
                       "type": "string",
                       "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "sourceState": {
+                      "enum": [
+                        "unchecked",
+                        "ready",
+                        "degraded"
+                      ]
                     }
                   }
                 },
@@ -1056,7 +1069,8 @@
                         "enum": [
                           "missing",
                           "fresh",
-                          "stale"
+                          "stale",
+                          "source_unavailable"
                         ]
                       },
                       "sourceFingerprint": {
@@ -1248,8 +1262,35 @@
                         }
                       },
                       "body": {
-                        "type": "string",
-                        "minLength": 1
+                        "type": "object",
+                        "required": [
+                          "text",
+                          "startByte",
+                          "endByte",
+                          "totalBytes",
+                          "complete"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          },
+                          "startByte": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "endByte": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "totalBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "complete": {
+                            "type": "boolean"
+                          }
+                        }
                       }
                     }
                   }
@@ -1527,8 +1568,48 @@
                 "brokenEvidence": {
                   "type": "array",
                   "items": {
-                    "type": "string",
-                    "minLength": 1
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "documentId",
+                          "code",
+                          "sourcePattern"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "documentId": {
+                            "$ref": "#/$defs/documentId"
+                          },
+                          "code": {
+                            "type": "string",
+                            "pattern": "^[A-Z][A-Z0-9_]*$"
+                          },
+                          "sourcePattern": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "code",
+                          "reason"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "type": "string",
+                            "pattern": "^[A-Z][A-Z0-9_]*$"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      }
+                    ]
                   }
                 },
                 "light": {
@@ -1752,35 +1833,99 @@
                   }
                 },
                 "perDomain": {
-                  "type": "object",
-                  "propertyNames": {
-                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-                  },
-                  "additionalProperties": {
+                  "type": "array",
+                  "items": {
                     "type": "object",
                     "required": [
-                      "documentCount",
-                      "frontMatterBytes",
-                      "bodyBytes",
-                      "estimatedTokens"
+                      "id",
+                      "current",
+                      "delta"
                     ],
                     "additionalProperties": false,
                     "properties": {
-                      "documentCount": {
-                        "type": "integer",
-                        "minimum": 0
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
                       },
-                      "frontMatterBytes": {
-                        "type": "integer",
-                        "minimum": 0
+                      "current": {
+                        "type": "object",
+                        "required": [
+                          "documentCount",
+                          "frontMatterBytes",
+                          "bodyBytes",
+                          "estimatedTokens"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "documentCount": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "frontMatterBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "bodyBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "estimatedTokens": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
                       },
-                      "bodyBytes": {
-                        "type": "integer",
-                        "minimum": 0
+                      "baseline": {
+                        "type": "object",
+                        "required": [
+                          "documentCount",
+                          "frontMatterBytes",
+                          "bodyBytes",
+                          "estimatedTokens"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "documentCount": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "frontMatterBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "bodyBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "estimatedTokens": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
                       },
-                      "estimatedTokens": {
-                        "type": "integer",
-                        "minimum": 0
+                      "delta": {
+                        "type": "object",
+                        "required": [
+                          "documentCount",
+                          "frontMatterBytes",
+                          "bodyBytes",
+                          "estimatedTokens"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "documentCount": {
+                            "type": "integer"
+                          },
+                          "frontMatterBytes": {
+                            "type": "integer"
+                          },
+                          "bodyBytes": {
+                            "type": "integer"
+                          },
+                          "estimatedTokens": {
+                            "type": "integer"
+                          }
+                        }
                       }
                     }
                   }

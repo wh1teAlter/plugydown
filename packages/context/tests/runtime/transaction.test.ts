@@ -2,7 +2,7 @@ import type { RuntimeResponse } from '../../src/runtime/protocol.js'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { call, CLIENT_DOMAIN, createRepository, documentSource, porcelainModified, PROTOCOL, removeRepository, REVISION_A, REVISION_C, SERVICE_DOMAIN, SERVICE_GUIDE, transactionCall, writeGitEvidence, writeMeta } from './fixture.js'
+import { call, CLIENT_DOMAIN, createRepository, documentSource, handle, porcelainModified, PROTOCOL, removeRepository, REVISION_A, REVISION_C, SERVICE_DOMAIN, SERVICE_GUIDE, transactionCall, writeGitEvidence, writeMeta } from './fixture.js'
 
 const roots: string[] = []
 const changedService = { ...SERVICE_DOMAIN, body: '# Service\n\nChanged service behavior.\n' }
@@ -114,7 +114,7 @@ describe('transaction lifecycle', () => {
       gitEvidencePath: '.scratch/evidence/request',
       evidencePaths: ['src/service.ts'],
     })
-    const inspected = await (await import('../../src/runtime/handler.js')).handleRequest(root, { protocol: PROTOCOL, capability: 'repository.inspect', input: {} })
+    const inspected = await handle(root, { protocol: PROTOCOL, capability: 'repository.inspect', input: {} })
 
     expect(second.status).toBe('incomplete')
     expect(second.data).toMatchObject({ runId: first.runId, outcome: 'active_run', nextAction: 'resume' })
@@ -710,7 +710,7 @@ describe('transaction validation and concurrency', () => {
     const original = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
     // SERVICE_GUIDE cites src/retry.ts, so its recorded source fingerprint goes stale.
     await fs.writeFile(path.join(root, 'src/retry.ts'), 'retry C\n')
-    expect((await call(root, 'graph.validate', {})).status).toBe('failed')
+    expect((await call(root, 'graph.validate', {})).diagnostics?.map(item => item.code)).toEqual(['DOCUMENT_REVIEW_PENDING'])
 
     const gitEvidencePath = await writeGitEvidence(root, { status: porcelainModified('src/retry.ts') })
     const began = await transactionCall(root, 'begin', {
@@ -726,16 +726,21 @@ describe('transaction validation and concurrency', () => {
     const runId = dataString(began, 'runId')
 
     // No candidate edit at all: the whole point is that the Document is still accurate.
+    const first = await transactionCall(root, 'validate', { runId })
+    expect(first.data).toMatchObject({ outcome: 'ready_for_review' })
+    // Validating again — as after candidate_stale — must keep the permission granted at begin.
     const validated = await transactionCall(root, 'validate', { runId })
     expect(validated.status).toBe('success')
     expect(validated.data).toMatchObject({ outcome: 'ready_for_review' })
+    expect((await readManifest(root, runId)).reaffirmedDocumentIds).toEqual(['service.retry'])
     const committed = await transactionCall(root, 'commit', { runId, approval: approval(validated) })
     expect(committed.status).toBe('success')
 
     const after = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
     expect(after.documents['service.retry'].sourceFingerprint).not.toBe(original.documents['service.retry'].sourceFingerprint)
     expect(after.documents.service).toEqual(original.documents.service)
-    expect((await call(root, 'graph.validate', {})).status).toBe('success')
+    expect(await call(root, 'graph.validate', {})).toMatchObject({ status: 'success' })
+    expect((await call(root, 'graph.validate', {})).diagnostics).toBeUndefined()
   })
 
   it('refuses to reaffirm an unknown Document, one outside scope, or any non-update command', async () => {

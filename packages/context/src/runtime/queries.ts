@@ -311,14 +311,18 @@ export async function frontierQuery(root: string, request: RuntimeRequest): Prom
 
 export async function graphValidate(root: string): Promise<RuntimeResponse> {
   const graph = await loadKnowledge(root, undefined, { sourcePolicy: 'all-strict' })
-  const sourceLedgerDiagnostics = [...graph.ledgers.entries()].flatMap(([id, current]) => {
+  // A Document whose cited sources moved since it was last proven is pending review, not broken:
+  // the tree is still valid and every capability still works. Code changing ahead of knowledge is
+  // the normal state of an active repository, so it is reported for the next Update to settle and
+  // never fails validation. Structural and evidence faults still do.
+  const pendingReview = [...graph.ledgers.entries()].flatMap(([id, current]) => {
     const recorded = graph.meta?.documents[id]
     return recorded !== undefined && recorded.sourceFingerprint !== current.sourceFingerprint
-      ? [diagnostic('META_SOURCE_FINGERPRINT_MISMATCH', `Meta source fingerprint for "${id}" is stale.`, 'error', 'context/meta.json')]
+      ? [diagnostic('DOCUMENT_REVIEW_PENDING', `Document "${id}" cites sources that changed since it was last reviewed.`, 'warning', graph.documents.get(id)?.path ?? 'context/meta.json')]
       : []
   })
-  const diagnostics = [...issueDiagnostics(graph, true), ...sourceLedgerDiagnostics]
-  if (graph.formalState !== 'ready' || graph.sourceState !== 'ready' || sourceLedgerDiagnostics.length > 0) {
+  if (graph.formalState !== 'ready' || graph.sourceState !== 'ready') {
+    const diagnostics = [...issueDiagnostics(graph, true), ...pendingReview]
     return runtimeResponse('graph.validate', 'failed', { diagnostics: diagnostics.length === 0
       ? [diagnostic('CONTEXT_NOT_READY', 'Formal Context is absent or invalid.', 'error', 'context')]
       : diagnostics })
@@ -331,6 +335,7 @@ export async function graphValidate(root: string): Promise<RuntimeResponse> {
       relationCount: graph.relationCount,
       sourceDeclarationCount: graph.sourceDeclarationCount,
     },
+    ...(pendingReview.length === 0 ? {} : { diagnostics: pendingReview }),
   })
 }
 

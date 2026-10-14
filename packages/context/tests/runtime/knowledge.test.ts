@@ -152,7 +152,7 @@ describe('document, Meta, graph, and fingerprints', () => {
     expect((await call(root, 'graph.validate', {})).diagnostics?.some(item => item.code === 'META_DOCUMENT_FINGERPRINT_MISMATCH')).toBe(true)
   })
 
-  it('keeps source staleness separate from Formal state while full graph validation rejects it', async () => {
+  it('reports source staleness as pending review without failing graph validation', async () => {
     const root = await repository([SERVICE_DOMAIN])
     await fs.writeFile(path.join(root, 'src/service.ts'), 'changed source bytes\n')
 
@@ -162,8 +162,9 @@ describe('document, Meta, graph, and fingerprints', () => {
       data: { context: { state: 'ready', sourceState: 'ready' }, selected: [{ id: 'service', state: 'stale' }] },
     })
     expect(await call(root, 'graph.validate', {})).toMatchObject({
-      status: 'failed',
-      diagnostics: [expect.objectContaining({ code: 'META_SOURCE_FINGERPRINT_MISMATCH' })],
+      status: 'success',
+      data: { documentCount: 1 },
+      diagnostics: [{ code: 'DOCUMENT_REVIEW_PENDING', severity: 'warning', path: 'context/service/domain.md', message: expect.stringContaining('"service"') }],
     })
   })
 

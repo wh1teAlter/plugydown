@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: authority-workflow.enforcement-boundary
-description: The explicit division between rules the Runtime mechanically enforces and rules that exist only as prose convention, including the places where the shipped documentation implies enforcement that does not exist.
+description: The explicit division between rules the Runtime mechanically enforces and rules that exist only as prose convention, and the shipped prose and tests that must keep that line visible.
 kind: decision
 domain: authority-workflow
 relations:
@@ -15,6 +15,8 @@ code:
     - packages/context/src/commands/update.md
     - packages/context/README.md
     - packages/context/public/schemas/runtime.schema.json
+    - packages/context/tests/runtime/fixture.ts
+    - packages/context/src/runtime/transaction.ts
 ---
 
 # Enforcement boundary
@@ -54,9 +56,11 @@ Nothing in the Runtime checks any of these:
 - **That a review happened, or that the reviewer was not the author.** The Runtime proves only that committed bytes equal
   approved bytes.
 - **That exactly one Recorder edited the candidate.** Any number of writers, or none, produces the same result.
+- **That a reaffirmed Document was actually reviewed.** `reaffirmedDocumentIds` is the caller's statement. The Runtime
+  proves only that each id names a Document inside the authorized scope, and it never infers the list.
 - **Light versus Deep for Update.** `transaction.mode` is parsed, stored in the manifest, and read nowhere except
-  `validateBeginMode`'s gate forcing `init`/`prune` to `deep`. `delta.compute` computes `light.eligible` and the
-  transaction plane never consults it. Declaring `light` with nine active blockers is accepted.
+  `validateBeginInput`'s gate forcing `init`/`prune` to `deep`. `delta.compute` computes `light.eligible` and the
+  transaction plane never consults it. Declaring `light` while Light blockers are active is accepted.
 - **The reading ladder.** L0 → L1 → L2 → L3 is prescribed by `SKILL.md`; nothing stops a caller opening at depth 3.
 - **`.scratch/investigations/` in its entirety.** Zero Runtime representation: no constant, no validation, no cleanup.
 - **Investigation identity-hash derivation.** Prose only. (The Feedback equivalent *is* enforced.)
@@ -65,19 +69,20 @@ Nothing in the Runtime checks any of these:
 - **Prune semantic accountability** — that every removed fact has a named survival location. Only mechanical source
   coverage is checked.
 
-## Where the documentation overstates
+## Where the shipped prose and tests hold the line
 
-Recorded honestly because each is a live source of false confidence:
+Three places could give false confidence if they stopped saying what is true:
 
-1. `packages/context/src/commands/update.md` step 2 describes the Light/Deep decision as if it were a Runtime-enforced
-   invariant. It is not; see above. (The READMEs do not mention modes at all.)
-2. `packages/context/README.md` documents scratch Markdown filenames as `<short-content-hash>`. The actual rule, in
-   `SKILL.md`, `references/runtime.md`, and the code, is an identity hash over four normalized fields — explicitly not the
-   whole file. The README is simply wrong.
-3. `packages/context/public/schemas/runtime.schema.json` presents itself as the wire contract and is **not validated
-   anywhere**. No JSON-Schema validator is wired to it — `ajv` is present only as an `eslint` transitive dependency and
-   nothing routes it at these files. It has drifted from the implementation in six confirmed ways, catalogued in
-   `delivery.verification-and-gaps`. Code plus tests are the real contract.
+1. `packages/context/src/commands/update.md` step 2 says the Light/Deep choice is the caller's: the Runtime reports
+   blockers but does not enforce the mode. (The READMEs do not mention modes at all.)
+2. `packages/context/README.md` documents scratch Markdown filenames as `<short-identity-hash>`, matching `SKILL.md`,
+   `references/runtime.md`, and the code: an identity hash over a few normalized fields, explicitly not the whole file.
+3. The three published schemas, including `packages/context/public/schemas/runtime.schema.json`, are a validated
+   contract. `packages/context/tests/runtime/fixture.ts` compiles all of them with ajv 2020 in strict mode and holds
+   every Runtime response, every request the Runtime accepted, and — after each successful commit — the committed
+   `meta.json` and every Document's front matter to them. A schema that drifts from the implementation fails the test
+   that exposed it; `ajv` is a pinned catalog devDependency. The check is as wide as the suite: a response shape no test
+   produces is not compared. See `delivery.verification-and-gaps`.
 
 ## Why the split is acceptable
 
@@ -95,10 +100,3 @@ manageable limitation into an unknown one.
 Whether the Light/Deep inertness is a deliberate staging decision or an incomplete implementation is **unverified**. The
 mode is threaded all the way through parsing, the manifest type, and manifest re-validation, which is more plumbing than
 an unused field usually gets — but nothing consumes it and no comment explains why.
-
-## Review record
-
-The `runtime.schema.json` rename of `unmappedPaths` to `unreferencedPaths` was reviewed against this document and
-changes nothing here. The unvalidated-schema finding above does not name any payload field, and the rename did not add
-a validator: no JSON-Schema validator is routed at the published schemas, and `ajv` remains only an `eslint` transitive
-dependency. The three enforcement gaps stand as recorded.

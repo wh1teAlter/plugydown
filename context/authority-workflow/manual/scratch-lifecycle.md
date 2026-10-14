@@ -12,6 +12,7 @@ relations:
 code:
   paths:
     - packages/context/src/runtime/repository.ts
+    - packages/context/README.md
 ---
 
 # Scratch lifecycle
@@ -52,9 +53,9 @@ The point is that appending evidence to an existing file never forces a rename. 
 machine-enforced: `feedbackMatch` recomputes the identity and fails with `FEEDBACK_IDENTITY_INVALID` if the filename does
 not match. The Investigation half is prose only.
 
-**Documentation defect:** `packages/context/README.md` writes `<short-content-hash>` for both Feedback and Investigation
-filenames. That is wrong. `SKILL.md`, `references/runtime.md`, and the implementation all specify an identity hash over
-normalized fields and explicitly state it is not a hash of the whole file. Follow the code; the README needs fixing.
+The shipped prose agrees: `packages/context/README.md`, `SKILL.md`, and `references/runtime.md` all write
+`<short-identity-hash>` for both Feedback and Investigation filenames. A description that calls it a content hash is
+wrong; follow the code.
 
 ## Runtime representation
 
