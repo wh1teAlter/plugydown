@@ -59,18 +59,25 @@ is present. Domain Documents sort first, then by id.
 mid-segment wildcard on both sides (`packages/*/a.ts` selected by `packages/foo/**`) is missed.
 
 `requiresClosure: true` walks `requires` transitively via `requiresClosure` in `graph.ts`, recording each id's reasons —
-`selected`, or `required by <id>`. Termination depends on the acyclicity guaranteed in `knowledge-model`.
+`selected`, or `required by <id>`. Each id is expanded once, so the walk terminates even on a cycle; cycles are rejected
+by validation (`DOCUMENT_REQUIRES_CYCLE`) as a prerequisite-ordering rule, not because the walk depends on them being
+absent.
 
 ## `graph.validate`
 
 The strictest capability and the only one with just two possible statuses: `success` or `failed`. No `budget`, no
-`cursor`, no partial answer. It demands `formalState: ready`, `sourceState: ready`, and no source-ledger drift, then
-returns `contextFingerprint`, `domainCount`, `documentCount`, `relationCount`, `sourceDeclarationCount`.
+`cursor`, no partial answer. It demands `formalState: ready` and `sourceState: ready` — nothing else — then returns
+`contextFingerprint`, `domainCount`, `documentCount`, `relationCount`, `sourceDeclarationCount`.
 
-It is the only capability that compares recorded `sourceFingerprint` values against recomputed ones
-(`META_SOURCE_FINGERPRINT_MISMATCH`). Ordinary loading skips that check because it needs filesystem expansion. So a tree
-that every other capability calls ready can still fail here — that is the intended division of labour, not an
-inconsistency.
+It is the capability that reports every Document whose recorded `sourceFingerprint` differs from the recomputed one
+(`repository.inspect` freshness and `delta.compute` compare them for the Documents they look at). Ordinary loading skips
+the comparison because it needs filesystem expansion. A difference is **not a failure**: the Document is reported as the
+warning `DOCUMENT_REVIEW_PENDING`, with `path` set to that Document's path, on a response whose status is still
+`success`. Code changing ahead of knowledge is the normal state of an active repository, so the warning means the next
+Update has Documents to settle, never damage. A tree that every other capability calls ready can therefore fail here
+only through source evidence: a cited path that cannot be expanded (`sourceState: degraded`), or an expansion that
+exceeds the source resource limits (`SOURCE_FILE_LIMIT_EXCEEDED`, `SOURCE_BYTE_LIMIT_EXCEEDED`), which fails the whole
+request rather than being attributed to one Document. That is the intended division of labour, not an inconsistency.
 
 ## `growth.measure`
 

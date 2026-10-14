@@ -15,6 +15,8 @@ code:
     - packages/context/src/runtime/cli.ts
     - packages/context/src/runtime/protocol.ts
     - packages/context/src/runtime/handler.ts
+    - packages/context/src/runtime/queries.ts
+    - packages/context/src/runtime/repository.ts
     - packages/context/src/skills/context/references/runtime.md
     - packages/context/aaplugin.config.ts
 ---
@@ -34,7 +36,8 @@ pass the repository root in JSON** — `cli.ts` uses `process.cwd()`. The `aaplu
 produces `runtime/context/main.mjs`; that key must never be `agents` (Codex roles live at `runtime/agents/`).
 
 Every request carries `protocol: 'plugydown.context.runtime/v1'`, a `capability`, and `input`. Confirm both exit status
-and stdout shape. Shipped `runtime.schema.json` is unvalidated and drifted — do not treat it as the contract.
+and stdout shape. Shipped `runtime.schema.json` describes the wire shape, and the test suite holds every Runtime response
+and every accepted request to it; the code remains the final contract.
 
 ## Transport versus Runtime
 
@@ -47,8 +50,9 @@ failure.
 | Transport failure | `{transport:'plugydown.context.runtime.transport/v1', status:'failed', diagnostics}` | 1 |
 
 Only two codes reach the transport envelope: `REQUEST_SIZE_EXCEEDED` (stdin over 1 MiB) and `TRANSPORT_INVALID` (stdin
-is not strict UTF-8, or JSON that never parsed). Everything else, including every product-level failure, is a Runtime
-response with `status: 'failed'`. Transport failure is **not** a Runtime status.
+is not strict UTF-8, JSON that never parsed, or an unexpected non-`RuntimeFault` exception while handling the request).
+Everything else, including every product-level failure, is a Runtime response with `status: 'failed'`. Transport
+failure is **not** a Runtime status.
 
 ## Closed capability set
 
@@ -96,9 +100,12 @@ From the business repository root:
 
 ```sh
 git rev-parse HEAD > "$evidence_dir/head.txt"
-git status --porcelain=v2 --branch -z > "$evidence_dir/status.bin"
+git status --porcelain=v2 --branch -z --untracked-files=all > "$evidence_dir/status.bin"
 git diff --name-status -z "$baseline"...HEAD > "$evidence_dir/diff.bin"
 ```
+
+`--untracked-files=all` is required. Git's default collapses a new untracked directory to a `? dir/` record, hiding which
+files are new, and the Runtime refuses it with `GIT_STATUS_UNTRACKED_COLLAPSED`.
 
 `mid-operation.json` is exactly `{"active":false}` or
 `{"active":true,"kind":"merge|rebase|cherry-pick|revert|bisect"}`. Supply `diff.bin` only when the ledger baseline
@@ -114,9 +121,12 @@ differs from HEAD. The two `.bin` files are NUL-delimited and must not be decode
 | `commit` | `runId` plus `approval: {approved:true, candidateFingerprint, sourceEvidenceFingerprint, summary}` |
 
 Pass `reaffirmedDocumentIds` when a declared source moved but you re-read the Document and it is still correct. Without
-it there is no way to settle that ledger: no Markdown edit means no refresh, so `validate` answers `no_change` while
-`graph.validate` keeps failing. `update` only, and every id must exist and sit inside the authorized scope. Listing a
-Document does not commit you to leaving it alone — edit it if review says so, and it refreshes anyway.
+it there is no way to settle that ledger: no Markdown edit means no refresh, so with nothing else edited `validate`
+answers `no_change` while `graph.validate` keeps succeeding with a `DOCUMENT_REVIEW_PENDING` warning for it. An accurate
+Document you do not pass stays pending: it remains in later `directImpact` results and holds the repository baseline
+where it is. Pass only Documents you actually reviewed. `update` only, and every id must exist and sit inside the
+authorized scope. Listing a Document does not commit you to leaving it alone — edit it if review says so, and it
+refreshes anyway.
 
 ## Statuses
 

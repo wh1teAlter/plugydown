@@ -11,6 +11,7 @@ code:
   paths:
     - packages/context/src/runtime/document.ts
     - packages/context/src/runtime/graph.ts
+    - packages/context/src/runtime/repository.ts
 ---
 
 # Knowledge model
@@ -51,14 +52,17 @@ Exactly two levels. The Domain root may hold only `domain.md`. Category director
   (`DOMAIN_MISSING`). There is no such thing as a partially initialized Context.
 - Every non-Domain Document id must begin with `<domain-id>.`. Physical location and logical identity cannot drift.
 - Document ids are globally unique across the whole tree, not per-Domain (`DOCUMENT_ID_DUPLICATE`).
-- Symlinks anywhere in the tree are refused, not followed (`KNOWLEDGE_SYMLINK`). Same for non-regular files.
+- Symlinks anywhere in the tree are refused, not followed (`KNOWLEDGE_SYMLINK`), and so are non-regular files. The
+  exceptions are the two fixed names: a `domain.md` that is not a regular file, a symlink included, is
+  `DOCUMENT_NOT_REGULAR_FILE`, and a non-regular `meta.json` is `META_NOT_REGULAR_FILE`.
 - `meta.json` is derived by the Runtime during `transaction.validate`. A human or a role must never hand-write it; the
   Runtime overwrites it and then re-proves the result.
 
-## Self-hosting limitation
+## Self-hosting
 
-`code.paths` may name this product's source as exact files under `packages/context/`. `.git`, `.scratch`, and `context`
-are forbidden only as the first segment; nested names such as `packages/context/src/runtime/document.ts` are legal.
-Globs anchored at `packages` still fail to expand because `listAnchorFiles` walks into pnpm `node_modules` symlinks and
-hits `PATH_SYMLINK`. See `repository-access.path-and-glob-safety` for the mechanism and `knowledge-model.meta-ledger`
-for the remaining glob-expansion cost.
+`code.paths` may name this product's source as exact files or as globs under `packages/`. `.git`, `.scratch`, and
+`context` are forbidden only as the first segment; nested names such as `packages/context/src/runtime/document.ts` are
+legal. A glob such as `packages/context/src/**` expands in this working tree: `expandGlob` in
+`packages/context/src/runtime/repository.ts` walks only directories the pattern can still match and never enters
+`node_modules`, so pnpm's symlinks there neither fail the glob nor count against the file ceiling. See
+`repository-access.path-and-glob-safety` for the mechanism.

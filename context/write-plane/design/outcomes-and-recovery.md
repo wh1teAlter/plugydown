@@ -11,6 +11,7 @@ relations:
 code:
   paths:
     - packages/context/src/runtime/protocol.ts
+    - packages/context/src/runtime/transaction.ts
 ---
 
 # Transaction outcomes and recovery
@@ -48,7 +49,11 @@ is fine. Reporting it as success would hide that no knowledge change landed.
 It runs *after* the response value is built, so the response always describes the state the caller can act on.
 
 **Cleaned** on: `committed`, `candidate_completed`, `abandoned`, `no_change`, `validated` (dry run), `backup_restored`,
-`snapshot_stale`, and `mechanical_failure`.
+`snapshot_stale`, and `mechanical_failure` — with one qualification for `begin`. How much a failed `begin` removes depends
+on how far it got. If acquiring the lock fails, the Runtime removes the lock leaf and the evidence leaf. If it fails after
+the lock is held but before the run's manifest value exists, only the lock is released: it references no recoverable run,
+and releasing it avoids wedging the repository behind an owner whose manifest can never be read. The Runtime does not
+remove the evidence leaf in that case. Once the manifest exists, an expected fault takes the full cleanup above.
 
 **Preserved** on: `staged`, `ready_for_review`, `candidate_edit_required`, `candidate_stale`, `approval_mismatch`,
 `active_run`, `manual_recovery`, `no_trusted_copy`.
@@ -96,6 +101,3 @@ phases re-prove their recorded outcome against current directory facts before cl
 
 `disposition: 'abandon'` works only from `staged` or `validated` (`TRANSACTION_ABANDON_INVALID`), and refuses if a backup
 leaf already exists — that would mean the switch had begun.
-
-Note the schema drift here: `public/schemas/runtime.schema.json` documents `disposition` for resume, but that schema is
-not validated anywhere. See `delivery.verification-and-gaps`.

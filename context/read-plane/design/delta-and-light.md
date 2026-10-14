@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: read-plane.delta-and-light
-description: How delta.compute maps Git changes to Documents, expands impact along three graph edges, and reports eight Light blockers; unreferenced paths do not block Light but do block repository-baseline eligibility.
+description: How delta.compute maps Git changes to Documents, expands impact along three graph edges, and reports eight Light blockers; unreferenced paths block neither Light nor the repository baseline, and the baseline-eligibility flag is caller guidance while the commit applies its own conditions.
 kind: architecture
 domain: read-plane
 relations:
@@ -13,6 +13,8 @@ code:
   paths:
     - packages/context/src/runtime/delta.ts
     - packages/context/src/runtime/graph.ts
+    - packages/context/src/runtime/transaction.ts
+    - packages/context/src/commands/update.md
 ---
 
 # Delta and Light eligibility
@@ -40,9 +42,10 @@ a path was unreferenced; `unreferencedPaths` is the separate list for that.
 
 A path matching no declaration lands in `unreferencedPaths`. That is a forensic signal for a Recorder, not a coverage
 gap. The Runtime cannot tell whether the change is genuinely outside documented territory or whether some Document's
-declarations are incomplete; it reports the path so a Recorder can judge. Unreferenced paths do **not** block Light.
-They **do** block `repositoryBaselineEligible`. A cited file that cannot be expanded is broken evidence, which does
-block Light (`evidence is incomplete`).
+declarations are incomplete; it reports the path so a Recorder can judge. Unreferenced paths block **neither** Light
+**nor** `repositoryBaselineEligible`: no Document cites them, so no recorded fingerprint covers them and no recorded
+knowledge can have gone stale because of them. Only broken evidence and Documents left unreviewed hold things back. A
+cited file that cannot be expanded is broken evidence, which does block Light (`evidence is incomplete`).
 
 ## Impact closure
 
@@ -88,18 +91,24 @@ it does not and cannot infer task intent. A caller that asserts `intentKnown: tr
 Light-eligible answer that means nothing. This is the third and narrowest sense of "evidence" in this codebase — see
 `runtime-protocol` for all three.
 
-`repositoryBaselineEligible` is a separate, stricter flag answering whether `deriveMeta` would be allowed to advance the
-repository baseline: repository scope, no mid-operation, no broken evidence, no unreferenced paths, and
-`scopeComplete`. Note it does *not* require `intentKnown`.
+`repositoryBaselineEligible` is a separate flag, and like `light.eligible` it is guidance to the caller, not a Runtime
+precondition: `deriveMeta` in `transaction.ts` never reads it, or `scopeComplete`. A caller that heeds it treats a
+repository-scope Update as able to advance the baseline only while the flag is true — repository scope, no mid-operation,
+no broken evidence, and `scopeComplete`. Note it does *not* require `intentKnown`. The commit applies its own conditions
+whatever the flag said: repository scope, no mid-operation, history complete (the previous baseline equals HEAD, or a
+`diff.bin` was supplied), and no Document left pending review — every `directImpact` Document edited or reaffirmed, so
+that each ledger's `sourceFingerprint` equals its current one. The read cannot see whether the Update will settle every
+Document, and the commit never sees `scopeComplete`.
 
 ## Light eligibility is advisory only
 
 `delta.compute` computes `light.eligible`. **The transaction plane never reads it.** `transaction.mode` is parsed,
-stored in the manifest, and consulted in exactly one place — `validateBeginMode`, which forces `init` and `prune` to
+stored in the manifest, and consulted in exactly one place — `validateBeginInput`, which forces `init` and `prune` to
 `deep`. For `update`, both `light` and `deep` are accepted and behave identically; nothing compares the declared mode
 against the computed eligibility.
 
 So Light-vs-Deep for Update is a workflow convention enforced by whoever follows the prose in
-`packages/context/src/commands/update.md` and `SKILL.md`, not a Runtime invariant. Those files read as though the
-Runtime enforces it. It does not. The package and root READMEs do not mention modes at all.
+`packages/context/src/commands/update.md` and `SKILL.md`, not a Runtime invariant. `update.md` step 2 says so: the choice
+is the caller's, and the Runtime reports blockers but does not enforce the mode. The package and root READMEs do not
+mention modes at all.
 `authority-workflow.enforcement-boundary` lists this alongside the other convention-only rules.

@@ -12,6 +12,7 @@ code:
     - packages/context/src/internal-roles/investigator.md
     - packages/context/src/internal-roles/recorder.md
     - packages/context/src/internal-roles/reflector.md
+    - packages/context/src/commands/update.md
 ---
 
 # Roles and Briefs
@@ -77,6 +78,18 @@ supports a durable statement at all. It is instructed to record invariants, caus
 procedures, and easy-to-misuse boundaries — and explicitly *not* source listings, task narration, per-change history, raw
 Feedback, or generic explanation.
 
+Three further Recorder rules keep the ledger honest:
+
+- `code.paths` is declared as the sources a Document's statements rest on, not as coverage, and source directories
+  (`packages/foo/src/**`) are preferred to package roots: generated output is usually Git-ignored, so its changes never
+  reach the evidence that shows a Document went stale.
+- Values an automated step rewrites — release versions, hashes, counts, generated identifiers — are not recited. The
+  Document describes the mechanism and names where the current value lives. A `reference` whose purpose is exact current
+  facts, such as capability names, required fields, or error codes, still quotes them exactly. See
+  `authority-workflow.describe-mechanisms-not-rewritten-values`.
+- A Document is never edited only to refresh its ledger. A reviewed, still-accurate Document is settled through
+  `reaffirmedDocumentIds`; an edit made for the bookkeeping is the per-change history excluded above.
+
 For `converge`, every affected fact must be accounted for: origin, survival location, uniqueness, relation changes, source
 coverage, verification. The rule against hiding growth by moving knowledge outside the retrieval path is why convergence
 cannot be satisfied by relocating prose into files the reading ladder never reaches.
@@ -104,8 +117,12 @@ review.
   boundaries, runtime and data flow, integrations, build/test/release, and cross-cutting contracts. Insufficient
   repository-wide evidence is reported as `incomplete`, never as a partial initialization.
 - **Update** chooses Light or Deep from the `delta.compute` blockers plus whether intent, mapping, impact closure, Domain
-  shape, cross-Domain contracts, and scope are all known. Feedback promotion happens only here, only for ids the user
-  authorized in this Update.
+  shape, cross-Domain contracts, and scope are all known. Before `begin`, every `directImpact` Document gets exactly one
+  verdict with evidence — from complementary Investigators in Deep, from the Main Assistant in Light: `accurate` or
+  `needs edit`. `accurate` requires re-reading the Document's cited sources as they are now; a reviewer who could not
+  check says so rather than guessing, because the verdict settles the ledger as reviewed. Only the `accurate` ids are
+  passed as `reaffirmedDocumentIds`, never `directImpact` wholesale, and the Recorder's `synchronize` Brief names the
+  `needs edit` Documents. Feedback promotion happens only here, only for ids the user authorized in this Update.
 - **Prune** is always Deep, treats `growth.measure` results only as review candidates, and requires an explicit survival
   location for every merge, move, rewrite, split, or deletion. It must not create an archive, remove content by age, or
   promote Feedback.

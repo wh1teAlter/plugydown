@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: delivery.build-and-acceptance
-description: Operator SOP for the six AGENTS.md gates, the dead `verify` script, and dual-build checksum of `packages/context/dist/`.
+description: Operator SOP for the six AGENTS.md gates, the dual-build checksum of `packages/context/dist/`, and what CI already runs for you.
 kind: guide
 domain: delivery
 relations:
@@ -16,19 +16,15 @@ code:
     - packages/context/package.json
     - packages/context/vitest.config.ts
     - AGENTS.md
+    - .github/workflows/ci.yml
 ---
 
 # Build and acceptance
 
-How to run the gates. Why they exist, the schema drift, and the filtered-suite gaps live in
+How to run the gates. Why they exist, how the published schemas are validated, CI, and the filtered-suite gaps live in
 `delivery.verification-and-gaps`. Packaging and the single-builder invariant live in `delivery.packaging`.
 
 Install with `pnpm install --frozen-lockfile`.
-
-## Do not run `pnpm verify`
-
-Root `verify` is `pnpm -r --if-present run verify`. No package defines `verify`, so `--if-present` makes this a silent
-success. A green `verify` verified nothing.
 
 ## The six gates
 
@@ -69,10 +65,12 @@ Byte-equivalence is an acceptance criterion. Run `pnpm build` twice and compare 
 (gitignored). Mismatch is a product failure, not a flake. Generated output must not contain timestamps or absolute
 paths.
 
-There is no CI. Nothing re-runs this for you.
+CI runs this for you on pushes to `main` and `dev`, on pull requests, and on release tags: the gates up to `validate`,
+then a second build whose `dist/` file hashes and `pnpm inspect` report are diffed against the first. A local double
+build is still the quickest way to reproduce a CI mismatch.
 
 ## What this SOP does not cover
 
-The unvalidated, drifted `runtime.schema.json`, the filtered-suite and coverage gaps, the exact-version catalog policy
-(`@aaplugin/*` at `1.0.0-beta.3`), and the absence of a release script are recorded in
-`delivery.verification-and-gaps`. Do not treat a green `pnpm check` as having closed those.
+The filtered-suite and coverage gaps, how the published schemas are validated, the exact-version catalog policy
+(`@aaplugin/*` at `1.0.0-beta.3`), and the release job that publishes the per-platform release branches are recorded
+in `delivery.verification-and-gaps`. Do not treat a green `pnpm check` as having closed those.
