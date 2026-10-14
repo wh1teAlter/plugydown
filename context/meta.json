@@ -65,7 +65,7 @@
     "authority-workflow.enforcement-boundary": {
       "bodyFingerprint": "a489537fcc98ae188a45b56372dd572f99c896fdbece0cdf8bee3d1e3f0f4997",
       "frontMatterFingerprint": "08e4621d0ee43c7674023dc6f4192e31dd791dd4b39830dea9436730cea54931",
-      "sourceFingerprint": "bcd0cdb5293f255a4b9b1dc558baf440f9b92497578b43b51ef7da09018ef747"
+      "sourceFingerprint": "afa81f4bc7c38c993c0ed3d7a8a62701a5751c3fd9a44f56003259d1fa500f56"
     },
     "authority-workflow.roles-and-briefs": {
       "bodyFingerprint": "c250d62b25e23009fd06aedd05dc0cf8d85bfecdf58d71da5f8c60991cc60e6a",
@@ -75,32 +75,32 @@
     "authority-workflow.scratch-lifecycle": {
       "bodyFingerprint": "2f9a355795b74ee2d7c1d23731b7dac73ad457c7e65942fee44fa3d6aa513def",
       "frontMatterFingerprint": "023f3a3cff53aebef4250c9e85fa97ab1d949f34e56cc5fd7756aaaed6393752",
-      "sourceFingerprint": "dd6eddce42a6c7efa6e5655318ab8f84114a439d4906fa17e9d213343bee6109"
+      "sourceFingerprint": "3cb5bc1d48bd66a2ee661c2c366e176952d67544f953e16cc839e07ad7c4b9e3"
     },
     "delivery": {
-      "bodyFingerprint": "b42934a3ee03c4aeaf700ff86c221c101e680aafa41a0025f19842dff1b24bfb",
+      "bodyFingerprint": "e0b48c943eba83e77e74b9d7691d6e9edf8efae8bb2379794b42dbe5ca975ce2",
       "frontMatterFingerprint": "bf72f663e5984d1bad7d769d37917104a5b2bcea2e711c01d409dd5da6fa1ab2",
-      "sourceFingerprint": "c469df3d87e401a626450b0d7480f3b162ff10301552f81f2a12fcc12dcac8b0"
+      "sourceFingerprint": "cef1c88379751650189cb5f82aae9c95f92e742e8e355898bfc79136131b0313"
     },
     "delivery.build-and-acceptance": {
       "bodyFingerprint": "947d836ca0d7b1ce0ed1eb4d1d227bada3fc8c3e76a375f16ba69cc5df1045d6",
       "frontMatterFingerprint": "8fcd5ae9b033ab47afc201121319046ed47ba829b5881a69870cd44c862d713e",
-      "sourceFingerprint": "f78e9e0391f124156b31528013d7845538ddfd8cc1393b8b8773e51967ee5865"
+      "sourceFingerprint": "a4f547c0f6838b37f5b001322ef2080d51e4d9a2e4fd0a2ef57a59336597cb41"
     },
     "delivery.ownership-boundary": {
       "bodyFingerprint": "dfeb2807bc1306bda95c6ac9ce9c1bdb999968ef088cb14c095d6e4275ad3174",
       "frontMatterFingerprint": "552a2ee322a5180cc02bdeff493844b34d8edf6a2a6876a91574e79cd14e5bf7",
-      "sourceFingerprint": "f73f0f12f6502aa94303f1414c37aaceadcbe0acffdf3cfc783d5f01f0aa924b"
+      "sourceFingerprint": "34cf9f92071374eb824a1a0dc965b9e2e67590f003031ab92521fd99160b3ed9"
     },
     "delivery.packaging": {
       "bodyFingerprint": "968786c306fc5ca0113aec4d369d01c512a84090e09bed099137e059a5976f59",
       "frontMatterFingerprint": "c0771e9fd053499cc51451334ac776c93f1cfd0fd4cd2032a58770bf12dfc9a8",
-      "sourceFingerprint": "c469df3d87e401a626450b0d7480f3b162ff10301552f81f2a12fcc12dcac8b0"
+      "sourceFingerprint": "cef1c88379751650189cb5f82aae9c95f92e742e8e355898bfc79136131b0313"
     },
     "delivery.verification-and-gaps": {
-      "bodyFingerprint": "d7ebfd409af595dbd40d698f14fd5b51474dee6a096f288eb0067ee1b117e28f",
+      "bodyFingerprint": "76b9e44f0f0bb68350ac98eaefcac12ae7dbea8a97994b3ec38ab7be1fee9296",
       "frontMatterFingerprint": "04655daef05724c2e8c5c8df36a7fad9b98560624f79b094b5de4693cdd8a6d8",
-      "sourceFingerprint": "5a817e3646b1330dc01d27e137f160a74dd6f67b0abb1f832eb3bdd6ce8bb921"
+      "sourceFingerprint": "3a8851e0785f5143e3eec2597a235901e1260c9a1f34045ba3543d715f79950d"
     },
     "knowledge-model": {
       "bodyFingerprint": "51317d6462ae0d562c8d6a26ab5f7be96d06fe15c4431e9479a6c06e0bb6a634",
@@ -165,7 +165,7 @@
     "runtime-protocol.determinism": {
       "bodyFingerprint": "f713d7f3ca714d47c97d5729cb0961152b87c7ad4f32c2f094fe80a91fbf5b3b",
       "frontMatterFingerprint": "3c465a7cbf680e6ef4505cdf250399b798bec7bcf67e4b8b8a17a31ab6f36838",
-      "sourceFingerprint": "fc59931a61711937826e44aac5c7f69c0cee957c0d046b76b83866de00556a30"
+      "sourceFingerprint": "381aa0afeb4a49a77a27d1735c63d7aef589e070b56bc2e8b876602e4afb3a91"
     },
     "runtime-protocol.wire-contract": {
       "bodyFingerprint": "f131fa5bfe37676a10176617bd976e255a19a4ef62e22f9756d581a2b1e8789e",
@@ -196,8 +196,8 @@
   "fingerprintVersion": "1",
   "repository": {
     "baseline": {
-      "revision": "515aa1bbe67c2f413e4005757329eb8dd439750d",
-      "sourceFingerprint": "6f51779e7bb4b1b14d18c91b74ed7185439af4a37958b7f13c7c47ef673fe8a6"
+      "revision": "d4442938aa1b868481c4a8959fff22a097c16b7f",
+      "sourceFingerprint": "781fe14aba2d53b05266dfee6b66434c955bfc664e7eef7d31bd50c990e92c79"
     }
   },
   "runtimeProtocol": "plugydown.context.runtime/v1",

@@ -33,13 +33,17 @@ Note that `check` does **not** include `validate` or `inspect`. Those are separa
 ## CI
 
 `.github/workflows/ci.yml` triggers on pushes to `main` and `dev`, on pull requests, and on `context--v*` tags. Its
-`verify` job installs with `--frozen-lockfile` and runs lint, typecheck, test, build, and validate on Node 20.19.0,
-22.13.0, and 24.x, without `fail-fast`, so one Node version failing does not hide the others.
+`verify` job installs with `--frozen-lockfile` and runs lint, typecheck, test, build, and validate on Node 24, the
+only supported version. It is a single job, with no version matrix.
 
 It then proves the build deterministic. It records the SHA-256 of every file under `packages/context/dist` together with
 the `pnpm inspect` report, builds again, records both again, and diffs the two records. Any difference fails the job.
-This is the byte-equivalence acceptance criterion from `AGENTS.md` enforced mechanically, on every run and every Node
-version, rather than observed once.
+This is the byte-equivalence acceptance criterion from `AGENTS.md` enforced mechanically, on every run, rather than
+observed once.
+
+Last, a smoke step sends a `graph.validate` request to each platform's built Runtime
+(`dist/<platform>/marketplace/runtime/context/main.mjs`) and fails unless it answers `success`. The tests exercise the
+Runtime as source; this step exercises the bundle that actually ships.
 
 ### The release job
 

@@ -15,7 +15,7 @@ code:
 
 A pnpm monorepo with one package, `@plugydown/context`, which AAPlugin builds into four artifacts: a plugin and a
 marketplace entry for each of Claude Code and Codex. Root package is `plugydown-workspace`, private, ESM, pnpm 10.34.5,
-Node `^20.19.0 || ^22.13.0 || >=23.5.0`.
+Node 24 or later, for development and for the plugin's Runtime alike.
 
 ## What lives here
 
@@ -51,10 +51,10 @@ currently no npm publish pipeline for Changesets to drive).
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs lint, typecheck, test, build, and validate on Node 20.19.0, 22.13.0, and 24.x for every
-push to `main` or `dev`, every pull request, and every `context--v*` tag. It then builds a second time and diffs the
-hash of every `dist/` file plus the `pnpm inspect` report against the first build, so byte-equivalence is checked
-rather than assumed. On a `context--v*` tag whose version matches the built `package.json` version, a release job
-publishes each platform's built marketplace, unmodified, to the branches `release-claude-code` and `release-codex`.
-The filtered test include `tests/runtime/*.test.ts` and `coverage.enabled: false` still limit what a green run proves;
-see `delivery.verification-and-gaps`.
+`.github/workflows/ci.yml` runs lint, typecheck, test, build, and validate on Node 24 for every push to `main` or `dev`,
+every pull request, and every `context--v*` tag. It then builds a second time and diffs the hash of every `dist/` file
+plus the `pnpm inspect` report against the first build, so byte-equivalence is checked rather than assumed, and finally
+sends a request to each platform's built Runtime to confirm the shipped bundle answers. On a `context--v*` tag whose
+version matches the built `package.json` version, a release job publishes each platform's built marketplace, unmodified,
+to the branches `release-claude-code` and `release-codex`. The filtered test include `tests/runtime/*.test.ts` and
+`coverage.enabled: false` still limit what a green run proves; see `delivery.verification-and-gaps`.
