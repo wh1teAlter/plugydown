@@ -9,11 +9,10 @@ import path from 'node:path'
 import { bodyFingerprint, FINGERPRINT_VERSION, frontMatterFingerprint, serializeMeta, sourceFingerprint, TOOL_VERSION } from './document.js'
 import { graphMetrics, loadKnowledge } from './graph.js'
 import { diagnostic, isRecord, PROTOCOL, RuntimeFault, transactionResponse } from './protocol.js'
-import { aggregateSourceFingerprint, assertGitEvidencePath, assertSourcePattern, CONTEXT_ROOT, declarationMatches, expandSourcePatternSets, filesystemOperation, fingerprintTree, LOCK_ROOT, lstatRepositoryPath, MAX_JSON_TEXT_BYTES, readGitEvidence, readUtf8File, resolveRepositoryPath, resolveRepositoryRoot, RUNS_ROOT, SCRATCH_ROOT, throwFilesystemFault } from './repository.js'
+import { aggregateSourceFingerprint, assertGitEvidencePath, assertSourcePattern, CONTEXT_ROOT, declarationMatches, expandSourcePatternSets, filesystemOperation, fingerprintTree, LOCK_ROOT, LOCK_SCHEMA, lstatRepositoryPath, MAX_JSON_TEXT_BYTES, readGitEvidence, readLockOwner, readUtf8File, resolveRepositoryPath, resolveRepositoryRoot, RUNS_ROOT, SCRATCH_ROOT, throwFilesystemFault } from './repository.js'
 import { compareCodeUnits, stableJson } from './stable-json.js'
 
 const TRANSACTION_SCHEMA = 'plugydown.context.transaction/v1'
-const LOCK_SCHEMA = 'plugydown.context.lock/v1'
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
 const HASH = /^[a-f0-9]{64}$/
 const GIT_REVISION = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
@@ -39,6 +38,7 @@ interface ManifestBase {
   readonly scope: Scope
   readonly gitEvidencePath: string
   readonly evidencePaths: readonly string[]
+  readonly reaffirmedDocumentIds?: readonly string[]
   readonly snapshot: {
     readonly contextState: 'absent' | 'present'
     readonly contextFingerprint?: string
@@ -217,7 +217,7 @@ function parseManifest(value: unknown): TransactionManifest {
   if (!isRecord(value) || !exactKeys(
     value,
     ['schema', 'runId', 'command', 'mode', 'dryRun', 'scope', 'phase', 'gitEvidencePath', 'evidencePaths', 'snapshot'],
-    ['candidateFingerprint', 'sourceEvidenceFingerprint', 'approval', 'recovery'],
+    ['reaffirmedDocumentIds', 'candidateFingerprint', 'sourceEvidenceFingerprint', 'approval', 'recovery'],
   )
   || value.schema !== TRANSACTION_SCHEMA
   || typeof value.runId !== 'string' || !UUID.test(value.runId)
@@ -228,6 +228,10 @@ function parseManifest(value: unknown): TransactionManifest {
   || !['staged', 'validated', 'committing', 'committed', 'restored', 'recovery_required', 'failed'].includes(String(value.phase))
   || typeof value.gitEvidencePath !== 'string'
   || !Array.isArray(value.evidencePaths) || value.evidencePaths.length === 0 || value.evidencePaths.some(item => typeof item !== 'string')
+  || (value.reaffirmedDocumentIds !== undefined && (!Array.isArray(value.reaffirmedDocumentIds)
+    || value.reaffirmedDocumentIds.length === 0
+    || value.reaffirmedDocumentIds.some(item => typeof item !== 'string' || !DOCUMENT_ID.test(item))
+    || new Set(value.reaffirmedDocumentIds as string[]).size !== value.reaffirmedDocumentIds.length))
   || !isRecord(value.snapshot)
   || !exactKeys(value.snapshot, ['contextState', 'declaredEvidenceFingerprint', 'gitEvidenceFingerprint', 'gitRevision'], ['contextFingerprint'])
   || (value.snapshot.contextState !== 'absent' && value.snapshot.contextState !== 'present')
@@ -271,6 +275,7 @@ function parseManifest(value: unknown): TransactionManifest {
     scope: value.scope,
     gitEvidencePath: value.gitEvidencePath,
     evidencePaths: value.evidencePaths as string[],
+    ...(value.reaffirmedDocumentIds === undefined ? {} : { reaffirmedDocumentIds: value.reaffirmedDocumentIds as string[] }),
     snapshot: {
       contextState: value.snapshot.contextState,
       ...(value.snapshot.contextFingerprint === undefined ? {} : { contextFingerprint: value.snapshot.contextFingerprint as string }),
@@ -373,27 +378,8 @@ async function loadManifest(root: string, runId: string): Promise<TransactionMan
   return manifest
 }
 
-async function readLock(root: string): Promise<LockFact> {
-  try {
-    const info = await lstatRepositoryPath(root, LOCK_ROOT)
-    if (info === undefined)
-      return { state: 'absent' }
-    if (!info.isDirectory())
-      return { state: 'corrupt' }
-    const raw = JSON.parse(await readUtf8File(root, `${LOCK_ROOT}/owner.json`, MAX_JSON_TEXT_BYTES)) as unknown
-    if (!isRecord(raw) || !exactKeys(raw, ['schema', 'runId']) || raw.schema !== LOCK_SCHEMA || typeof raw.runId !== 'string' || !UUID.test(raw.runId))
-      return { state: 'corrupt' }
-    return { state: 'valid', runId: raw.runId }
-  }
-  catch (error) {
-    if (error instanceof RuntimeFault || error instanceof SyntaxError)
-      return { state: 'corrupt' }
-    throw error
-  }
-}
-
 async function classifyLock(root: string): Promise<LockFact> {
-  const lock = await readLock(root)
+  const lock = await readLockOwner(root)
   if (lock.state !== 'valid')
     return lock
   try {
@@ -423,7 +409,7 @@ async function createLock(root: string, runId: string): Promise<LockFact> {
 }
 
 async function releaseLock(root: string, runId: string): Promise<void> {
-  const lock = await readLock(root)
+  const lock = await readLockOwner(root)
   if (lock.state === 'valid' && lock.runId === runId) {
     const absolute = await resolveRepositoryPath(root, LOCK_ROOT)
     await filesystemOperation(() => fs.rm(absolute, { recursive: true }), LOCK_ROOT)
@@ -513,7 +499,7 @@ async function transactionSourceFacts(root: string, graph: KnowledgeGraph, decla
   }
 }
 
-async function validateBeginMode(input: TransactionBeginInput, live: KnowledgeGraph): Promise<void> {
+async function validateBeginMode(input: TransactionBeginInput, live: KnowledgeGraph, git: GitEvidence): Promise<void> {
   if (input.command === 'init') {
     if (input.mode !== 'deep')
       throw new RuntimeFault('TRANSACTION_MODE_INVALID', 'Init must use deep mode.')
@@ -529,6 +515,20 @@ async function validateBeginMode(input: TransactionBeginInput, live: KnowledgeGr
       throw new RuntimeFault('TRANSACTION_MODE_INVALID', 'Prune must use deep mode.')
     if (input.command === 'prune' && live.sourceState !== 'ready')
       throw new RuntimeFault('TRANSACTION_PRECONDITION_FAILED', 'Prune requires complete current source evidence.')
+  }
+  if (input.reaffirmedDocumentIds !== undefined) {
+    // Init has no prior ledger to settle and Prune already demands ready source evidence.
+    if (input.command !== 'update')
+      throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'Only update may reaffirm Documents.')
+    // A typo must fail here rather than silently reaffirm nothing, and reaffirming outside the
+    // authorized scope would settle a ledger the caller never asked to touch.
+    const authorized = authorizedDocumentIds(input.scope, live, live, new Map(), git)
+    for (const id of input.reaffirmedDocumentIds) {
+      if (!live.documents.has(id))
+        throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'A reaffirmed Document does not exist.')
+      if (!authorized.has(id))
+        throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'A reaffirmed Document lies outside the authorized scope.')
+    }
   }
 }
 
@@ -577,8 +577,8 @@ async function transactionBegin(root: string, input: TransactionBeginInput): Pro
     : input.command === 'prune'
       ? 'all-strict'
       : 'all-tolerant' })
-  await validateBeginMode(input, live)
   const git = await readGitEvidence(root, input.gitEvidencePath)
+  await validateBeginMode(input, live, git)
   const evidenceFingerprint = await declaredEvidenceFingerprint(root, input.evidencePaths)
   const runId = randomUUID()
   let acquired: LockFact
@@ -613,6 +613,9 @@ async function transactionBegin(root: string, input: TransactionBeginInput): Pro
       phase: 'staged',
       gitEvidencePath: input.gitEvidencePath,
       evidencePaths: [...input.evidencePaths].sort(compareCodeUnits),
+      ...(input.reaffirmedDocumentIds === undefined
+        ? {}
+        : { reaffirmedDocumentIds: [...input.reaffirmedDocumentIds].sort(compareCodeUnits) }),
       snapshot: {
         contextState: live.formalState === 'absent' ? 'absent' : 'present',
         ...(live.contextFingerprint === undefined ? {} : { contextFingerprint: live.contextFingerprint }),
@@ -657,7 +660,8 @@ function authorizedDocumentIds(
   scope: Scope,
   live: KnowledgeGraph,
   candidate: KnowledgeGraph,
-  candidateSources: TransactionSourceFacts,
+  /** Candidate-side resolved paths; empty at begin, where only the live tree exists. */
+  candidatePaths: ReadonlyMap<string, ReadonlySet<string>>,
   git: GitEvidence,
 ): ReadonlySet<string> {
   const documents = new Map([...live.documents, ...candidate.documents])
@@ -678,7 +682,7 @@ function authorizedDocumentIds(
     const declarations = [...(live.documents.get(id)?.codePaths ?? []), ...(candidate.documents.get(id)?.codePaths ?? [])]
     const actualPaths = new Set([
       ...(live.sources.get(id) ?? []).map(file => file.path),
-      ...(candidateSources.pathsByDocument.get(id) ?? []),
+      ...(candidatePaths.get(id) ?? []),
       ...gitPaths.filter(changed => declarations.some(declaration => declarationMatches(declaration, changed))),
     ])
     if ([...actualPaths].some(actual => scope.paths.some(pattern => declarationMatches(pattern, actual))))
@@ -712,13 +716,22 @@ function convergenceBaseline(graph: KnowledgeGraph, source: 'init' | 'prune'): C
  * live entry, so its pending source impact stays visible to the next delta instead of
  * being silently marked in sync.
  */
+/**
+ * A Document owes a fresh ledger when the Recorder edited it, which is how the Runtime tells
+ * reviewed knowledge from unreviewed — a stale ledger on an untouched Document is the only record
+ * that nobody has checked it yet. `reaffirmedDocumentIds` is the caller stating it did check, so
+ * an accurate Document whose declared sources moved can be settled without inventing an edit.
+ * The Runtime never infers this: inferring it would silently forge "reviewed".
+ */
 function refreshedDocumentIds(
   graph: KnowledgeGraph,
   live: KnowledgeGraph,
   authorized: ReadonlySet<string>,
+  reaffirmed: readonly string[] = [],
 ): ReadonlySet<string> {
+  const permitted = new Set(reaffirmed)
   return new Set([...graph.documents.keys()].filter(id => authorized.has(id)
-    && !sameDocument(live.documents.get(id), graph.documents.get(id))))
+    && (permitted.has(id) || !sameDocument(live.documents.get(id), graph.documents.get(id)))))
 }
 
 function deriveMeta(
@@ -729,7 +742,7 @@ function deriveMeta(
   git: GitEvidence,
   authorized: ReadonlySet<string>,
 ): Meta {
-  const refreshed = refreshedDocumentIds(graph, live, authorized)
+  const refreshed = refreshedDocumentIds(graph, live, authorized, manifest.reaffirmedDocumentIds)
   const documents: Record<string, DocumentLedger> = {}
   for (const id of [...graph.documents.keys()].sort(compareCodeUnits)) {
     const ledger = refreshed.has(id) ? candidateSources.ledgers.get(id) : live.meta?.documents[id]
@@ -926,7 +939,7 @@ async function transactionValidate(root: string, input: TransactionValidateInput
       }
       return candidateEditRequired(manifest, candidateDiagnostics(candidate, sources))
     }
-    const authorized = authorizedDocumentIds(manifest.scope, live, candidate, sources, git)
+    const authorized = authorizedDocumentIds(manifest.scope, live, candidate, sources.pathsByDocument, git)
     const outsideScope = scopeMutationIssues(live, candidate, authorized)
     if (outsideScope.length > 0) {
       return candidateEditRequired(manifest, [diagnostic(
@@ -958,7 +971,7 @@ async function transactionValidate(root: string, input: TransactionValidateInput
       }
       return candidateEditRequired(manifest, candidateDiagnostics(validated, finalSources))
     }
-    for (const id of refreshedDocumentIds(validated, live, authorized)) {
+    for (const id of refreshedDocumentIds(validated, live, authorized, manifest.reaffirmedDocumentIds)) {
       const recorded = validated.meta?.documents[id]
       const current = finalSources.ledgers.get(id)
       if (recorded === undefined || current === undefined || recorded.sourceFingerprint !== current.sourceFingerprint)

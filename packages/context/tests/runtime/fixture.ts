@@ -144,7 +144,9 @@ function globMatches(pattern: string, candidate: string): boolean {
 async function allFiles(root: string, relative: string): Promise<readonly string[]> {
   const result: string[] = []
   const visit = async (current: string): Promise<void> => {
-    for (const entry of await fs.readdir(path.join(root, current), { withFileTypes: true })) {
+    // A fixture may declare a glob before its anchor exists; source health is not formal Meta validity.
+    const entries = await fs.readdir(path.join(root, current), { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
       const next = `${current}/${entry.name}`
       if (entry.isDirectory())
         await visit(next)
@@ -157,7 +159,9 @@ async function allFiles(root: string, relative: string): Promise<readonly string
 }
 
 async function sourceFingerprint(root: string, declarations: readonly string[]): Promise<string> {
-  const repositoryFiles = await allFiles(root, 'src')
+  // The Runtime expands a glob under its first segment, so the fixture must walk the same anchors.
+  const anchors = [...new Set(declarations.filter(item => item.includes('*')).map(item => item.split('/')[0] as string))]
+  const repositoryFiles = (await Promise.all(anchors.map(anchor => allFiles(root, anchor)))).flat()
   const resolved = new Set<string>()
   for (const declaration of declarations) {
     if (declaration.includes('*'))

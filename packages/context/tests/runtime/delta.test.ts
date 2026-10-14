@@ -164,7 +164,7 @@ describe('delta.compute', () => {
     expect(response.data?.light).toEqual(expect.objectContaining({ eligible: false, blockers: expect.arrayContaining([blocker]) }))
   })
 
-  it('reports mid-operation, unmapped, and broken baseline evidence and refuses baseline advancement', async () => {
+  it('reports mid-operation, unreferenced, and broken baseline evidence and refuses baseline advancement', async () => {
     const root = await repository()
     const evidence = await writeGitEvidence(root, {
       revision: REVISION_C,
@@ -174,12 +174,44 @@ describe('delta.compute', () => {
     const response = await call(root, 'delta.compute', { gitEvidencePath: evidence, scope: { kind: 'repository' }, taskEvidence })
 
     expect(response.status).toBe('success')
-    expect(response.data?.unmappedPaths).toEqual(['unknown/new.ts'])
+    expect(response.data?.unreferencedPaths).toEqual(['unknown/new.ts'])
     expect(response.data?.brokenEvidence).toEqual([
       { code: 'GIT_DIFF_MISSING', reason: 'repository baseline differs from HEAD but diff.bin is missing' },
     ])
     expect(response.data?.repositoryBaselineEligible).toBe(false)
     expect(response.data?.light).toEqual(expect.objectContaining({ eligible: false }))
+  })
+
+  it('keeps Light available for changes no Document cites, but not for broken evidence', async () => {
+    const referenced = await repository()
+    await fs.writeFile(path.join(referenced, 'src/service.ts'), 'service C\n')
+    const staleAnchor = await writeGitEvidence(referenced, {
+      revision: REVISION_A,
+      diff: nameStatus([{ status: 'M', path: 'src/service.ts' }]),
+      status: porcelainModified('src/service.ts'),
+    })
+    // A cited file that moved is exactly what must force Deep.
+    await fs.rm(path.join(referenced, 'src/service.ts'))
+    const broken = await call(referenced, 'delta.compute', { gitEvidencePath: staleAnchor, scope: { kind: 'repository' }, taskEvidence })
+    expect(broken.data?.brokenEvidence).not.toEqual([])
+    expect(broken.data?.light).toEqual(expect.objectContaining({ eligible: false, blockers: ['evidence is incomplete'] }))
+
+    // Static assets and lockfiles are cited by nobody, so no recorded knowledge can be stale.
+    const root = await repository()
+    await fs.mkdir(path.join(root, 'assets'))
+    await fs.writeFile(path.join(root, 'assets/logo.png'), 'png\n')
+    await fs.writeFile(path.join(root, 'lockfile.lock'), 'lock\n')
+    const evidence = await writeGitEvidence(root, {
+      revision: REVISION_A,
+      status: `${porcelainModified('assets/logo.png')}${porcelainModified('lockfile.lock')}`,
+    })
+    const response = await call(root, 'delta.compute', { gitEvidencePath: evidence, scope: { kind: 'repository' }, taskEvidence })
+
+    expect(response.data?.unreferencedPaths).toEqual(['assets/logo.png', 'lockfile.lock'])
+    expect(response.data?.directImpact).toEqual([])
+    expect(response.data?.light).toEqual({ eligible: true, blockers: [] })
+    // The baseline still refuses: advancing it would claim coverage of paths nothing recorded.
+    expect(response.data?.repositoryBaselineEligible).toBe(false)
   })
 
   it('requires Git metadata and valid host evidence rather than executing Git or claiming no change', async () => {

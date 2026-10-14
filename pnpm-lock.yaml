@@ -7,17 +7,17 @@ settings:
 catalogs:
   default:
     '@aaplugin/extension-hooks':
-      specifier: 1.0.0-beta.1
-      version: 1.0.0-beta.1
+      specifier: 1.0.0-beta.3
+      version: 1.0.0-beta.3
     '@aaplugin/kit':
-      specifier: 1.0.0-beta.1
-      version: 1.0.0-beta.1
+      specifier: 1.0.0-beta.3
+      version: 1.0.0-beta.3
     '@aaplugin/platform-claude-code':
-      specifier: 1.0.0-beta.1
-      version: 1.0.0-beta.1
+      specifier: 1.0.0-beta.3
+      version: 1.0.0-beta.3
     '@aaplugin/platform-codex':
-      specifier: 1.0.0-beta.1
-      version: 1.0.0-beta.1
+      specifier: 1.0.0-beta.3
+      version: 1.0.0-beta.3
     '@antfu/eslint-config':
       specifier: 9.3.0
       version: 9.3.0
@@ -62,16 +62,16 @@ importers:
     devDependencies:
       '@aaplugin/extension-hooks':
         specifier: 'catalog:'
-        version: 1.0.0-beta.1(@aaplugin/kit@1.0.0-beta.1(@types/node@26.2.0))
+        version: 1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))
       '@aaplugin/kit':
         specifier: 'catalog:'
-        version: 1.0.0-beta.1(@types/node@26.2.0)
+        version: 1.0.0-beta.3(@types/node@26.2.0)
       '@aaplugin/platform-claude-code':
         specifier: 'catalog:'
-        version: 1.0.0-beta.1(@aaplugin/kit@1.0.0-beta.1(@types/node@26.2.0))
+        version: 1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))
       '@aaplugin/platform-codex':
         specifier: 'catalog:'
-        version: 1.0.0-beta.1(@aaplugin/kit@1.0.0-beta.1(@types/node@26.2.0))
+        version: 1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))
       '@types/node':
         specifier: 'catalog:'
         version: 26.2.0
@@ -84,28 +84,28 @@ importers:
 
 packages:
 
-  '@aaplugin/extension-hooks@1.0.0-beta.1':
-    resolution: {integrity: sha512-P036xUbXSCWuRu/gBhUNsAUXFtupeSfG42kqGajVp8wIkl6DttO0bdFCt2XRYb4if/bD7r1jh08WziIlO7wFgg==}
+  '@aaplugin/extension-hooks@1.0.0-beta.3':
+    resolution: {integrity: sha512-mgIcNArld+v9QmSzFJ1o3ScxzW8+9G/lx6Sv0MZbZC0kVy7GVQeZOCQvChyA/6BvHOfqJ40DGFjtSsRJ97wcnA==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
     peerDependencies:
-      '@aaplugin/kit': ^1.0.0-beta.1
+      '@aaplugin/kit': ^1.0.0-beta.3
 
-  '@aaplugin/kit@1.0.0-beta.1':
-    resolution: {integrity: sha512-/YSjpy27TYLAsVuALWzEQBzynedwBHr7tdcPsXvLv4JP2IwlXAniN5EXAH5Bchu8f/IJIPavqX90AmmUy2LytQ==}
+  '@aaplugin/kit@1.0.0-beta.3':
+    resolution: {integrity: sha512-214jJVs+Bts8F4vNb/nUpSU6runG7vSJCRYMMUyEVqtfxSni2Cejlq13PCYIoGx8ObdhNr4RUCWjCVwg2TRj/A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
     hasBin: true
 
-  '@aaplugin/platform-claude-code@1.0.0-beta.1':
-    resolution: {integrity: sha512-j5wEkzpYU3kdKdAXbtOvuKmotYyN4IRWsKwcly+MLv1BS377EmZi4tAgvFmHR8Hegrno1omutnpkn9P/zcAqZQ==}
+  '@aaplugin/platform-claude-code@1.0.0-beta.3':
+    resolution: {integrity: sha512-1uXrkMHWjMkbr3V3M+JUTRj4hZkKNzbC1tipTip/jNbhXf/RNA9Fxl3Vlcasby/irlD2xnqZFo5tnlc1e+JL/w==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
     peerDependencies:
-      '@aaplugin/kit': ^1.0.0-beta.1
+      '@aaplugin/kit': ^1.0.0-beta.3
 
-  '@aaplugin/platform-codex@1.0.0-beta.1':
-    resolution: {integrity: sha512-RXL1I0++WF1IKkI263iL0/KfyXD+gvHLYap9GPxnPIm5QLQ/N1ooyDyqkhc6ojGOMk4+Lv09B1zSM5aQxuyukw==}
+  '@aaplugin/platform-codex@1.0.0-beta.3':
+    resolution: {integrity: sha512-znTVo4YchGYgX5el6KAC2gP1IoeMDZc6Bku3MM4E1OMjN4Ifnt5PbseVGrpUdHYPGP+ld1bWnlRHVLU0m0TyFw==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
     peerDependencies:
-      '@aaplugin/kit': ^1.0.0-beta.1
+      '@aaplugin/kit': ^1.0.0-beta.3
 
   '@antfu/eslint-config@9.3.0':
     resolution: {integrity: sha512-+CIC4G6MowUl1RHiT01Ah9Obo/wwVynw7uNlN8ODwEn2opo9W1KzaatCrmu4WhGGJjOkOkyT5w7kKfQ//agHrQ==}
@@ -2057,11 +2057,11 @@ packages:
 
 snapshots:
 
-  '@aaplugin/extension-hooks@1.0.0-beta.1(@aaplugin/kit@1.0.0-beta.1(@types/node@26.2.0))':
+  '@aaplugin/extension-hooks@1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))':
     dependencies:
-      '@aaplugin/kit': 1.0.0-beta.1(@types/node@26.2.0)
+      '@aaplugin/kit': 1.0.0-beta.3(@types/node@26.2.0)
 
-  '@aaplugin/kit@1.0.0-beta.1(@types/node@26.2.0)':
+  '@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0)':
     dependencies:
       '@inquirer/prompts': 8.7.0(@types/node@26.2.0)
       commander: 14.0.1
@@ -2071,13 +2071,13 @@ snapshots:
     transitivePeerDependencies:
       - '@types/node'
 
-  '@aaplugin/platform-claude-code@1.0.0-beta.1(@aaplugin/kit@1.0.0-beta.1(@types/node@26.2.0))':
+  '@aaplugin/platform-claude-code@1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))':
     dependencies:
-      '@aaplugin/kit': 1.0.0-beta.1(@types/node@26.2.0)
+      '@aaplugin/kit': 1.0.0-beta.3(@types/node@26.2.0)
 
-  '@aaplugin/platform-codex@1.0.0-beta.1(@aaplugin/kit@1.0.0-beta.1(@types/node@26.2.0))':
+  '@aaplugin/platform-codex@1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))':
     dependencies:
-      '@aaplugin/kit': 1.0.0-beta.1(@types/node@26.2.0)
+      '@aaplugin/kit': 1.0.0-beta.3(@types/node@26.2.0)
       image-size: 2.0.2
       saxes: 6.0.0
       yaml: 2.9.0

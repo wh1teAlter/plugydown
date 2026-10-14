@@ -1,10 +1,21 @@
 {
   "name": "@plugydown/context",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Persistent repository knowledge and engineering workflows for AI coding assistants.",
+  "description": "Persistent repository knowledge and engineering workflows.",
+  "author": {
+    "name": "wh1teAlter",
+    "url": "https://github.com/wh1teAlter"
+  },
   "license": "MIT",
+  "homepage": "https://github.com/wh1teAlter/plugydown",
+  "repository": "https://github.com/wh1teAlter/plugydown",
+  "keywords": [
+    "plugydown",
+    "repository-knowledge",
+    "ai-workflow"
+  ],
   "engines": {
     "node": "^20.19.0 || ^22.13.0 || >=23.5.0"
   },
