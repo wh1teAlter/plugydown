@@ -1,0 +1,25 @@
+{
+  "agents": [
+    "./agents/investigator.md",
+    "./agents/recorder.md",
+    "./agents/reflector.md"
+  ],
+  "author": {
+    "name": "wh1teAlter",
+    "url": "https://github.com/wh1teAlter"
+  },
+  "commands": "./commands/",
+  "description": "Persistent repository knowledge and engineering workflows.",
+  "displayName": "Plugydown Context",
+  "homepage": "https://github.com/wh1teAlter/plugydown",
+  "keywords": [
+    "plugydown",
+    "repository-knowledge",
+    "ai-workflow"
+  ],
+  "license": "MIT",
+  "name": "context",
+  "repository": "https://github.com/wh1teAlter/plugydown",
+  "skills": "./skills/",
+  "version": "0.4.0"
+}

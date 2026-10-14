@@ -1,0 +1,39 @@
+{
+  "description": "Persistent repository knowledge and engineering workflows.",
+  "metadata": {
+    "pluginRoot": "./"
+  },
+  "name": "context-claude-code",
+  "owner": {
+    "name": "wh1teAlter",
+    "url": "https://github.com/wh1teAlter"
+  },
+  "plugins": [
+    {
+      "author": {
+        "name": "wh1teAlter",
+        "url": "https://github.com/wh1teAlter"
+      },
+      "category": "Developer Tools",
+      "description": "Persistent repository knowledge and engineering workflows.",
+      "homepage": "https://github.com/wh1teAlter/plugydown",
+      "keywords": [
+        "plugydown",
+        "repository-knowledge",
+        "ai-workflow"
+      ],
+      "license": "MIT",
+      "name": "context",
+      "repository": "https://github.com/wh1teAlter/plugydown",
+      "source": "./",
+      "strict": true,
+      "tags": [
+        "documentation",
+        "developer-tools",
+        "ai-workflow"
+      ],
+      "version": "0.4.0"
+    }
+  ],
+  "version": "0.4.0"
+}
