@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+    tags: ['context--v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor of each range in `engines`, plus the current LTS.
+        node: [20.19.0, 22.13.0, 24.x]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm validate
+      - name: Two consecutive builds produce identical artifacts and reports
+        run: |
+          snapshot() {
+            (cd packages/context && find dist -type f -print0 | sort -z | xargs -0 sha256sum)
+            pnpm --silent --filter @plugydown/context run inspect
+          }
+          snapshot > first.txt
+          pnpm build
+          snapshot > second.txt
+          diff first.txt second.txt
