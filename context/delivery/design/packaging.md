@@ -13,7 +13,7 @@ code:
   paths:
     - packages/context/aaplugin.config.ts
     - packages/context/package.json
-    - .github/workflows/ci.yml
+    - .github/workflows/release.yml
 ---
 
 # Packaging
@@ -110,5 +110,5 @@ still produces the hint, and `repository.inspect` is what discovers the problem.
 
 `public/schemas/` is copied verbatim into the artifact: `document.schema.json`, `meta.schema.json`, and
 `runtime.schema.json`. All three are held to the implementation by the test suite; see `delivery.verification-and-gaps`.
-The built marketplace for each host reaches installers as a Git branch published by CI, not as a registry package or an
-archive; that job is also described there.
+The built marketplace for each host reaches installers as a Git branch published by the hand-started release workflow,
+not as a registry package or an archive; that workflow is also described there.

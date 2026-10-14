@@ -17,7 +17,7 @@ Recorder 是 transaction candidate 的唯一语义作者；Main Assistant 负责
 
 ## 安装
 
-每个 `context--v*` tag 由 CI 验证后，把两个平台的构建产物原样发布到各自的 release 分支。
+每次发布都把两个平台的构建产物原样推送到各自的 release 分支，发布流程见仓库根目录 README。
 
 Claude Code：
 

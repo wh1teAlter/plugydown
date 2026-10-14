@@ -9,6 +9,7 @@ code:
     - packages/context/aaplugin.config.ts
     - packages/context/package.json
     - .github/workflows/ci.yml
+    - .github/workflows/release.yml
 ---
 
 # Delivery
@@ -21,8 +22,8 @@ Node 24 or later, for development and for the plugin's Runtime alike.
 
 - `delivery.packaging` — the one builder, dual-platform emission, role delivery per host, and the session-start hook.
 - `delivery.ownership-boundary` — what AAPlugin owns, the eight prohibitions, and the capability-gap procedure.
-- `delivery.verification-and-gaps` — the verification gate, CI and the release job, the dependency policy, how the
-  published schemas are validated, and what the repository does not do.
+- `delivery.verification-and-gaps` — the verification gate, CI and the release workflow, the dependency policy, how
+  the published schemas are validated, and what the repository does not do.
 - `delivery.build-and-acceptance` — the operator SOP for the six gates, how CI runs them, and dual-build checksum.
 
 ## One builder, no exceptions
@@ -37,7 +38,7 @@ one code path from source to artifact.
 ## Both packages are private
 
 Root and `@plugydown/context` are both `"private": true`. Nothing here publishes to a registry; installers clone a Git
-ref instead, from the release branches CI publishes (see below).
+ref instead, from the release branches the release workflow publishes (see below).
 
 ## The engineering constitution
 
@@ -51,10 +52,14 @@ currently no npm publish pipeline for Changesets to drive).
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs lint, typecheck, test, build, and validate on Node 24 for every push to `main` or `dev`,
-every pull request, and every `context--v*` tag. It then builds a second time and diffs the hash of every `dist/` file
-plus the `pnpm inspect` report against the first build, so byte-equivalence is checked rather than assumed, and finally
-sends a request to each platform's built Runtime to confirm the shipped bundle answers. On a `context--v*` tag whose
-version matches the built `package.json` version, a release job publishes each platform's built marketplace, unmodified,
-to the branches `release-claude-code` and `release-codex`. The filtered test include `tests/runtime/*.test.ts` and
-`coverage.enabled: false` still limit what a green run proves; see `delivery.verification-and-gaps`.
+`.github/workflows/ci.yml` only checks and never publishes. It runs lint, typecheck, test, build, and validate on
+Node 24 for every push to `main` or `dev` and every pull request. It then builds a second time and diffs the hash of
+every `dist/` file plus the `pnpm inspect` report against the first build, so byte-equivalence is checked rather than
+assumed, and finally sends a request to each platform's built Runtime to confirm the shipped bundle answers.
+
+Publishing is the separate `.github/workflows/release.yml`, started by hand on `main`. It re-runs every CI check,
+publishes each platform's built marketplace, unmodified, to the branches `release-claude-code` and `release-codex`, then
+tags `context--v<version>` and creates a GitHub Release.
+
+The filtered test include `tests/runtime/*.test.ts` and `coverage.enabled: false` still limit what a green run proves;
+see `delivery.verification-and-gaps`.
