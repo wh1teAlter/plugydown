@@ -124,6 +124,75 @@ describe('delta.compute', () => {
     expect(JSON.stringify(later.data?.directImpact)).not.toContain('"service"')
   })
 
+  async function repositoryUpdate(root: string, options: {
+    readonly diff: readonly { readonly status: string, readonly path: string }[]
+    readonly reaffirmedDocumentIds?: readonly string[]
+  }): Promise<{ readonly baseline: string }> {
+    const evidence = await writeGitEvidence(root, { id: 'update', revision: REVISION_C, diff: nameStatus(options.diff) })
+    const began = await transactionCall(root, 'begin', {
+      command: 'update',
+      mode: 'deep',
+      dryRun: false,
+      scope: { kind: 'repository' },
+      gitEvidencePath: evidence,
+      evidencePaths: ['src/service.ts'],
+      ...(options.reaffirmedDocumentIds === undefined ? {} : { reaffirmedDocumentIds: options.reaffirmedDocumentIds }),
+    })
+    const runId = began.data?.runId as string
+    await fs.writeFile(path.join(root, began.data?.candidatePath as string, SERVICE_DOMAIN.relativePath), documentSource({
+      ...SERVICE_DOMAIN,
+      body: '# Service\n\nService behavior synchronized at revision C.\n',
+    }))
+    const validated = await transactionCall(root, 'validate', { runId })
+    const committed = await transactionCall(root, 'commit', {
+      runId,
+      approval: {
+        approved: true,
+        candidateFingerprint: validated.data?.candidateFingerprint,
+        sourceEvidenceFingerprint: validated.data?.sourceEvidenceFingerprint,
+        summary: 'Repository-scope synchronization.',
+      },
+    })
+    expect(committed.status).toBe('success')
+    const meta = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
+    return { baseline: meta.repository.baseline.revision }
+  }
+
+  it('does not advance the baseline past a Document a repository-scope Update left unreviewed', async () => {
+    const root = await repository()
+    await fs.writeFile(path.join(root, 'src/service.ts'), 'service C\n')
+    await fs.writeFile(path.join(root, 'src/retry.ts'), 'retry C\n')
+    const changes = [{ status: 'M', path: 'src/service.ts' }, { status: 'M', path: 'src/retry.ts' }]
+
+    // Only the Domain document is synchronized; service.retry cites a changed file but is untouched.
+    const after = await repositoryUpdate(root, { diff: changes })
+    expect(after.baseline).toBe(REVISION_A)
+
+    // Had the baseline moved to C, this diff would be empty and service.retry would vanish from delta.
+    const later = await writeGitEvidence(root, { id: 'after-partial', revision: REVISION_C, diff: nameStatus(changes) })
+    const delta = await call(root, 'delta.compute', { gitEvidencePath: later, scope: { kind: 'repository' }, taskEvidence })
+    expect((delta.data?.directImpact as Array<{ documentId: string }>).map(item => item.documentId)).toEqual(['service.retry'])
+  })
+
+  it('advances the baseline once every impacted Document is settled, despite unreferenced changes', async () => {
+    const root = await repository()
+    await fs.writeFile(path.join(root, 'src/service.ts'), 'service C\n')
+    await fs.writeFile(path.join(root, 'src/retry.ts'), 'retry C\n')
+    await fs.mkdir(path.join(root, 'assets'))
+    await fs.writeFile(path.join(root, 'assets/logo.png'), 'png\n')
+
+    const after = await repositoryUpdate(root, {
+      diff: [{ status: 'M', path: 'src/service.ts' }, { status: 'M', path: 'src/retry.ts' }, { status: 'A', path: 'assets/logo.png' }],
+      reaffirmedDocumentIds: ['service.retry'],
+    })
+    expect(after.baseline).toBe(REVISION_C)
+
+    const later = await writeGitEvidence(root, { id: 'after-full', revision: REVISION_C })
+    const delta = await call(root, 'delta.compute', { gitEvidencePath: later, scope: { kind: 'repository' }, taskEvidence })
+    expect(delta.data?.directImpact).toEqual([])
+    expect(delta.data?.light).toEqual({ eligible: true, blockers: [] })
+  })
+
   it('parses NUL-safe committed, worktree, rename, and untracked evidence', async () => {
     const root = await repository()
     await fs.writeFile(path.join(root, 'src/retry.ts'), 'changed\n')
@@ -210,8 +279,8 @@ describe('delta.compute', () => {
     expect(response.data?.unreferencedPaths).toEqual(['assets/logo.png', 'lockfile.lock'])
     expect(response.data?.directImpact).toEqual([])
     expect(response.data?.light).toEqual({ eligible: true, blockers: [] })
-    // The baseline still refuses: advancing it would claim coverage of paths nothing recorded.
-    expect(response.data?.repositoryBaselineEligible).toBe(false)
+    // Nor do they pin the baseline: no recorded fingerprint covers them, so passing them claims nothing.
+    expect(response.data?.repositoryBaselineEligible).toBe(true)
   })
 
   it('requires Git metadata and valid host evidence rather than executing Git or claiming no change', async () => {
