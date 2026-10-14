@@ -15,6 +15,42 @@ Plugydown Context 为 AI 编码助手提供可路由、可验证、可收敛的�
 产品同时交付 Claude Code 与 Codex。Investigator 建立工程事实，Reflector 整理可复用的临时反馈，
 Recorder 是 transaction candidate 的唯一语义作者；Main Assistant 负责授权边界和最终批准。
 
+## 安装
+
+每个 `context--v*` tag 由 CI 验证后，把两个平台的构建产物原样发布到各自的 release 分支。
+
+Claude Code：
+
+```bash
+claude plugin marketplace add wh1teAlter/plugydown#release-claude-code
+claude plugin install context@context-claude-code
+```
+
+Codex：
+
+```bash
+codex plugin marketplace add wh1teAlter/plugydown --ref release-codex
+codex plugin add context@context-codex
+```
+
+升级只在版本号变化时生效：Claude Code 先 `claude plugin marketplace update context-claude-code` 再
+`claude plugin update context@context-claude-code`，然后重启会话。
+
+在业务仓库中使用前：
+
+- Node.js `^20.19.0 || ^22.13.0 || >=23.5.0`，Runtime 以仓库根为 cwd 运行，请在仓库根启动会话；
+- 把 `.scratch/` 加入 `.gitignore`——它保存事务临时态与本地 Feedback，不应入库；
+- `context/` 应当入库，它是知识本体；
+- 首次运行 `init` 建立知识树，此后在持久工程变化后运行 `update`。
+
+使用边界：
+
+- `code.paths` 只声明受版本控制的源；被 Git 忽略的文件（如构建产物）的变化不会出现在 Git 证据里，
+  Runtime 无法据此发现知识失效。monorepo 中声明 `packages/foo/src/**`，而不是包根；
+- 单次调用最多展开 10,000 个源文件、512 MiB；
+- Runtime 只证明字节与批准一致，无法证明复核真的发生——复核由工作流和 Investigator 审查保证；
+- 长期未处理的待复核 Document 会让 repository baseline 停住，定期运行 repository 范围的 `update` 即可。
+
 ## 正式知识
 
 ```text
