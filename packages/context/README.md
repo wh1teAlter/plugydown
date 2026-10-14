@@ -38,7 +38,7 @@ codex plugin add context@context-codex
 
 在业务仓库中使用前：
 
-- Node.js `^20.19.0 || ^22.13.0 || >=23.5.0`，Runtime 以仓库根为 cwd 运行，请在仓库根启动会话；
+- Node.js 24 或更高版本（Runtime 使用 PATH 中的 `node`）。Runtime 以仓库根为 cwd 运行，请在仓库根启动会话；
 - 把 `.scratch/` 加入 `.gitignore`——它保存事务临时态与本地 Feedback，不应入库；
 - `context/` 应当入库，它是知识本体；
 - 首次运行 `init` 建立知识树，此后在持久工程变化后运行 `update`。

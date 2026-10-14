@@ -19,8 +19,7 @@ pnpm test
 pnpm build
 ```
 
-开发要求 Node.js `^22.13.0 || >=24.0.0` 与 pnpm 10（lint 工具链需要 Node 22 起才有的 `Set` 方法）。插件
-Runtime 本身支持 `^20.19.0 || ^22.13.0 || >=23.5.0`，CI 在每个范围的下限上验证它。
+要求 Node.js 24 或更高版本与 pnpm 10。开发与插件 Runtime 使用同一要求，CI 在 Node 24 上验证。
 
 ## 约定
 
