@@ -726,9 +726,13 @@ describe('transaction validation and concurrency', () => {
     const runId = dataString(began, 'runId')
 
     // No candidate edit at all: the whole point is that the Document is still accurate.
+    const first = await transactionCall(root, 'validate', { runId })
+    expect(first.data).toMatchObject({ outcome: 'ready_for_review' })
+    // Validating again — as after candidate_stale — must keep the permission granted at begin.
     const validated = await transactionCall(root, 'validate', { runId })
     expect(validated.status).toBe('success')
     expect(validated.data).toMatchObject({ outcome: 'ready_for_review' })
+    expect((await readManifest(root, runId)).reaffirmedDocumentIds).toEqual(['service.retry'])
     const committed = await transactionCall(root, 'commit', { runId, approval: approval(validated) })
     expect(committed.status).toBe('success')
 

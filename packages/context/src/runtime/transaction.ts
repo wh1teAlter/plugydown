@@ -118,6 +118,7 @@ function baseFacts(manifest: TransactionManifest): ManifestBase {
     scope: manifest.scope,
     gitEvidencePath: manifest.gitEvidencePath,
     evidencePaths: manifest.evidencePaths,
+    ...(manifest.reaffirmedDocumentIds === undefined ? {} : { reaffirmedDocumentIds: manifest.reaffirmedDocumentIds }),
     snapshot: manifest.snapshot,
   }
 }
