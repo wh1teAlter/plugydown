@@ -632,6 +632,10 @@ function parsePorcelainEvidence(bytes: Uint8Array): PorcelainEvidence {
       throw new RuntimeFault('GIT_STATUS_INVALID', 'Git status evidence contains an unknown header.', 'status.bin')
     }
     if (record.startsWith('? ')) {
+      // Git's default untracked mode collapses a new directory to `dir/`, hiding which files are new;
+      // delta must map files, so name the fix rather than failing on the trailing slash as unsafe.
+      if (record.endsWith('/'))
+        throw new RuntimeFault('GIT_STATUS_UNTRACKED_COLLAPSED', 'Git status evidence lists an untracked directory instead of its files; collect it with --untracked-files=all.', 'status.bin')
       changes.push({ path: validateGitPath(record.slice(2)), kind: 'untracked' })
       continue
     }

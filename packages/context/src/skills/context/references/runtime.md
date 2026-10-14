@@ -75,7 +75,7 @@ Collect from the business repository root:
 
 ```sh
 git rev-parse HEAD > "$evidence_dir/head.txt"
-git status --porcelain=v2 --branch -z > "$evidence_dir/status.bin"
+git status --porcelain=v2 --branch -z --untracked-files=all > "$evidence_dir/status.bin"
 git diff --name-status -z "$baseline"...HEAD > "$evidence_dir/diff.bin"
 ```
 

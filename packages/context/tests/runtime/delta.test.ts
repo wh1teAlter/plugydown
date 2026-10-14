@@ -193,6 +193,17 @@ describe('delta.compute', () => {
     expect(delta.data?.light).toEqual({ eligible: true, blockers: [] })
   })
 
+  it('names the fix when Git status collapses a new directory instead of listing its files', async () => {
+    const root = await repository()
+    // `git status` without --untracked-files=all reports a brand-new directory as `dir/`.
+    const evidence = await writeGitEvidence(root, { status: '? features/\0' })
+    const response = await call(root, 'delta.compute', { gitEvidencePath: evidence, scope: { kind: 'repository' }, taskEvidence })
+
+    expect(response.status).toBe('failed')
+    expect(response.diagnostics?.[0]).toMatchObject({ code: 'GIT_STATUS_UNTRACKED_COLLAPSED', path: 'status.bin' })
+    expect(response.diagnostics?.[0]?.message).toContain('--untracked-files=all')
+  })
+
   it('parses NUL-safe committed, worktree, rename, and untracked evidence', async () => {
     const root = await repository()
     await fs.writeFile(path.join(root, 'src/retry.ts'), 'changed\n')
