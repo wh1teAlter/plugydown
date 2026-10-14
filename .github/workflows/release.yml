@@ -1,0 +1,116 @@
+name: release
+
+# Publishing is a deliberate act: this workflow runs only when started by hand from the Actions tab,
+# and it releases the version that packages/context/package.json holds on main.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and report what would be published, without pushing branches or creating the tag and release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Releases are cut from main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run the release workflow on main; this run was started on $GITHUB_REF_NAME."
+          exit 1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: A version is released at most once
+        id: version
+        run: |
+          version=$(jq -r .version packages/context/package.json)
+          tag="context--v$version"
+          # Installs refresh only when the version moves, so a second build under one version would never reach
+          # anyone who already installed it.
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "::error::$tag already exists. Bump the version in packages/context/package.json to release again."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  verify:
+    # Every check CI runs, on the exact commit being released: a hand-started release may name a commit CI never saw.
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [prepare, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # The branches go first and the tag last, so a run that fails partway leaves no tag and can simply be started
+      # again: branches that already hold this build are left untouched.
+      - name: Publish release branches
+        env:
+          REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+        run: |
+          # Each platform's built marketplace, byte for byte, becomes the tree of its own branch. Installers clone a Git
+          # ref, never an archive, and main stays free of generated artifacts.
+          publish() {
+            platform=$1
+            branch=release-$platform
+            work=$(mktemp -d)
+            cp -R "packages/context/dist/$platform/marketplace/." "$work/"
+            cd "$work"
+            git init -q
+            git checkout -q -b "$branch"
+            # Continue the branch's history; its tree is replaced wholesale by this build.
+            base=
+            if git fetch -q --depth=1 "$REMOTE" "$branch" 2>/dev/null; then
+              git reset -q --soft FETCH_HEAD
+              base=FETCH_HEAD
+            fi
+            git add -A
+            if [ -n "$base" ] && git diff --cached --quiet "$base"; then
+              echo "$branch already holds this build"
+            elif [ "$DRY_RUN" = true ]; then
+              echo "$branch would be updated:$(git diff --cached --shortstat $base)"
+            else
+              git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+                commit -q -m "context $VERSION ($platform) from ${GITHUB_SHA::12}"
+              git push -q "$REMOTE" "HEAD:refs/heads/$branch"
+              echo "$branch published"
+            fi
+            cd - >/dev/null
+          }
+          publish claude-code
+          publish codex
+      - name: Tag the release and publish its notes
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$TAG" --target "$GITHUB_SHA" --title "Plugydown Context $VERSION" --generate-notes
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        run: echo "Dry run of $TAG from ${GITHUB_SHA::12}; nothing was pushed, tagged or released."
