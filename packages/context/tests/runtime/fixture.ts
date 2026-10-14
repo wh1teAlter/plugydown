@@ -148,7 +148,8 @@ async function allFiles(root: string, relative: string): Promise<readonly string
     const entries = await fs.readdir(path.join(root, current), { withFileTypes: true }).catch(() => [])
     for (const entry of entries) {
       const next = `${current}/${entry.name}`
-      if (entry.isDirectory())
+      // Mirrors the Runtime: source expansion never enters node_modules at any depth.
+      if (entry.isDirectory() && entry.name !== 'node_modules')
         await visit(next)
       else if (entry.isFile())
         result.push(next)
