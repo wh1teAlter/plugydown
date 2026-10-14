@@ -36,6 +36,7 @@
     "@aaplugin/platform-claude-code": "catalog:",
     "@aaplugin/platform-codex": "catalog:",
     "@types/node": "catalog:",
+    "ajv": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

@@ -2,7 +2,7 @@ import type { RuntimeResponse } from '../../src/runtime/protocol.js'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { call, CLIENT_DOMAIN, createRepository, documentSource, porcelainModified, PROTOCOL, removeRepository, REVISION_A, REVISION_C, SERVICE_DOMAIN, SERVICE_GUIDE, transactionCall, writeGitEvidence, writeMeta } from './fixture.js'
+import { call, CLIENT_DOMAIN, createRepository, documentSource, handle, porcelainModified, PROTOCOL, removeRepository, REVISION_A, REVISION_C, SERVICE_DOMAIN, SERVICE_GUIDE, transactionCall, writeGitEvidence, writeMeta } from './fixture.js'
 
 const roots: string[] = []
 const changedService = { ...SERVICE_DOMAIN, body: '# Service\n\nChanged service behavior.\n' }
@@ -114,7 +114,7 @@ describe('transaction lifecycle', () => {
       gitEvidencePath: '.scratch/evidence/request',
       evidencePaths: ['src/service.ts'],
     })
-    const inspected = await (await import('../../src/runtime/handler.js')).handleRequest(root, { protocol: PROTOCOL, capability: 'repository.inspect', input: {} })
+    const inspected = await handle(root, { protocol: PROTOCOL, capability: 'repository.inspect', input: {} })
 
     expect(second.status).toBe('incomplete')
     expect(second.data).toMatchObject({ runId: first.runId, outcome: 'active_run', nextAction: 'resume' })

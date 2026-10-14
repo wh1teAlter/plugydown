@@ -2,8 +2,7 @@ import { Buffer } from 'node:buffer'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { handleRequest } from '../../src/runtime/handler.js'
-import { call, CLIENT_DOMAIN, createRepository, PROTOCOL, removeRepository, REVISION_A, runtimeRequest, SERVICE_DOMAIN, SERVICE_GUIDE, writeGitEvidence, writeMeta } from './fixture.js'
+import { call, CLIENT_DOMAIN, createRepository, handle, PROTOCOL, removeRepository, REVISION_A, runtimeRequest, SERVICE_DOMAIN, SERVICE_GUIDE, writeGitEvidence, writeMeta } from './fixture.js'
 
 const roots: string[] = []
 
@@ -49,7 +48,7 @@ describe('runtime protocol', () => {
     ]
 
     for (const request of requests) {
-      const response = await handleRequest(root, request)
+      const response = await handle(root, request)
       expect(response.protocol).toBe(PROTOCOL)
       expect(response.status).toBe('success')
     }
@@ -76,7 +75,7 @@ describe('runtime protocol', () => {
     [{ protocol: PROTOCOL, capability: 'feedback.match', input: { context: '', observedBehavior: 'x', outcomeOrCorrection: 'y', reuseBoundary: 'z' } }, 'REQUEST_FIELD_INVALID'],
   ])('rejects strict-envelope or payload violation %#', async (request, code) => {
     const root = await ready()
-    const response = await handleRequest(root, request)
+    const response = await handle(root, request)
 
     expect(response.status).toBe('failed')
     expect(response.capability).toBe(typeof request.capability === 'string' && request.capability !== 'unknown' ? request.capability : 'unknown')
@@ -244,7 +243,7 @@ describe('runtime protocol', () => {
 
   it('keeps product failures structured, stable, and free of absolute paths', async () => {
     const root = await ready()
-    const response = await handleRequest(root, { protocol: PROTOCOL, capability: 'graph.validate', input: {}, [root]: true })
+    const response = await handle(root, { protocol: PROTOCOL, capability: 'graph.validate', input: {}, [root]: true })
     const serialized = JSON.stringify(response)
 
     expect(response.status).toBe('failed')
@@ -278,7 +277,7 @@ describe('runtime protocol', () => {
   ])('rejects unsafe request paths before repository access without echoing them', async (capability, action, input) => {
     const root = await ready()
     const request = { protocol: PROTOCOL, capability, ...(action === undefined ? {} : { action }), input }
-    const response = await handleRequest(root, request)
+    const response = await handle(root, request)
 
     expect(response.status).toBe('failed')
     expect(response.diagnostics?.[0]?.code).toMatch(/^PATH_/)
@@ -296,6 +295,6 @@ describe('runtime protocol', () => {
       },
     }
 
-    await expect(handleRequest(root, request)).rejects.toThrow('unexpected')
+    await expect(handle(root, request)).rejects.toThrow('unexpected')
   })
 })

@@ -249,7 +249,7 @@ export function runtimeResponse(
 }
 
 /**
- * The D47 transaction outcome union. Each variant carries exactly the fields its outcome
+ * Every transaction outcome the Runtime can return. Each variant carries exactly the fields its outcome
  * allows, so status/outcome/field combinations are enforced by construction rather than
  * re-validated against a parallel matrix.
  */
