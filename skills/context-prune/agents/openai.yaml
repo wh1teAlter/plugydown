@@ -1,0 +1,5 @@
+interface:
+  display_name: context-prune
+  short_description: Converge Plugydown Context without losing unique knowledge or source coverage.
+policy:
+  allow_implicit_invocation: false

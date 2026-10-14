@@ -1,0 +1,5 @@
+interface:
+  display_name: context-init
+  short_description: Establish Plugydown Context for a repository that has no formal Context.
+policy:
+  allow_implicit_invocation: false

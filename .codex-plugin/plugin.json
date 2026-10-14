@@ -1,0 +1,36 @@
+{
+  "author": {
+    "name": "wh1teAlter",
+    "url": "https://github.com/wh1teAlter"
+  },
+  "description": "Persistent repository knowledge and engineering workflows.",
+  "homepage": "https://github.com/wh1teAlter/plugydown",
+  "interface": {
+    "capabilities": [
+      "Repository knowledge",
+      "Incremental documentation",
+      "Context continuation"
+    ],
+    "category": "Developer Tools",
+    "defaultPrompt": [
+      "Use Plugydown Context to understand this repository before making changes.",
+      "Initialize Plugydown Context for this repository.",
+      "Update Plugydown Context after this engineering task."
+    ],
+    "developerName": "wh1teAlter",
+    "displayName": "Plugydown Context",
+    "longDescription": "Route, validate, and maintain durable repository knowledge with bounded context and explicit workflows.",
+    "shortDescription": "Persistent repository knowledge for coding agents.",
+    "websiteURL": "https://github.com/wh1teAlter/plugydown"
+  },
+  "keywords": [
+    "plugydown",
+    "repository-knowledge",
+    "ai-workflow"
+  ],
+  "license": "MIT",
+  "name": "context",
+  "repository": "https://github.com/wh1teAlter/plugydown",
+  "skills": "./skills/",
+  "version": "0.4.0"
+}

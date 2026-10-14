@@ -1,0 +1,20 @@
+{
+  "interface": {
+    "displayName": "Plugydown Context for Codex"
+  },
+  "name": "context-codex",
+  "plugins": [
+    {
+      "category": "Developer Tools",
+      "name": "context",
+      "policy": {
+        "authentication": "ON_INSTALL",
+        "installation": "AVAILABLE"
+      },
+      "source": {
+        "path": "./",
+        "source": "local"
+      }
+    }
+  ]
+}

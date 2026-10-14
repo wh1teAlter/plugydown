@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "node \"${PLUGIN_ROOT}/hooks/session-start/handler.mjs\" codex",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
