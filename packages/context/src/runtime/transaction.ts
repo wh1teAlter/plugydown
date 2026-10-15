@@ -732,20 +732,16 @@ function deriveMeta(
       throw new RuntimeFault('CANDIDATE_LEDGER_INCOMPLETE', `Candidate ledger for "${id}" cannot be derived within scope.`)
     documents[id] = ledger
   }
-  const previousBaseline = live.meta?.repository?.baseline
-  const historyComplete = previousBaseline === undefined
-    || previousBaseline.revision === git.currentRevision
-    || git.hasDiff
-  // Advancing claims every Document was proven against the source at this revision. A Document
-  // left stale — authorized but neither edited nor reaffirmed — would drop out of every later
-  // delta once the history before this revision is gone, so it pins the baseline instead.
+  // Advancing claims every Document was proven against the source at this revision, so a Document
+  // left stale — authorized but neither edited nor reaffirmed — pins the baseline instead.
   // Unreferenced changes do not: no Document cites them, so no recorded fingerprint covers them.
+  // Fingerprints settle this without Git history, so a baseline whose commit a squash merge
+  // orphaned is replaced here like any other.
   const settled = [...graph.documents.keys()].every(id =>
     documents[id]?.sourceFingerprint === candidateSources.ledgers.get(id)?.sourceFingerprint)
   const scopeCanAdvance = manifest.scope.kind === 'repository'
     && !git.midOperation
     && settled
-    && historyComplete
   const repository = manifest.command === 'init' || (manifest.command === 'update' && scopeCanAdvance)
     ? { baseline: { revision: git.currentRevision, sourceFingerprint: candidateSources.repositorySourceFingerprint } }
     : live.meta?.repository

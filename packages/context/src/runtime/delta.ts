@@ -2,7 +2,7 @@ import type { KnowledgeGraph } from './graph.js'
 import type { CursorPosition, DeltaComputeInput, RuntimeRequest, RuntimeResponse, Scope } from './protocol.js'
 import type { GitChange } from './repository.js'
 import type { JsonObject, JsonValue } from './stable-json.js'
-import { impactClosure, loadKnowledge } from './graph.js'
+import { impactClosure, loadKnowledge, reviewPendingIds } from './graph.js'
 import { decodeCursor, encodeCursor, paginate, resolvedBudget, RuntimeFault, runtimeResponse, sha256 } from './protocol.js'
 import { assertGitEvidencePath, assertSourcePattern, declarationMatches, readGitEvidence } from './repository.js'
 import { compactJson, compareCodeUnits } from './stable-json.js'
@@ -88,6 +88,10 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
   validateScope(input.scope, graph)
   const evidence = await readGitEvidence(root, input.gitEvidencePath)
   const paths = changedPaths(evidence.changes)
+  // Fingerprints alone decide who owes review, so the queue stays complete when the history since
+  // the baseline is gone — a squash merge orphans a baseline recorded on its branch. Changed paths
+  // only explain an entry. A Document whose sources cannot be read owes review as well.
+  const impacted = new Set([...reviewPendingIds(graph), ...graph.sourceIssues.map(problem => problem.documentId)])
   const direct = new Map<string, string[]>()
   const unreferenced: string[] = []
   for (const changedPath of paths) {
@@ -99,9 +103,7 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
         if (!declarationMatches(declaration, changedPath))
           continue
         mapped = true
-        const current = graph.ledgers.get(document.id)
-        const recorded = graph.meta?.documents[document.id]
-        if (current !== undefined && recorded !== undefined && current.sourceFingerprint === recorded.sourceFingerprint)
+        if (!impacted.has(document.id))
           continue
         const reasons = direct.get(document.id) ?? []
         reasons.push(`code.paths ${declaration} matches ${changedPath}`)
@@ -114,6 +116,10 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
     if (!mapped)
       unreferenced.push(changedPath)
   }
+  for (const id of impacted) {
+    if (!direct.has(id))
+      direct.set(id, ['cited sources differ from those recorded at the last review'])
+  }
   for (const [id, reasons] of direct)
     direct.set(id, [...new Set(reasons)].sort(compareCodeUnits))
   const closure = impactClosure(graph, direct)
@@ -123,8 +129,9 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
     sourcePattern: problem.sourcePattern,
   }))
   const baseline = graph.meta?.repository?.baseline
-  if (baseline !== undefined && baseline.revision !== evidence.currentRevision && !evidence.hasDiff)
-    brokenEvidence.push({ code: 'GIT_DIFF_MISSING', reason: 'repository baseline differs from HEAD but diff.bin is missing' })
+  // Without diff.bin the changed and unreferenced paths cover only the working tree. That limits
+  // what this result can explain, never which Documents owe review, so it blocks nothing.
+  const changedPathsComplete = baseline === undefined || baseline.revision === evidence.currentRevision || evidence.hasDiff
 
   const blockers: string[] = []
   if (baseline === undefined)
@@ -183,6 +190,7 @@ export async function deltaCompute(root: string, request: RuntimeRequest): Promi
       data: {
         ...(baseline === undefined ? {} : { repositoryBaseline: baseline.revision }),
         currentRevision: evidence.currentRevision,
+        changedPathsComplete,
         changedPaths: [...sections.changedPaths],
         directImpact: [...sections.directImpact],
         expandedImpact: [...sections.expandedImpact],

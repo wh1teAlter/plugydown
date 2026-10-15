@@ -12,7 +12,7 @@ import type {
 import type { JsonObject, JsonValue } from './stable-json.js'
 import { Buffer } from 'node:buffer'
 import { bodyFingerprint } from './document.js'
-import { documentMetadata, graphMetrics, loadKnowledge, requiresClosure } from './graph.js'
+import { documentMetadata, graphMetrics, loadKnowledge, requiresClosure, reviewPendingIds } from './graph.js'
 import {
   decodeCursor,
   diagnostic,
@@ -315,12 +315,8 @@ export async function graphValidate(root: string): Promise<RuntimeResponse> {
   // the tree is still valid and every capability still works. Code changing ahead of knowledge is
   // the normal state of an active repository, so it is reported for the next Update to settle and
   // never fails validation. Structural and evidence faults still do.
-  const pendingReview = [...graph.ledgers.entries()].flatMap(([id, current]) => {
-    const recorded = graph.meta?.documents[id]
-    return recorded !== undefined && recorded.sourceFingerprint !== current.sourceFingerprint
-      ? [diagnostic('DOCUMENT_REVIEW_PENDING', `Document "${id}" cites sources that changed since it was last reviewed.`, 'warning', graph.documents.get(id)?.path ?? 'context/meta.json')]
-      : []
-  })
+  const pendingReview = reviewPendingIds(graph).map(id =>
+    diagnostic('DOCUMENT_REVIEW_PENDING', `Document "${id}" cites sources that changed since it was last reviewed.`, 'warning', graph.documents.get(id)?.path ?? 'context/meta.json'))
   if (graph.formalState !== 'ready' || graph.sourceState !== 'ready') {
     const diagnostics = [...issueDiagnostics(graph, true), ...pendingReview]
     return runtimeResponse('graph.validate', 'failed', { diagnostics: diagnostics.length === 0
