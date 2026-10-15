@@ -1454,6 +1454,7 @@
               "type": "object",
               "required": [
                 "currentRevision",
+                "changedPathsComplete",
                 "changedPaths",
                 "directImpact",
                 "expandedImpact",
@@ -1471,6 +1472,9 @@
                 "currentRevision": {
                   "type": "string",
                   "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
+                },
+                "changedPathsComplete": {
+                  "type": "boolean"
                 },
                 "changedPaths": {
                   "type": "array",
@@ -1568,48 +1572,26 @@
                 "brokenEvidence": {
                   "type": "array",
                   "items": {
-                    "oneOf": [
-                      {
-                        "type": "object",
-                        "required": [
-                          "documentId",
-                          "code",
-                          "sourcePattern"
-                        ],
-                        "additionalProperties": false,
-                        "properties": {
-                          "documentId": {
-                            "$ref": "#/$defs/documentId"
-                          },
-                          "code": {
-                            "type": "string",
-                            "pattern": "^[A-Z][A-Z0-9_]*$"
-                          },
-                          "sourcePattern": {
-                            "type": "string",
-                            "minLength": 1
-                          }
-                        }
+                    "type": "object",
+                    "required": [
+                      "documentId",
+                      "code",
+                      "sourcePattern"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "documentId": {
+                        "$ref": "#/$defs/documentId"
                       },
-                      {
-                        "type": "object",
-                        "required": [
-                          "code",
-                          "reason"
-                        ],
-                        "additionalProperties": false,
-                        "properties": {
-                          "code": {
-                            "type": "string",
-                            "pattern": "^[A-Z][A-Z0-9_]*$"
-                          },
-                          "reason": {
-                            "type": "string",
-                            "minLength": 1
-                          }
-                        }
+                      "code": {
+                        "type": "string",
+                        "pattern": "^[A-Z][A-Z0-9_]*$"
+                      },
+                      "sourcePattern": {
+                        "type": "string",
+                        "minLength": 1
                       }
-                    ]
+                    }
                   }
                 },
                 "light": {
