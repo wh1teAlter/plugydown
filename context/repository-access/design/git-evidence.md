@@ -91,6 +91,9 @@ Changes from both files are merged, sorted by `path\0kind\0previousPath`, and de
 The evidence fingerprint is SHA-256 over each present file's name and content hash, sorted by name — so it covers
 `diff.bin`'s presence or absence as well as its content.
 
-`hasDiff` is exposed separately because it is load-bearing: when the recorded repository baseline differs from HEAD and
-no diff was supplied, the history between them is unaccounted for. `read-plane` reports that as `GIT_DIFF_MISSING` broken
-evidence, and `write-plane` refuses to advance the baseline.
+`hasDiff` is exposed separately, but it decides only `changedPathsComplete` in `delta.compute`: when the recorded
+repository baseline differs from HEAD and no diff was supplied, the changes between them are unlisted and the result
+covers only the working tree. The host supplies `diff.bin` only when the baseline differs from HEAD and
+`git cat-file -e "$baseline^{commit}"` succeeds, since a baseline commit orphaned by a squash merge may never have been
+fetched into this clone; otherwise it omits the file. Nothing else reads `hasDiff`: the review queue comes from
+fingerprints and `write-plane` does not consult it.

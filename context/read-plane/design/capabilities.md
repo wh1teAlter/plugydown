@@ -69,15 +69,16 @@ The strictest capability and the only one with just two possible statuses: `succ
 `cursor`, no partial answer. It demands `formalState: ready` and `sourceState: ready` — nothing else — then returns
 `contextFingerprint`, `domainCount`, `documentCount`, `relationCount`, `sourceDeclarationCount`.
 
-It is the capability that reports every Document whose recorded `sourceFingerprint` differs from the recomputed one
-(`repository.inspect` freshness and `delta.compute` compare them for the Documents they look at). Ordinary loading skips
-the comparison because it needs filesystem expansion. A difference is **not a failure**: the Document is reported as the
-warning `DOCUMENT_REVIEW_PENDING`, with `path` set to that Document's path, on a response whose status is still
-`success`. Code changing ahead of knowledge is the normal state of an active repository, so the warning means the next
-Update has Documents to settle, never damage. A tree that every other capability calls ready can therefore fail here
-only through source evidence: a cited path that cannot be expanded (`sourceState: degraded`), or an expansion that
-exceeds the source resource limits (`SOURCE_FILE_LIMIT_EXCEEDED`, `SOURCE_BYTE_LIMIT_EXCEEDED`), which fails the whole
-request rather than being attributed to one Document. That is the intended division of labour, not an inconsistency.
+It reports every Document whose recorded `sourceFingerprint` differs from the recomputed one, through `reviewPendingIds`
+in `graph.ts`. `delta.compute` builds `directImpact` from the same helper (plus Documents whose sources cannot be read),
+and `repository.inspect` freshness compares the Documents it selects. Ordinary loading skips the comparison because it
+needs filesystem expansion. A difference is **not a failure**: the Document is reported as the warning
+`DOCUMENT_REVIEW_PENDING`, with `path` set to that Document's path, on a response whose status is still `success`. Code
+changing ahead of knowledge is the normal state of an active repository, so the warning means the next Update has
+Documents to settle, never damage. A tree that every other capability calls ready can therefore fail here only through
+source evidence: a cited path that cannot be expanded (`sourceState: degraded`), or an expansion that exceeds the source
+resource limits (`SOURCE_FILE_LIMIT_EXCEEDED`, `SOURCE_BYTE_LIMIT_EXCEEDED`), which fails the whole request rather than
+being attributed to one Document. That is the intended division of labour, not an inconsistency.
 
 ## `growth.measure`
 

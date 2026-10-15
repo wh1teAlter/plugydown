@@ -519,7 +519,7 @@ describe('transaction validation and concurrency', () => {
     expect(approvalResult.diagnostics?.[0]?.code).toBe('APPROVAL_MISMATCH')
   })
 
-  it('does not advance a repository baseline when prior-to-HEAD diff evidence is missing', async () => {
+  it('advances a settled repository baseline without prior-to-HEAD diff evidence, as after a squash merge', async () => {
     const root = await readyRoot()
     const gitEvidencePath = await writeGitEvidence(root, { id: 'baseline-gap', revision: REVISION_C })
     const began = await transactionCall(root, 'begin', {
@@ -538,7 +538,7 @@ describe('transaction validation and concurrency', () => {
     const meta = JSON.parse(await fs.readFile(path.join(root, candidatePath, 'meta.json'), 'utf8')) as { repository?: { baseline?: { revision?: string } } }
 
     expect(validated.status).toBe('success')
-    expect(meta.repository?.baseline?.revision).toBe(REVISION_A)
+    expect(meta.repository?.baseline?.revision).toBe(REVISION_C)
   })
 
   it.each(['candidateFingerprint', 'sourceEvidenceFingerprint'] as const)('rejects an approval whose %s does not bind current bytes', async (field) => {

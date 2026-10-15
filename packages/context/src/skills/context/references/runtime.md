@@ -82,8 +82,12 @@ git diff --name-status -z "$baseline"...HEAD > "$evidence_dir/diff.bin"
 Write `mid-operation.json` as exactly `{"active":false}` or, for example,
 `{"active":true,"kind":"merge"}` after checking Git state. An active `kind` must be one of `merge`, `rebase`,
 `cherry-pick`, `revert`, or `bisect`. Create `diff.bin`
-only when the ledger baseline differs from HEAD. Do not decode, line-split, trim, or rewrite the two NUL-delimited
-files. `delta.compute` and a following transaction may share the same evidence leaf.
+only when the ledger baseline differs from HEAD and `git cat-file -e "$baseline^{commit}"` succeeds. After a squash
+merge, other clones may never have fetched the baseline commit; when the check fails, omit `diff.bin`. `delta.compute`
+then reports `changedPathsComplete: false`: changed and unreferenced paths cover only the working tree, `directImpact`
+stays complete, and the missing history blocks neither Light nor the baseline.
+Do not decode, line-split, trim, or rewrite the two NUL-delimited files. `delta.compute` and a following transaction
+may share the same evidence leaf.
 
 ## Transaction inputs
 

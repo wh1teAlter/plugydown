@@ -456,6 +456,17 @@ export function requiresClosure(graph: KnowledgeGraph, seeds: readonly string[])
   }))
 }
 
+/**
+ * Documents whose cited sources no longer match the fingerprint recorded at their last review.
+ * Content alone decides, so the answer never depends on Git history surviving.
+ */
+export function reviewPendingIds(graph: KnowledgeGraph): readonly string[] {
+  return [...graph.ledgers].flatMap(([id, current]) => {
+    const recorded = graph.meta?.documents[id]
+    return recorded !== undefined && recorded.sourceFingerprint !== current.sourceFingerprint ? [id] : []
+  })
+}
+
 /** Expands direct delta impact through prerequisites, reverse dependents and Domain membership. */
 export function impactClosure(graph: KnowledgeGraph, direct: ReadonlyMap<string, readonly string[]>): readonly { readonly documentId: string, readonly reasons: readonly string[] }[] {
   const reasons = new Map<string, Set<string>>()

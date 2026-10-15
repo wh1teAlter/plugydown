@@ -168,10 +168,28 @@ describe('delta.compute', () => {
     const after = await repositoryUpdate(root, { diff: changes })
     expect(after.baseline).toBe(REVISION_A)
 
-    // Had the baseline moved to C, this diff would be empty and service.retry would vanish from delta.
-    const later = await writeGitEvidence(root, { id: 'after-partial', revision: REVISION_C, diff: nameStatus(changes) })
+    // The queue comes from fingerprints, not history: even with no diff at all, service.retry stays in it.
+    const later = await writeGitEvidence(root, { id: 'after-partial', revision: REVISION_C })
     const delta = await call(root, 'delta.compute', { gitEvidencePath: later, scope: { kind: 'repository' }, taskEvidence })
     expect((delta.data?.directImpact as Array<{ documentId: string }>).map(item => item.documentId)).toEqual(['service.retry'])
+  })
+
+  it('keeps the review queue complete when a squash merge orphaned the baseline commit', async () => {
+    const root = await repository()
+    await fs.writeFile(path.join(root, 'src/retry.ts'), 'retry C\n')
+    // Baseline A no longer exists, so the host supplies status at C and no diff.bin.
+    const evidence = await writeGitEvidence(root, { id: 'orphaned', revision: REVISION_C })
+    const delta = await call(root, 'delta.compute', { gitEvidencePath: evidence, scope: { kind: 'repository' }, taskEvidence })
+
+    expect(delta.data?.changedPathsComplete).toBe(false)
+    expect(delta.data?.directImpact).toEqual([{
+      documentId: 'service.retry',
+      changedPaths: [],
+      reasons: ['cited sources differ from those recorded at the last review'],
+    }])
+    expect(delta.data?.brokenEvidence).toEqual([])
+    expect(delta.data?.light).toEqual({ eligible: true, blockers: [] })
+    expect(delta.data?.repositoryBaselineEligible).toBe(true)
   })
 
   it('advances the baseline once every impacted Document is settled, despite unreferenced changes', async () => {
@@ -244,7 +262,7 @@ describe('delta.compute', () => {
     expect(response.data?.light).toEqual(expect.objectContaining({ eligible: false, blockers: expect.arrayContaining([blocker]) }))
   })
 
-  it('reports mid-operation, unreferenced, and broken baseline evidence and refuses baseline advancement', async () => {
+  it('reports mid-operation and working-tree-only changes, and refuses baseline advancement mid-operation', async () => {
     const root = await repository()
     const evidence = await writeGitEvidence(root, {
       revision: REVISION_C,
@@ -255,11 +273,10 @@ describe('delta.compute', () => {
 
     expect(response.status).toBe('success')
     expect(response.data?.unreferencedPaths).toEqual(['unknown/new.ts'])
-    expect(response.data?.brokenEvidence).toEqual([
-      { code: 'GIT_DIFF_MISSING', reason: 'repository baseline differs from HEAD but diff.bin is missing' },
-    ])
+    expect(response.data?.changedPathsComplete).toBe(false)
+    expect(response.data?.brokenEvidence).toEqual([])
     expect(response.data?.repositoryBaselineEligible).toBe(false)
-    expect(response.data?.light).toEqual(expect.objectContaining({ eligible: false }))
+    expect(response.data?.light).toEqual({ eligible: false, blockers: ['Git is in a mid-operation state'] })
   })
 
   it('keeps Light available for changes no Document cites, but not for broken evidence', async () => {

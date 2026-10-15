@@ -45,11 +45,13 @@ codex plugin add context@context-codex
 
 使用边界：
 
-- `code.paths` 只声明受版本控制的源；被 Git 忽略的文件（如构建产物）的变化不会出现在 Git 证据里，
-  Runtime 无法据此发现知识失效。monorepo 中声明 `packages/foo/src/**`，而不是包根；
+- `code.paths` 只声明受版本控制的源。被 Git 忽略的文件（如构建产物）只存在于生成它的机器上：
+  别的 clone 要么没有它（证据损坏），要么字节不同（文档一直待复核）。monorepo 中声明 `packages/foo/src/**`，而不是包根；
 - 单次调用最多展开 10,000 个源文件、512 MiB；
 - Runtime 只证明字节与批准一致，无法证明复核真的发生——复核由工作流和 Investigator 审查保证；
-- 长期未处理的待复核 Document 会让 repository baseline 停住，定期运行 repository 范围的 `update` 即可。
+- 长期未处理的待复核 Document 会让 repository baseline 停住，定期运行 repository 范围的 `update` 即可；
+- squash 合并可能让 baseline 所在的分支提交从历史中消失。待复核队列只看指纹，不受影响；
+  只是在下一次 repository 范围的 `update` 前移 baseline 之前，新增的未被引用路径只能看到工作区里的部分。
 
 ## 正式知识
 

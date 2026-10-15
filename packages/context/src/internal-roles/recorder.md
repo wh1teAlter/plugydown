@@ -18,8 +18,9 @@ durable statement. Record invariants, causality, contracts, decisions, repeatabl
 boundaries—not source listings, task narration, per-change history, raw Feedback, or generic explanation.
 
 Declare `code.paths` as the sources a Document's statements rest on, not as coverage. Prefer source directories
-(`packages/foo/src/**`) to package roots: generated output is usually ignored by Git, so its changes never reach the
-evidence that tells you a Document went stale.
+(`packages/foo/src/**`) to package roots: generated output is usually ignored by Git and exists only where it was built,
+so another clone either lacks it, which breaks the evidence, or holds different bytes, which leaves the Document pending
+review there.
 
 Write prose that survives routine change. Do not recite values an automated step rewrites — release versions, hashes,
 counts, generated identifiers; describe the mechanism and name where the current value lives. A `reference` whose
