@@ -69,17 +69,18 @@ not look like an editorial change.
 
 `repository.baseline` records the Git revision and aggregate source fingerprint at the last point the Runtime could
 honestly claim the whole repository was accounted for. `deriveMeta` always advances it for `init`, and for `update` only
-when *all* of these hold: repository scope, no Git mid-operation, history is complete — meaning no previous baseline
-exists at all, or the previous baseline equals HEAD, or a diff was supplied — and, in the candidate being committed,
-every Document's ledger `sourceFingerprint` equals its current one, so none is left pending review. A Document whose
-cited sources changed must therefore have been edited or listed in `reaffirmedDocumentIds`. Changed paths that no
-Document cites no longer matter: no recorded fingerprint covers them. A scoped update leaves the baseline alone —
-claiming repository-wide freshness from a partial look would be a lie — and `delta.compute` reads this field to decide
-Light eligibility.
+when *all* of these hold: repository scope, no Git mid-operation, and, in the candidate being committed, every
+Document's ledger `sourceFingerprint` equals its current one, so none is left pending review. A Document whose cited
+sources changed must therefore have been edited or listed in `reaffirmedDocumentIds`. Git history is not a condition, so
+a baseline whose commit is gone from this clone (one recorded on a branch that a squash merge later replaced) is
+replaced at the next settled repository-scope Update. Changed paths that no Document cites no longer matter: no recorded
+fingerprint covers them. A scoped update leaves the baseline alone — claiming repository-wide freshness from a partial
+look would be a lie — and `delta.compute` reads this field to decide Light eligibility.
 
-The gate produces an invariant that `delta.compute` relies on: the baseline never moves past a stale ledger, so every
-stale ledger is reachable from `baseline..HEAD`, and `directImpact` is the complete review queue. This holds for sources
-Git tracks; a change to an ignored file never reaches Git evidence at all.
+The review queue does not depend on the baseline. `delta.compute` takes `directImpact` from the fingerprint comparison
+itself, so it needs no history and is complete wherever the sources can be read; source expansion does not consult
+`.gitignore`, so a changed ignored file is queued too. The baseline only bounds which changed and unreferenced paths a
+delta can list: when it differs from HEAD and no diff since it was supplied, those paths cover only the working tree.
 
 `convergence` is a size baseline written only by `init` and `prune`. `growth.measure` subtracts it from current metrics
 to show drift since the last deliberate convergence. An `update` never touches it, so growth is measured against

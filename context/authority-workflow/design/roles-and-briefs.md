@@ -81,8 +81,9 @@ Feedback, or generic explanation.
 Three further Recorder rules keep the ledger honest:
 
 - `code.paths` is declared as the sources a Document's statements rest on, not as coverage, and source directories
-  (`packages/foo/src/**`) are preferred to package roots: generated output is usually Git-ignored, so its changes never
-  reach the evidence that shows a Document went stale.
+  (`packages/foo/src/**`) are preferred to package roots: generated output is usually Git-ignored and exists only where
+  it was built, so another clone either lacks it (broken evidence) or holds different bytes (the Document stays pending
+  review there).
 - Values an automated step rewrites — release versions, hashes, counts, generated identifiers — are not recited. The
   Document describes the mechanism and names where the current value lives. A `reference` whose purpose is exact current
   facts, such as capability names, required fields, or error codes, still quotes them exactly. See

@@ -109,7 +109,11 @@ files are new, and the Runtime refuses it with `GIT_STATUS_UNTRACKED_COLLAPSED`.
 
 `mid-operation.json` is exactly `{"active":false}` or
 `{"active":true,"kind":"merge|rebase|cherry-pick|revert|bisect"}`. Supply `diff.bin` only when the ledger baseline
-differs from HEAD. The two `.bin` files are NUL-delimited and must not be decoded, line-split, trimmed, or rewritten.
+differs from HEAD **and** `git cat-file -e "$baseline^{commit}"` succeeds; a baseline commit orphaned by a squash merge
+may never have been fetched into this clone. Otherwise omit it: `delta.compute` then reports
+`changedPathsComplete: false` (changed and unreferenced paths cover only the working tree) while `directImpact` stays
+complete, and the missing history blocks neither Light nor the baseline. The two `.bin` files are NUL-delimited and must
+not be decoded, line-split, trimmed, or rewritten.
 
 ## Transaction actions
 

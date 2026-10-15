@@ -101,8 +101,8 @@ Runtime never infers a reaffirmation: `reaffirmedDocumentIds` is the caller sayi
 verify that — see `authority-workflow.enforcement-boundary`.
 
 The same rule gates the repository baseline. `deriveMeta` advances it only when no Document is left pending review —
-every ledger's `sourceFingerprint` equals its current one — so an untouched stale sibling pins the baseline in place
-instead of dropping out of later deltas once the history before the new revision is gone. See
+every ledger's `sourceFingerprint` equals its current one — so an untouched stale sibling pins the baseline in place:
+advancing claims every Document was proven against the source at the new revision, and this one was not. See
 `knowledge-model.meta-ledger` for the full set of conditions.
 
 If a required ledger entry cannot be found from either source, `deriveMeta` raises `CANDIDATE_LEDGER_INCOMPLETE` — it

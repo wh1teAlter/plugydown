@@ -60,22 +60,22 @@
     "authority-workflow.describe-mechanisms-not-rewritten-values": {
       "bodyFingerprint": "8ec309dd7320cc30368bdd4d0db6c0d33fc9d9d041c7e6912ea754f40be30ff8",
       "frontMatterFingerprint": "438fea5073386245a13a388fab642fc01e5990f7a62b5ec4e1af6dca35b4c9f8",
-      "sourceFingerprint": "ad352d385e7907d40994d6dbf80419feec91a3097f190dbf0b84ef39023071ff"
+      "sourceFingerprint": "b9e269cd8c9456648867c93cd05b468b8e78912b52d798c430634aac0d2858d2"
     },
     "authority-workflow.enforcement-boundary": {
       "bodyFingerprint": "a489537fcc98ae188a45b56372dd572f99c896fdbece0cdf8bee3d1e3f0f4997",
       "frontMatterFingerprint": "08e4621d0ee43c7674023dc6f4192e31dd791dd4b39830dea9436730cea54931",
-      "sourceFingerprint": "61d1779fe86e592219dbe132d0fbd289b69f3f44876aea0a6a824a7c7ee471ae"
+      "sourceFingerprint": "c1f40b058563aabd0d992f40983b015fc54c1d57f279e09c79efddae8f3b8f27"
     },
     "authority-workflow.roles-and-briefs": {
-      "bodyFingerprint": "c250d62b25e23009fd06aedd05dc0cf8d85bfecdf58d71da5f8c60991cc60e6a",
+      "bodyFingerprint": "853454e8f112f0809eb97103c57a05f1ac36bd8641fe4c6d277f0c3738cf1e18",
       "frontMatterFingerprint": "ee8b076776b3e977f167e4a9331492ea1e8448202b657f288821e5a21f21803d",
-      "sourceFingerprint": "1ee6dd01ca62534bc5efec4941ba510fdb577a3e74af077a5cf6eb1d29eaa8a6"
+      "sourceFingerprint": "2ea8db6415f5438ad211822a65d9dbd167f1c183fed58d3d316a3cdeb14d1de3"
     },
     "authority-workflow.scratch-lifecycle": {
       "bodyFingerprint": "2f9a355795b74ee2d7c1d23731b7dac73ad457c7e65942fee44fa3d6aa513def",
       "frontMatterFingerprint": "023f3a3cff53aebef4250c9e85fa97ab1d949f34e56cc5fd7756aaaed6393752",
-      "sourceFingerprint": "cd598ec91fb1ede6e06ade6eb136f7dbe8f0d0b354aaa61b2bd47d293e961ca5"
+      "sourceFingerprint": "35eb0780ee2344e37de8c3c78490448d53185277330e837b30e6c67c95b40b15"
     },
     "delivery": {
       "bodyFingerprint": "9bc31dfd627839201cb08edf4b8c913c145b33831e1cc8174ad8890280654bd7",
@@ -105,47 +105,47 @@
     "knowledge-model": {
       "bodyFingerprint": "51317d6462ae0d562c8d6a26ab5f7be96d06fe15c4431e9479a6c06e0bb6a634",
       "frontMatterFingerprint": "a27b3a89dadea2d649b2593825dc234ea79ae0076944c3ae093e1c93a4094fa0",
-      "sourceFingerprint": "64757cf63872a082dbd9728e5761165723709e09de3bbfc527565416f901a752"
+      "sourceFingerprint": "0cc49bbb40c082f91af84b129c9b225f405e0b08c06abc532e8e2f6d0d51b469"
     },
     "knowledge-model.document-grammar": {
       "bodyFingerprint": "ec526bb48eef37d3268011ae904c598b8a1f307b23281a16d2c74ed1d7af81d2",
       "frontMatterFingerprint": "831450040782446647b467ea034949c7fa7070afbc11da3125624f65ea9d173c",
-      "sourceFingerprint": "1d41c46a5a674e57ae42678c6ba48fb99650c4b96a5db7f197f32ac29a78ec7f"
+      "sourceFingerprint": "359408ba160027c9934dcab49f593d57d666b49d0bd75f1292e1abae58956977"
     },
     "knowledge-model.meta-ledger": {
-      "bodyFingerprint": "53064d96555a660d6a405de6d9f8f3c6d708e3e62972a06661f787aa871b3422",
+      "bodyFingerprint": "11c65b8954ac9e149e2e8ccbd41287ed5b84987a6e2e1b531e3532344d7935a1",
       "frontMatterFingerprint": "3003dde17d91aba85605f33e708a79108fe1842be5e7967323219b9a63885a36",
-      "sourceFingerprint": "2faac264613ce618a3cdbd33b4907c57a1e2c5dcb437e64bbe834e70aeb9f5a6"
+      "sourceFingerprint": "f5df4b59b483b3c2c5893fdd5d11859eab4be795c1fe3df32060fe2c21c767d4"
     },
     "read-plane": {
       "bodyFingerprint": "3e6a8bf60169ff866d5278c64c5f3c5b2a539cd93a7057266f2e5ea177fbd7cd",
       "frontMatterFingerprint": "6c772a441ca6cd12b0b9d7c7c52cd2393ab1c4749f567bc33ecc32b9e95e11ba",
-      "sourceFingerprint": "76f4990f3c7f31fb19741c463717910d5856f857c8d9512e9b0b4e41f525534d"
+      "sourceFingerprint": "3b84e3ebc47d703bdebe5ff57da5b40759aec88a5740fda2d3a0749b9a0594b5"
     },
     "read-plane.capabilities": {
-      "bodyFingerprint": "0a75500f77f5cb4813e08033dfcd25b990e34cb42008fe171785e2a3e5f50bac",
+      "bodyFingerprint": "2d0e9b2523b6971ac62d40c47ec9081628548b707ceb58e34be8fd51a3f976fc",
       "frontMatterFingerprint": "9b7fdb6be318f3ad4217522e550d0e8162d8109a509e5c3977e089e9f768d984",
-      "sourceFingerprint": "eb6bf76a3ef7964cafb4b69992d568e333162d17215da50f876f7781a6ef1127"
+      "sourceFingerprint": "0bf82ff463598f44d90f5b35512ef48162399cb1e06ae0abb47f136c9c51b45f"
     },
     "read-plane.delta-and-light": {
-      "bodyFingerprint": "915f9e36232e65e2a23f99fc48b7f242df14a5e7e2378cfa59917593887408e0",
-      "frontMatterFingerprint": "43c56a812c79b5346489a1d88ae3107e21da96b008a9b60f69f04b933ed860ec",
-      "sourceFingerprint": "f08bdae0d12e6a2491995d8a8eaa84839a77774ba745296fa4a85f6da3576d20"
+      "bodyFingerprint": "de157ea4a5610f5a9b9d96a6fadc6b1e3ab521a24db76bf2ba6508fd2eef1850",
+      "frontMatterFingerprint": "a7e86f1b2d93055844a0ef59d5c0b412dcb97ef601d95f5c0d0b3edcd04bb980",
+      "sourceFingerprint": "e902317cee97411331f7b6d52025e7060d5ed6dae3a0204bbb0f9d1f7b2da60a"
     },
     "repository-access": {
       "bodyFingerprint": "37155deab74fe849677ad1a4530e6abe6d512c8dbf912aec82825b39701836e6",
       "frontMatterFingerprint": "f27f712659f6251c7599ed584edf84d3f4b62d6f3d726b3fd327fc8315fcd8ba",
-      "sourceFingerprint": "9d5aafb8400df1d5fed43ec8d43abfd965b62f73860d6a9623d2522265c3e27d"
+      "sourceFingerprint": "ccb6c921e64a366e3d7a68d668388d1ff3bf4b6ebf59f1a3d44fcd96ef786b65"
     },
     "repository-access.git-evidence": {
-      "bodyFingerprint": "7f73777fdbb5bd05c22728e9289e2e3c818a4fb25396bde6c4209746e5af1ebe",
+      "bodyFingerprint": "ed2205d60eb971add61daae0f2ba122ae36c0439ec86daafd740d8e5e4390651",
       "frontMatterFingerprint": "44e1fee2337f5564e2a7a9cfcd3f8fa3dc497467474deb9b9a31276288350313",
-      "sourceFingerprint": "02b7525e5748ef5be82569d5ea3ce943041d98c5a11bee086fb988467bc0f8c1"
+      "sourceFingerprint": "344a64cc9e40ac3cc59f17e471be60dc4fa6647cec1a7e5dd9501b6a2cf06470"
     },
     "repository-access.path-and-glob-safety": {
       "bodyFingerprint": "9dfb757d73590330da1b20daffd44744d852f664e904edfd2679612316fc5afc",
       "frontMatterFingerprint": "9e87b36f7d07ad798fcc05d5c4d0f5e26cdb5c48bef3ab8b2d6c4452075491e5",
-      "sourceFingerprint": "fd7b50ccd0381d57b2004a711f641043e0180299f24d19c019dec6fd9e3b131f"
+      "sourceFingerprint": "aa4d374ef049436f28dfbd407c4d30f3db272bdb6f44e065a586507b4799b80f"
     },
     "runtime-protocol": {
       "bodyFingerprint": "07ada7488ad4f0a3901c6cb2738ce82e2d2b36b92e6d70e25cd8142fbe7bd16a",
@@ -158,9 +158,9 @@
       "sourceFingerprint": "c05ee55581ab46f4735ee7549237b646d84bf70a215c23cd0703850554644233"
     },
     "runtime-protocol.capability-invocation": {
-      "bodyFingerprint": "9377cfa47815f30adb56d5ce7f9f13eb59a6d47e76a08d03cd59f99c874a3c90",
+      "bodyFingerprint": "d655a6992b96ae5e14b53951fdcf464eda2b4dea4dcaa4bf1d0ec151b1d9f184",
       "frontMatterFingerprint": "8a5a4814a6e0183cbf8b6b676252ed8634cd29e4787ac8a5677d842d998abc68",
-      "sourceFingerprint": "674a58758ee351d89193f1fa73181afdd7c7ba2d673003db3fd0cc876dce65e9"
+      "sourceFingerprint": "1bac4ce90472640e3e61720e57a7e832a24ac1e284d01cbb496754066bce5988"
     },
     "runtime-protocol.determinism": {
       "bodyFingerprint": "f713d7f3ca714d47c97d5729cb0961152b87c7ad4f32c2f094fe80a91fbf5b3b",
@@ -170,34 +170,34 @@
     "runtime-protocol.wire-contract": {
       "bodyFingerprint": "f131fa5bfe37676a10176617bd976e255a19a4ef62e22f9756d581a2b1e8789e",
       "frontMatterFingerprint": "77cc144840cb4ef5a7f69110d6508fb29ee994206b93badb5eb8a55d2cb87d67",
-      "sourceFingerprint": "dc59a491076c3d628a3b88ce7fa1c01e3f3df45e93938c4302ba593ef88f5125"
+      "sourceFingerprint": "d8e98377aafb15a422aa8fe60596f2c6a7b48b81973233a602e738c12c74abf4"
     },
     "write-plane": {
       "bodyFingerprint": "dabfc5e9795de54ee2655d32c46570bfbee123d34f4f0ea75a833f6cfb2dd4d6",
       "frontMatterFingerprint": "3cb95e1b33846a447c2807900d28c029c8cc3330229a1cafe8ed6d592a0355c8",
-      "sourceFingerprint": "020fafc3ce23005b6e8328ed07cbce70017323445dc058eefe0ae8361e98b44f"
+      "sourceFingerprint": "1c1852d7a8f0852bb95d01b06fab12f3a8087b595cc912e4666698281bf9a1ae"
     },
     "write-plane.outcomes-and-recovery": {
       "bodyFingerprint": "638b81fdc48ed4e4cae4bfd479d150a33e194ed69b8ea3a5a810af08fce1a843",
       "frontMatterFingerprint": "be95398b57a7d7ffe0b6a9e15d37077463be26f55831fb4d00aabca9a4e0702d",
-      "sourceFingerprint": "fe2d304f43615622e67af9ac337dc78e6d9bfbbe39f0ace0e354a7060893ef34"
+      "sourceFingerprint": "6af944f81b6d1b399a5709ef07669d9ee768c11ec666dbb1f9e904a430da40c6"
     },
     "write-plane.scope-authorization": {
-      "bodyFingerprint": "d5d004ef47570ca6da06e192840a5cca32073cd5df4868cf59258345f3fce70c",
+      "bodyFingerprint": "9e7375be4f4aa8cabef85d8c7f21de257d7c32145106d601ac30305a0cb59cdf",
       "frontMatterFingerprint": "624a1fdfa24f7dbf2d3e7921ad8237f721f3a3f051a5490e5ab04e707411fc30",
-      "sourceFingerprint": "020fafc3ce23005b6e8328ed07cbce70017323445dc058eefe0ae8361e98b44f"
+      "sourceFingerprint": "1c1852d7a8f0852bb95d01b06fab12f3a8087b595cc912e4666698281bf9a1ae"
     },
     "write-plane.transaction-lifecycle": {
       "bodyFingerprint": "4eb6daadbf2a373e6c5ed02c02489470656cc0e128a8d3ac417cc517c74981ef",
       "frontMatterFingerprint": "2a06023f059bb2498c8ee258a141c1e19754b5e1548db54bbfcd69c6d719ef2a",
-      "sourceFingerprint": "020fafc3ce23005b6e8328ed07cbce70017323445dc058eefe0ae8361e98b44f"
+      "sourceFingerprint": "1c1852d7a8f0852bb95d01b06fab12f3a8087b595cc912e4666698281bf9a1ae"
     }
   },
   "fingerprintVersion": "1",
   "repository": {
     "baseline": {
-      "revision": "2778c520b0b6b71a272f7386370566662e4f0b16",
-      "sourceFingerprint": "bd0c57073c23d1828f5016931ad1e8f15ca309e4c34d1c77983f43d18cd007ed"
+      "revision": "615ac8f464e9b986fe63d0adc266cbf72a895b60",
+      "sourceFingerprint": "1d03626f0dae75c0c01a614aa6dc28aa44ac860017ac985842625c97292e2320"
     }
   },
   "runtimeProtocol": "plugydown.context.runtime/v1",
