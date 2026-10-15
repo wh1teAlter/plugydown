@@ -80,12 +80,12 @@
     "delivery": {
       "bodyFingerprint": "9bc31dfd627839201cb08edf4b8c913c145b33831e1cc8174ad8890280654bd7",
       "frontMatterFingerprint": "e82f8f93b33697e13b8e27ceec97de13e448399473b638a53e3249e35a544a0b",
-      "sourceFingerprint": "4ef6574d7aa7328e07f1b8c3b5a5d8c92523d275341f92da8b806e99c645bc03"
+      "sourceFingerprint": "bde8d6e6eafc5cf2d40ed3d7a4dde992f85ba033be5072d908cdcfd0fbb7b9c3"
     },
     "delivery.build-and-acceptance": {
       "bodyFingerprint": "d2070019ddee018bcb72ff8cb6d34c0c58ed3217367a2a968dca4c313a08641c",
       "frontMatterFingerprint": "c512ebfd2d5c60f66e119a63a2720ba7c3298fd362eee5eb99f08128476b4716",
-      "sourceFingerprint": "e4d503cd38f437c258495c32b974e63a375c58d09728f117b35673abf958a010"
+      "sourceFingerprint": "1ec18e1a7e90d416575819071e279c59b5d21f458f38ec0e8d4bb2360e736a9d"
     },
     "delivery.ownership-boundary": {
       "bodyFingerprint": "dfeb2807bc1306bda95c6ac9ce9c1bdb999968ef088cb14c095d6e4275ad3174",
@@ -95,7 +95,7 @@
     "delivery.packaging": {
       "bodyFingerprint": "f61271942487327714ee430f5816356bbf1f807fe08210b02aad38a16d8ac40f",
       "frontMatterFingerprint": "85f06afda9ed5905a2217152e765fd04684094faa8d694baad71cd2086703fc6",
-      "sourceFingerprint": "96f88ccd7357f3c62fac8aba692cff60fa7bcd1eabc4ff1952c3bc0e3ba2be02"
+      "sourceFingerprint": "9676a0af0f209e1a93416ee3d5bf5032084268e410c34ec3a4c580662bb44b5e"
     },
     "delivery.verification-and-gaps": {
       "bodyFingerprint": "b2a85245ac7359e45b048bb720f6b06c53405f6d9ddb6c46d4d63c18def4fbf2",
@@ -196,8 +196,8 @@
   "fingerprintVersion": "1",
   "repository": {
     "baseline": {
-      "revision": "615ac8f464e9b986fe63d0adc266cbf72a895b60",
-      "sourceFingerprint": "1d03626f0dae75c0c01a614aa6dc28aa44ac860017ac985842625c97292e2320"
+      "revision": "76b521f01924785b24e530975ac2ff251fd6ae8f",
+      "sourceFingerprint": "402a43c43de4fb00a1f83787e9a0516e78d6feb6b1b8c41f1e4f2f2c04dabfc9"
     }
   },
   "runtimeProtocol": "plugydown.context.runtime/v1",
