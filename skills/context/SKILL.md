@@ -67,8 +67,9 @@ Every Internal Role receives a short Markdown Brief with exactly these headings:
 
 Unlisted writes are forbidden. Investigator establishes facts and reviews candidates but cannot edit knowledge.
 Reflector evaluates reusable feedback and may write only explicitly allowed temporary Feedback. Recorder is the only
-candidate author and never writes live Context or source. On Claude Code, prefer the native role Agent. On Codex, read
-the matching private `runtime/agents/<role>.md` resource and execute the same Brief inline.
+candidate author and never writes live Context or source. Before invoking a role, read
+`../../runtime/agents/index.md` relative to this Skill's directory. It identifies this installation's native Agents or
+private role resources, model guidance, and tool boundaries. Follow its instructions with the same Brief.
 
 The Main Assistant owns authorization scope and final semantic approval. Recorder cannot review itself; Reflector
 cannot approve a formal Reflection. Init, Deep Update, Prune, and Feedback promotion require Investigator candidate

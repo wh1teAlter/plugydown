@@ -7,7 +7,14 @@ repository where the plugin is installed; never assume access to the Plugydown s
 
 Resolve `../../runtime/context/main.mjs` from the directory containing the loaded Context `SKILL.md`. Confirm that the
 resolved target is a regular non-symlink file inside the installed plugin. Start it with the business repository root as
-`cwd`. Do not pass a repository root in JSON.
+`cwd`. Do not pass a repository root in JSON. Node.js 24 or later must be available as `node` on PATH.
+
+Use the loaded Skill's source path on Claude Code, Codex, Cursor, and Pi. For Cursor local installs, the complete
+Plugin is also at `~/.cursor/plugins/local/context/`. For Antigravity CLI, if the Skill source path is absent, run
+`agy plugin list --json` and locate the installed `context` Plugin; its Runtime is `runtime/context/main.mjs`.
+On OpenCode, resolve `.opencode/runtime/context/main.mjs` from the actual business repository root. Never assume
+Hook configuration variables are expanded inside Skill text or arbitrary shell commands. Keep the whole installed
+delivery unit, including Skills, Runtime, role resources, and licenses.
 
 One process accepts exactly one JSON value on stdin and emits exactly one JSON value on stdout. For example:
 
