@@ -1,0 +1,30 @@
+{
+  "author": {
+    "name": "wh1teAlter",
+    "url": "https://github.com/wh1teAlter"
+  },
+  "description": "Persistent repository knowledge and engineering workflows.",
+  "homepage": "https://github.com/wh1teAlter/plugydown",
+  "keywords": [
+    "plugydown",
+    "repository-knowledge",
+    "ai-workflow",
+    "pi-package"
+  ],
+  "license": "MIT",
+  "name": "context",
+  "pi": {
+    "extensions": [
+      "./extensions/aaplugin-hooks.mjs"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "repository": "https://github.com/wh1teAlter/plugydown",
+  "type": "module",
+  "version": "0.6.0"
+}
