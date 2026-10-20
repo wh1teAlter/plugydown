@@ -1,7 +1,11 @@
 import hooks from '@aaplugin/extension-hooks'
 import { defineConfig } from '@aaplugin/kit'
+import antigravity from '@aaplugin/platform-antigravity'
 import claudeCode from '@aaplugin/platform-claude-code'
 import codex from '@aaplugin/platform-codex'
+import cursor from '@aaplugin/platform-cursor'
+import openCode from '@aaplugin/platform-opencode'
+import pi from '@aaplugin/platform-pi'
 import internalRoles from './extension/internal-roles.js'
 import pkg from './package.json' with { type: 'json' }
 
@@ -49,11 +53,15 @@ export default defineConfig({
         },
       },
     }),
+    cursor(),
+    antigravity(),
+    openCode(),
+    pi(),
   ],
   runtime: {
     entries: {
-      // Output path is `runtime/context/main.mjs`. The key must never be `agents`:
-      // Codex private role resources live at `runtime/agents/`.
+      // Keep this explicit: other top-level Runtime files are helpers, not executables.
+      // `agents` is reserved for the Extension's invocation index and private role resources.
       context: { entry: 'cli.ts', kind: 'executable' },
     },
   },

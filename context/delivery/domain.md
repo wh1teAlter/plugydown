@@ -1,44 +1,49 @@
 ---
 schema: plugydown.context.document/v1
 id: delivery
-description: How the monorepo is packaged for two hosts by a single builder, the exact-version dependency policy, the verification gate, and what the repository does not do.
+description: Six-platform product delivery through one builder, the exact-version dependency policy, release units, and the distinction between automated verification and host acceptance.
 kind: domain
 domain: delivery
 code:
   paths:
+    - AGENTS.md
+    - package.json
     - packages/context/aaplugin.config.ts
     - packages/context/package.json
+    - packages/context/delivery.json
+    - packages/context/host-validation.md
+    - packages/context/scripts/verify-delivery.ts
+    - packages/context/vitest.config.ts
     - .github/workflows/ci.yml
     - .github/workflows/release.yml
 ---
 
 # Delivery
 
-A pnpm monorepo with one package, `@plugydown/context`, which AAPlugin builds into four artifacts: a plugin and a
-marketplace entry for each of Claude Code and Codex. Root package is `plugydown-workspace`, private, ESM, pnpm 10.34.5,
-Node 24 or later, for development and for the plugin's Runtime alike.
+A private pnpm/ESM monorepo whose `@plugydown/context` product uses AAPlugin to deliver Claude Code, Codex, Cursor,
+Antigravity CLI, OpenCode, and Pi from canonical sources. Development and every shipped Runtime require Node.js 24 or
+later; the pnpm version is pinned by the root `packageManager` field.
 
 ## What lives here
 
-- `delivery.packaging` — the one builder, dual-platform emission, role delivery per host, and the session-start hook.
+- `delivery.packaging` — the one builder, release-unit mapping, role delivery per host, and the session-start hook.
 - `delivery.ownership-boundary` — what AAPlugin owns, the eight prohibitions, and the capability-gap procedure.
 - `delivery.verification-and-gaps` — the verification gate, CI and the release workflow, the dependency policy, how
   the published schemas are validated, and what the repository does not do.
-- `delivery.build-and-acceptance` — the operator SOP for the six gates, how CI runs them, and dual-build checksum.
+- `delivery.build-and-acceptance` — the operator gates, repeated-build comparison, and real-host acceptance procedure.
 
 ## One builder, no exceptions
 
-`aaplugin build` is the only thing that emits deliverables. `tsconfig.base.json` sets `noEmit: true`, so `tsc` is
-structurally incapable of producing output — it is a checker only. There is no bundler config, no separate compile step,
-and no hand-assembled `dist/`. `dist/` is gitignored.
-
-This is worth stating as an invariant because it is what makes byte-equivalence of the build meaningful: there is exactly
-one code path from source to artifact.
+`aaplugin build` is the only delivery builder. `tsc --noEmit` only checks types; product code must not add a Runtime
+compiler, renderer, or post-processing of `dist/`. Core compiles the explicitly declared `context` Runtime entry and
+Platforms deliver it with the other assets. The config selects all six Platforms with `strict: true`.
 
 ## Both packages are private
 
-Root and `@plugydown/context` are both `"private": true`. Nothing here publishes to a registry; installers clone a Git
-ref instead, from the release branches the release workflow publishes (see below).
+Root and `@plugydown/context` are both `"private": true`. Product release uses Git branches, not npm.
+`packages/context/delivery.json` is the shared release and acceptance mapping: Claude Code and Codex use marketplace
+units, Cursor and Antigravity CLI use plugin units, OpenCode uses a workspace overlay, and Pi uses a package. Installers
+need the complete unit, including hidden directories, Runtime, role resources, schemas, and licenses.
 
 ## The engineering constitution
 
@@ -53,13 +58,15 @@ currently no npm publish pipeline for Changesets to drive).
 ## Continuous integration
 
 `.github/workflows/ci.yml` only checks and never publishes. It runs lint, typecheck, test, build, and validate on
-Node 24 for every push to `main` or `dev` and every pull request. It then builds a second time and diffs the hash of
-every `dist/` file plus the `pnpm inspect` report against the first build, so byte-equivalence is checked rather than
-assumed, and finally sends a request to each platform's built Runtime to confirm the shipped bundle answers.
+Node 24 for every push to `main` or `dev` and every pull request. It compares every `dist/` file's SHA-256 and mode,
+plus the inspect report, across consecutive builds. `verify:delivery` checks the mapped release units and executes each
+shipped Runtime against a separate business repository.
 
 Publishing is the separate `.github/workflows/release.yml`, started by hand on `main`. It re-runs every CI check,
-publishes each platform's built marketplace, unmodified, to the branches `release-claude-code` and `release-codex`, then
-tags `context--v<version>` and creates a GitHub Release.
+publishes each mapped delivery unit unchanged to `release-<platform>`, then tags `context--v<version>` and creates a
+GitHub Release. The mapping is shared with verification so release cannot accidentally select marketplace units for
+hosts that consume a different layout.
 
-The filtered test include `tests/runtime/*.test.ts` and `coverage.enabled: false` still limit what a green run proves;
-see `delivery.verification-and-gaps`.
+Tests recursively collect `tests/**/*.test.ts`; coverage remains disabled. Automated layout, protocol, and callback
+checks do not establish real-host installation, discovery, or session behavior. Those sessions remain unexecuted in
+`packages/context/host-validation.md`; see `delivery.verification-and-gaps`.

@@ -9,9 +9,15 @@ import type {
   PlatformContributor,
 } from '@aaplugin/kit/sdk'
 import type { ClaudePackageComponent } from '@aaplugin/platform-claude-code'
+import type { CursorPackageComponent } from '@aaplugin/platform-cursor'
+import type { OpenCodePackageComponent } from '@aaplugin/platform-opencode'
 import { defineExtension } from '@aaplugin/kit/sdk'
+import { PLATFORM_ID as ANTIGRAVITY } from '@aaplugin/platform-antigravity'
 import { PLATFORM_ID as CLAUDE_CODE } from '@aaplugin/platform-claude-code'
 import { PLATFORM_ID as CODEX } from '@aaplugin/platform-codex'
+import { PLATFORM_ID as CURSOR } from '@aaplugin/platform-cursor'
+import { PLATFORM_ID as OPENCODE } from '@aaplugin/platform-opencode'
+import { PLATFORM_ID as PI } from '@aaplugin/platform-pi'
 
 const ROOT = 'internal-roles'
 
@@ -112,11 +118,12 @@ function validate(
 const claudeContributor: PlatformContributor<readonly InternalRole[], ClaudePackageComponent> = Object.freeze({
   platform: CLAUDE_CODE,
   platformApiVersion: '1' as const,
-  contribute(
-    _context: ContributionContext,
+  async contribute(
+    context: ContributionContext,
     roles: Readonly<readonly InternalRole[]>,
-  ): PackageContribution<ClaudePackageComponent> {
+  ): Promise<PackageContribution<ClaudePackageComponent>> {
     return {
+      assets: [await roleIndex(context, roles, CLAUDE_CODE, 'runtime', 'native')],
       components: roles.map(role => ({
         subject: `internal-role:${role.id}`,
         value: {
@@ -138,7 +145,7 @@ const claudeContributor: PlatformContributor<readonly InternalRole[], ClaudePack
   },
 })
 
-function codexRoleResource(role: InternalRole): string {
+function privateRoleResource(role: InternalRole): string {
   return [
     '---',
     `id: ${role.id}`,
@@ -153,35 +160,139 @@ function codexRoleResource(role: InternalRole): string {
   ].join('\n')
 }
 
-const codexContributor: PlatformContributor<readonly InternalRole[], JsonObject> = Object.freeze({
-  platform: CODEX,
+/** An Extension-owned index lets the canonical Skill stay independent of host invocation rules. */
+async function roleIndex(
+  context: ContributionContext,
+  roles: readonly InternalRole[],
+  platform: string,
+  directory: string,
+  delivery: 'native' | 'inline',
+) {
+  const guidance = delivery === 'native'
+    ? [
+        'Delegate the same Role Brief to the named native Agent. Agent definition paths below are relative to this index.',
+        platform === CLAUDE_CODE
+          ? 'Claude Code receives the role model and tool metadata through its native Agent configuration.'
+          : platform === OPENCODE
+            ? 'OpenCode uses its default model. Read/glob/grep are enabled; Investigator may use bash, Recorder and Reflector may use edit. The webfetch and task tools are disabled. Bash can still write files or access the network; the Brief governs those actions. Edit covers writing and editing; the Brief narrows allowed paths.'
+            : 'Cursor uses its default model and tools. Model preferences and the listed tool names are guidance; this Plugin does not enforce per-role tool grants.',
+      ]
+    : [
+        'Read the matching private Markdown resource relative to this index, then execute its Role Brief inline.',
+        'Switch explicitly between Recorder authorship and Investigator review; do not present inline review as an independently executed Agent.',
+        'Model preferences and tool names are guidance only; this delivery does not configure an independent model or restrict host tools.',
+      ]
+  const bytes = [
+    '# Internal role invocation',
+    '',
+    `Platform: ${platform}.`,
+    '',
+    ...guidance,
+    '',
+    'Prefer a capable model for Investigator and Recorder when the host permits choosing one; Reflector may inherit. The Role Brief and Main Assistant remain the authority for allowed writes and final approval. Native tool settings do not enforce candidate-only filesystem access.',
+    '',
+    '| Role | Definition | Model preference | Tool guidance (Claude names) |',
+    '| --- | --- | --- | --- |',
+    ...roles.map(role => `| ${role.id} | [${role.id}](${delivery === 'native' ? '../../agents/' : './'}${role.id}.md) | ${role.model} | ${role.tools.join(', ')} |`),
+    '',
+  ].join('\n')
+  return {
+    path: `${directory}/agents/index.md`,
+    asset: await context.assets.fromBytes({
+      bytes,
+      origin: { operation: 'internal-role-index', subjects: roles.map(role => `internal-role:${role.id}`) },
+    }),
+  }
+}
+
+const cursorContributor: PlatformContributor<readonly InternalRole[], CursorPackageComponent> = Object.freeze({
+  platform: CURSOR,
   platformApiVersion: '1' as const,
   async contribute(
     context: ContributionContext,
     roles: Readonly<readonly InternalRole[]>,
-  ): Promise<PackageContribution<JsonObject>> {
-    const assets = []
-    for (const role of roles) {
-      assets.push({
-        path: `runtime/agents/${role.id}.md`,
-        asset: await context.assets.fromBytes({
-          bytes: codexRoleResource(role),
-          origin: { operation: 'internal-role-resource', subjects: [`internal-role:${role.id}`] },
-        }),
-      })
-    }
+  ): Promise<PackageContribution<CursorPackageComponent>> {
     return {
-      assets,
+      assets: [await roleIndex(context, roles, CURSOR, 'runtime', 'native')],
+      components: roles.map(role => ({
+        subject: `internal-role:${role.id}`,
+        value: { kind: 'native-agent' as const, id: role.id, description: role.description, body: role.body },
+      })),
       compatibility: roles.map(role => ({
         subject: `internal-role:${role.id}`,
         capability: 'role-delivery',
-        level: 'transform' as const,
-        transformation: 'private-runtime-resource',
-        reason: 'Codex consumes the canonical role inline from a private runtime resource.',
+        level: 'native' as const,
+        reason: 'Cursor receives a native Agent; model and tool preferences remain invocation guidance.',
       })),
     }
   },
 })
+
+const openCodeContributor: PlatformContributor<readonly InternalRole[], OpenCodePackageComponent> = Object.freeze({
+  platform: OPENCODE,
+  platformApiVersion: '1' as const,
+  async contribute(
+    context: ContributionContext,
+    roles: Readonly<readonly InternalRole[]>,
+  ): Promise<PackageContribution<OpenCodePackageComponent>> {
+    return {
+      assets: [await roleIndex(context, roles, OPENCODE, '.opencode/runtime', 'native')],
+      components: roles.map(role => ({
+        subject: `internal-role:${role.id}`,
+        value: {
+          kind: 'native-agent' as const,
+          id: role.id,
+          description: role.description,
+          body: role.body,
+          tools: {
+            read: true,
+            glob: true,
+            grep: true,
+            edit: role.tools.includes('Write') || role.tools.includes('Edit'),
+            bash: role.tools.includes('Bash'),
+            webfetch: false,
+            task: false,
+          },
+        },
+      })),
+      compatibility: roles.map(role => ({
+        subject: `internal-role:${role.id}`,
+        capability: 'role-delivery',
+        level: 'native' as const,
+        reason: 'OpenCode receives a native Subagent with native tools and permissions; model preference and write scope remain guidance.',
+      })),
+    }
+  },
+})
+
+function privateContributor(platform: string): PlatformContributor<readonly InternalRole[], JsonObject> {
+  return Object.freeze({
+    platform,
+    platformApiVersion: '1' as const,
+    async contribute(context: ContributionContext, roles: Readonly<readonly InternalRole[]>) {
+      const assets = [await roleIndex(context, roles, platform, 'runtime', 'inline')]
+      for (const role of roles) {
+        assets.push({
+          path: `runtime/agents/${role.id}.md`,
+          asset: await context.assets.fromBytes({
+            bytes: privateRoleResource(role),
+            origin: { operation: 'internal-role-resource', subjects: [`internal-role:${role.id}`] },
+          }),
+        })
+      }
+      return {
+        assets,
+        compatibility: roles.map(role => ({
+          subject: `internal-role:${role.id}`,
+          capability: 'role-delivery',
+          level: 'transform' as const,
+          transformation: 'private-runtime-resource',
+          reason: `${platform} consumes the canonical role inline from a private runtime resource.`,
+        })),
+      }
+    },
+  })
+}
 
 export default function internalRoles(): Extension<
   JsonObject,
@@ -199,7 +310,14 @@ export default function internalRoles(): Extension<
         discover,
         validate,
         build: (_context: ExtensionBuildContext, roles: Readonly<readonly InternalRole[]>) => ({ state: [...roles] }),
-        contributors: [claudeContributor, codexContributor] as readonly PlatformContributor<readonly InternalRole[], JsonObject>[],
+        contributors: [
+          claudeContributor,
+          privateContributor(CODEX),
+          cursorContributor,
+          privateContributor(ANTIGRAVITY),
+          openCodeContributor,
+          privateContributor(PI),
+        ] as readonly PlatformContributor<readonly InternalRole[], JsonObject>[],
       }
     },
   })

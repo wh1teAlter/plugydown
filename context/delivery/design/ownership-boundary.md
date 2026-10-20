@@ -13,6 +13,9 @@ relations:
 code:
   paths:
     - AGENTS.md
+    - packages/context/delivery.json
+    - packages/context/extension/internal-roles.ts
+    - packages/context/vitest.config.ts
     - packages/context/src/runtime/repository.ts
 ---
 
@@ -20,7 +23,7 @@ code:
 
 `AGENTS.md` at the repository root is the engineering constitution. It is the document that establishes byte-equivalence
 as an acceptance criterion, mandates the exact-version dependency policy, and draws the line between this repository and
-the framework beneath it. Everything below is recorded from it directly.
+the framework beneath it. The product's role Extension and delivery map apply that boundary to all six hosts.
 
 ## The framing that explains the rest
 
@@ -37,13 +40,23 @@ those converts a product into a second, undocumented framework, and the constitu
 | Build lifecycle, diagnostics, transactions | AAPlugin Core | supply inputs only |
 | Command / Skill discovery and conversion | Core + Platform | supply canonical source files |
 | Runtime compilation and delivery | Core | supply `src/runtime/` and the entry declaration |
-| Claude/Codex manifests, paths, naming | each Platform | **must not write directly** |
+| Host manifests, paths, naming | each Platform | **must not write directly** |
 | Hook wire and handler packaging | official Hooks Extension | supply `src/hooks/<id>/hook.ts` |
 
 Read this table alongside `delivery.packaging`. It explains why the role Extension contributes *components and assets*
-rather than writing files into `dist/`, why the Codex command transformation is not declared anywhere in this repository,
-and why the session-start hook is a bare handler module with no wiring around it. Each of those is the Platform's or the
-Extension's job, and this repository only supplies the canonical input.
+rather than writing files into `dist/`, why command conversion is Platform-owned, and why the session-start hook is a
+bare handler module with no wire protocol around it. The product can supply host-specific Contributor input and its
+own assets through the public SDK; each Platform owns final rendering and manifest registration.
+
+The Internal Roles Extension keeps one canonical body per role and supplies a Contributor for every selected Platform.
+Native role components go to Claude Code, Cursor, and OpenCode; Codex, Antigravity CLI, and Pi receive private Markdown
+resources. The Extension also owns the invocation index that lets the shared Skill locate the appropriate form.
+Missing role delivery fails the strict build instead of silently dropping the capability.
+
+Host tool and model configuration is distinct from product authority. OpenCode's tool settings do not confine bash
+network access or writes to a candidate path; Cursor and private-role model/tool preferences are guidance. The Brief,
+Recorder/Investigator separation, and Main Assistant approval remain the authority boundary, not a Runtime-enforced
+filesystem or model sandbox.
 
 ## The eight prohibitions
 
@@ -54,16 +67,16 @@ Extension's job, and this repository only supplies the canonical input.
 5. Building a compatibility layer for the legacy ACPlugin API.
 6. Modifying AAPlugin to serve subpackage-specific logic.
 7. Delivering platform-specific resources through Public copy — Public copies to *every* platform, so it cannot carry
-   anything platform-specific.
+anything platform-specific.
 8. Using wide skips for missing fixtures in place of actual verification.
 
 Prohibition 7 is the non-obvious one and it constrains real decisions: `public/` in `aaplugin.config.ts` carries the three
 JSON Schemas precisely because they are platform-neutral. Anything platform-specific must go through a Platform
-contributor instead, which is exactly how the Codex role resources reach `runtime/agents/`.
+Contributor instead, which is how the invocation index and private role resources are delivered.
 
-Prohibition 1 is what makes "one builder" in `delivery` an enforceable claim rather than an observation. Prohibition 8 is
-what makes the coverage and filtered-suite gaps recorded in `delivery.verification-and-gaps` genuine gaps against a stated
-rule.
+Prohibition 1 also applies to release: `packages/context/delivery.json` selects a complete AAPlugin output unit, and
+publication must preserve it rather than repair its contents. Prohibition 8 requires executable evidence for the risks
+being tested; recursive test collection and disabled coverage do not establish untested host behavior.
 
 ## When the framework cannot do what you need
 

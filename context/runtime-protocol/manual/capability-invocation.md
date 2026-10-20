@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: runtime-protocol.capability-invocation
-description: How to locate and call the private Runtime, per-capability inputs, the Git-evidence leaf, and how to tell a transport failure from a Runtime status.
+description: How each host locates the shared private Runtime and role index, per-capability inputs, the Git-evidence leaf, and transport versus Runtime status.
 kind: reference
 domain: runtime-protocol
 relations:
@@ -19,6 +19,9 @@ code:
     - packages/context/src/runtime/repository.ts
     - packages/context/src/skills/context/references/runtime.md
     - packages/context/aaplugin.config.ts
+    - packages/context/README.md
+    - packages/context/extension/internal-roles.ts
+    - packages/context/src/skills/context/SKILL.md
 ---
 
 # Capability invocation
@@ -31,9 +34,30 @@ is in `runtime-protocol.determinism`. Transaction outcomes are in `write-plane`.
 ## Locate the executable
 
 From the directory of the loaded Context `SKILL.md`, resolve `../../runtime/context/main.mjs`. The target must be a
-regular, non-symlink file inside the installed plugin. Start it with the business repository root as `cwd`. **Do not
-pass the repository root in JSON** — `cli.ts` uses `process.cwd()`. The `aaplugin.config.ts` runtime entry key `context`
-produces `runtime/context/main.mjs`; that key must never be `agents` (Codex roles live at `runtime/agents/`).
+regular, non-symlink file inside the complete installed delivery unit. Use Node.js 24 or later as `node` on PATH and
+start it with the business repository root as `cwd`. **Do not pass the repository root in JSON** — `cli.ts` uses
+`process.cwd()`.
+
+| Host | Path source |
+|---|---|
+| Claude Code, Codex, Cursor, Pi | the loaded Skill's source directory |
+| Antigravity CLI | the Skill source directory; if unavailable, locate the installed `context` Plugin with `agy plugin list --json` |
+| OpenCode | the actual business repository root, then `.opencode/runtime/context/main.mjs` |
+
+OpenCode places its Skills and Runtime together under `.opencode/`, so the same Skill-relative path still works.
+Other hosts keep Runtime under the installation's `runtime/`. Do not assume Hook variables expand in Skill text or
+an arbitrary shell. Keep the complete delivery unit, including Skills, Runtime, role resources, and licenses;
+copying a Skill alone breaks these relative references.
+
+`aaplugin.config.ts` explicitly declares only `runtime.entries.context`, targeting `cli.ts`. Other top-level Runtime
+files are helpers, not executable entries. The key must never be `agents`: that sibling directory is reserved for
+the role index and private resources.
+
+Before invoking an Internal Role, read `../../runtime/agents/index.md` relative to the Skill. Claude Code, Cursor,
+and OpenCode use its native Agent links; Codex, Antigravity CLI, and Pi read the linked private Markdown and execute the
+Brief inline. Inline authorship and review are distinct roles but not independently executed Agents. Follow the
+index's model/tool guidance and the Brief's write scope; native tool configuration does not enforce candidate-only
+filesystem access or general network isolation. The Main Assistant retains final approval.
 
 Every request carries `protocol: 'plugydown.context.runtime/v1'`, a `capability`, and `input`. Confirm both exit status
 and stdout shape. Shipped `runtime.schema.json` describes the wire shape, and the test suite holds every Runtime response

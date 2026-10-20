@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   verify:
-    # Node 24 is the only supported version, for development and for the plugin's Runtime alike.
+    # Node 24 is the minimum supported major, for development and the plugin Runtime alike.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -30,18 +30,13 @@ jobs:
       - name: Two consecutive builds produce identical artifacts and reports
         run: |
           snapshot() {
-            (cd packages/context && find dist -type f -print0 | sort -z | xargs -0 sha256sum)
+            node packages/context/scripts/verify-delivery.ts --snapshot
             pnpm --silent --filter @plugydown/context run inspect
           }
           snapshot > first.txt
           pnpm build
           snapshot > second.txt
           diff first.txt second.txt
-      - name: The shipped Runtime of each platform answers a request
-        run: |
-          for platform in claude-code codex; do
-            echo '{"protocol":"plugydown.context.runtime/v1","capability":"graph.validate","input":{}}' \
-              | node "packages/context/dist/$platform/marketplace/runtime/context/main.mjs" \
-              | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const r=JSON.parse(s);console.log(process.argv[1],r.status);process.exit(r.status==="success"?0:1)})' "$platform"
-          done
+      - name: Verify all six release units and execute their shipped Runtime
+        run: pnpm verify:delivery
 

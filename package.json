@@ -15,6 +15,7 @@
     "build": "pnpm -r --if-present run build",
     "validate": "pnpm -r --if-present run validate",
     "inspect": "pnpm -r --if-present run inspect",
+    "verify:delivery": "pnpm -r --if-present run verify:delivery",
     "dev": "pnpm --filter @plugydown/context run dev",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build"
   },

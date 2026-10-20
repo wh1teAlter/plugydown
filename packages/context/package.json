@@ -24,6 +24,7 @@
     "build": "aaplugin build",
     "validate": "aaplugin validate",
     "inspect": "aaplugin inspect --json",
+    "verify:delivery": "node scripts/verify-delivery.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -33,8 +34,12 @@
   "devDependencies": {
     "@aaplugin/extension-hooks": "catalog:",
     "@aaplugin/kit": "catalog:",
+    "@aaplugin/platform-antigravity": "catalog:",
     "@aaplugin/platform-claude-code": "catalog:",
     "@aaplugin/platform-codex": "catalog:",
+    "@aaplugin/platform-cursor": "catalog:",
+    "@aaplugin/platform-opencode": "catalog:",
+    "@aaplugin/platform-pi": "catalog:",
     "@types/node": "catalog:",
     "ajv": "catalog:",
     "typescript": "catalog:",

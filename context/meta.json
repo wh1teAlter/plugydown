@@ -55,7 +55,7 @@
     "authority-workflow": {
       "bodyFingerprint": "effb55e084819bc9ec007b151cfdfa7aab88d89efb8596043b5c119f98ec05ee",
       "frontMatterFingerprint": "be3f975d1ef66f55389fd93acc3e109fa4485ab799c0ff2a8d0a5422162c5a23",
-      "sourceFingerprint": "cdbed61427d2f12485fdae328afefb231525178fa95f027d06ce603353e0290d"
+      "sourceFingerprint": "a2af18e7517e31e5327afa18216b9a02c666c108cd9c4074c8d5a1cb62df78f8"
     },
     "authority-workflow.describe-mechanisms-not-rewritten-values": {
       "bodyFingerprint": "8ec309dd7320cc30368bdd4d0db6c0d33fc9d9d041c7e6912ea754f40be30ff8",
@@ -65,7 +65,7 @@
     "authority-workflow.enforcement-boundary": {
       "bodyFingerprint": "a489537fcc98ae188a45b56372dd572f99c896fdbece0cdf8bee3d1e3f0f4997",
       "frontMatterFingerprint": "08e4621d0ee43c7674023dc6f4192e31dd791dd4b39830dea9436730cea54931",
-      "sourceFingerprint": "c1f40b058563aabd0d992f40983b015fc54c1d57f279e09c79efddae8f3b8f27"
+      "sourceFingerprint": "66e1055ea3ff9b3a92def45e3c6aff03f5a18b6b419d6f531e03ef3af9ebbeda"
     },
     "authority-workflow.roles-and-briefs": {
       "bodyFingerprint": "853454e8f112f0809eb97103c57a05f1ac36bd8641fe4c6d277f0c3738cf1e18",
@@ -75,32 +75,32 @@
     "authority-workflow.scratch-lifecycle": {
       "bodyFingerprint": "2f9a355795b74ee2d7c1d23731b7dac73ad457c7e65942fee44fa3d6aa513def",
       "frontMatterFingerprint": "023f3a3cff53aebef4250c9e85fa97ab1d949f34e56cc5fd7756aaaed6393752",
-      "sourceFingerprint": "35eb0780ee2344e37de8c3c78490448d53185277330e837b30e6c67c95b40b15"
+      "sourceFingerprint": "ccf8f49cc2c8e142f63ec4525a08ec7023e5aa4072f3134d2083d827f5fb7344"
     },
     "delivery": {
-      "bodyFingerprint": "9bc31dfd627839201cb08edf4b8c913c145b33831e1cc8174ad8890280654bd7",
-      "frontMatterFingerprint": "e82f8f93b33697e13b8e27ceec97de13e448399473b638a53e3249e35a544a0b",
-      "sourceFingerprint": "bde8d6e6eafc5cf2d40ed3d7a4dde992f85ba033be5072d908cdcfd0fbb7b9c3"
+      "bodyFingerprint": "d98d2b6c5395a36a08d6cb7caa4f7deeb325306fd50115ca8534fd0f2d377340",
+      "frontMatterFingerprint": "6d6b4bf950292647eff81bc35eaf58cf551ef63680cd60c8775b3f7252a1669f",
+      "sourceFingerprint": "e343e385eb15dc84187f4c79f4e9d20d36e7290aacc620236813d3bce978b302"
     },
     "delivery.build-and-acceptance": {
-      "bodyFingerprint": "d2070019ddee018bcb72ff8cb6d34c0c58ed3217367a2a968dca4c313a08641c",
-      "frontMatterFingerprint": "c512ebfd2d5c60f66e119a63a2720ba7c3298fd362eee5eb99f08128476b4716",
-      "sourceFingerprint": "1ec18e1a7e90d416575819071e279c59b5d21f458f38ec0e8d4bb2360e736a9d"
+      "bodyFingerprint": "7e2ecb5b7364786cbfb43ecce34d3d51c5a64748a747de23dc0515914e8ae05b",
+      "frontMatterFingerprint": "b53b8198bfcd9f0c8b46d78abd0239ea18c950d250c26e80fcf19a1b3ca6c5e7",
+      "sourceFingerprint": "e911f4bd879da6a1b04ab1e9867ac375a18690fffc27c98182a62bf97bfa7654"
     },
     "delivery.ownership-boundary": {
-      "bodyFingerprint": "dfeb2807bc1306bda95c6ac9ce9c1bdb999968ef088cb14c095d6e4275ad3174",
-      "frontMatterFingerprint": "552a2ee322a5180cc02bdeff493844b34d8edf6a2a6876a91574e79cd14e5bf7",
-      "sourceFingerprint": "34cf9f92071374eb824a1a0dc965b9e2e67590f003031ab92521fd99160b3ed9"
+      "bodyFingerprint": "9825c55f31985eeecd2f09537a66298b14e599b32b4bfe035412db6224196765",
+      "frontMatterFingerprint": "62f57fd03ff50490a7a65cca3da6be3ed699c01fb4a20c4a53b0f2d184f45f06",
+      "sourceFingerprint": "1602ea07c97ce49c7bf605d6d1c41ee532cf67ba03bce2113617c37ac3bc6df1"
     },
     "delivery.packaging": {
-      "bodyFingerprint": "f61271942487327714ee430f5816356bbf1f807fe08210b02aad38a16d8ac40f",
-      "frontMatterFingerprint": "85f06afda9ed5905a2217152e765fd04684094faa8d694baad71cd2086703fc6",
-      "sourceFingerprint": "9676a0af0f209e1a93416ee3d5bf5032084268e410c34ec3a4c580662bb44b5e"
+      "bodyFingerprint": "5269a91bfe9feb3855ad0fb4aeee67af98a7c08a3dc3cbc2f5f29bc4b6af829b",
+      "frontMatterFingerprint": "1a34c814ba36170935ba68ee9087214a851e78b2549a071bdaabde483dde48ca",
+      "sourceFingerprint": "7ad47d6b219c93d08f72ae0bd7d8f414751993c90d7a89e02938cb39ff0dae95"
     },
     "delivery.verification-and-gaps": {
-      "bodyFingerprint": "b2a85245ac7359e45b048bb720f6b06c53405f6d9ddb6c46d4d63c18def4fbf2",
-      "frontMatterFingerprint": "555edf11786981dc9e368ddcd27890570ad775731cba8448ee37c4717120e9c7",
-      "sourceFingerprint": "f50a797ce816b99fb510a8d14e9857f9ba91413359a7951beb3fcc1f1ac8821b"
+      "bodyFingerprint": "a42a263e1686727ce2aaf7d0de40ff65f7d65ad786f189fc0419cc7eee58e08b",
+      "frontMatterFingerprint": "1b3dc66e257bcddcb69874728c5f72e506a644830daee1963eea67fddde85a4d",
+      "sourceFingerprint": "8905c8640f5953f93a1b91ffd77130583887368ed18617facf9b1732e90b9e09"
     },
     "knowledge-model": {
       "bodyFingerprint": "51317d6462ae0d562c8d6a26ab5f7be96d06fe15c4431e9479a6c06e0bb6a634",
@@ -140,7 +140,7 @@
     "repository-access.git-evidence": {
       "bodyFingerprint": "ed2205d60eb971add61daae0f2ba122ae36c0439ec86daafd740d8e5e4390651",
       "frontMatterFingerprint": "44e1fee2337f5564e2a7a9cfcd3f8fa3dc497467474deb9b9a31276288350313",
-      "sourceFingerprint": "344a64cc9e40ac3cc59f17e471be60dc4fa6647cec1a7e5dd9501b6a2cf06470"
+      "sourceFingerprint": "67266834a62ddad531bab9a5b2f538c83fe9e39b5761762c66b7014b3f0700f9"
     },
     "repository-access.path-and-glob-safety": {
       "bodyFingerprint": "9dfb757d73590330da1b20daffd44744d852f664e904edfd2679612316fc5afc",
@@ -158,14 +158,14 @@
       "sourceFingerprint": "c05ee55581ab46f4735ee7549237b646d84bf70a215c23cd0703850554644233"
     },
     "runtime-protocol.capability-invocation": {
-      "bodyFingerprint": "d655a6992b96ae5e14b53951fdcf464eda2b4dea4dcaa4bf1d0ec151b1d9f184",
-      "frontMatterFingerprint": "8a5a4814a6e0183cbf8b6b676252ed8634cd29e4787ac8a5677d842d998abc68",
-      "sourceFingerprint": "1bac4ce90472640e3e61720e57a7e832a24ac1e284d01cbb496754066bce5988"
+      "bodyFingerprint": "cc2aa16205b401e5add42d9db5417a4092732679d2d4d4783e43a40a384eb27b",
+      "frontMatterFingerprint": "b40fee6c60052e50f8ffefa2df18456055da51121f49179a9b8eabaaf9e86478",
+      "sourceFingerprint": "68be2bee69f60071e872826d7283b161b777532faa64846cb4b28c915a2d3e20"
     },
     "runtime-protocol.determinism": {
-      "bodyFingerprint": "f713d7f3ca714d47c97d5729cb0961152b87c7ad4f32c2f094fe80a91fbf5b3b",
-      "frontMatterFingerprint": "3c465a7cbf680e6ef4505cdf250399b798bec7bcf67e4b8b8a17a31ab6f36838",
-      "sourceFingerprint": "78e00086d85c2ae9a4283a3f0bb3290298fce60a83cc2a3b936dd8209548d5f6"
+      "bodyFingerprint": "cc29c6e614190303f5c7e17b45e2b210401ad83f10aca5949cb816a52f4cd0cc",
+      "frontMatterFingerprint": "3bd78253e757093d2bb931c5d0083c480ae42e6e753d53070fe07f55cbf1749f",
+      "sourceFingerprint": "142bc68341f7ce8025810c28fffd6c54786964e5593615bcfb032adec169194a"
     },
     "runtime-protocol.wire-contract": {
       "bodyFingerprint": "f131fa5bfe37676a10176617bd976e255a19a4ef62e22f9756d581a2b1e8789e",
@@ -196,8 +196,8 @@
   "fingerprintVersion": "1",
   "repository": {
     "baseline": {
-      "revision": "76b521f01924785b24e530975ac2ff251fd6ae8f",
-      "sourceFingerprint": "402a43c43de4fb00a1f83787e9a0516e78d6feb6b1b8c41f1e4f2f2c04dabfc9"
+      "revision": "fed03b3340ca325087e6134318e570678ca425d7",
+      "sourceFingerprint": "e2654a93e08bafcd3af1abf8d1297c3fc63b2e7d4cc9d41f45934082181fd231"
     }
   },
   "runtimeProtocol": "plugydown.context.runtime/v1",

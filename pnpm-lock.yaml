@@ -7,17 +7,29 @@ settings:
 catalogs:
   default:
     '@aaplugin/extension-hooks':
-      specifier: 1.0.0-beta.3
-      version: 1.0.0-beta.3
+      specifier: 1.0.0-beta.4
+      version: 1.0.0-beta.4
     '@aaplugin/kit':
-      specifier: 1.0.0-beta.3
-      version: 1.0.0-beta.3
+      specifier: 1.0.0-beta.4
+      version: 1.0.0-beta.4
+    '@aaplugin/platform-antigravity':
+      specifier: 1.0.0-beta.4
+      version: 1.0.0-beta.4
     '@aaplugin/platform-claude-code':
-      specifier: 1.0.0-beta.3
-      version: 1.0.0-beta.3
+      specifier: 1.0.0-beta.4
+      version: 1.0.0-beta.4
     '@aaplugin/platform-codex':
-      specifier: 1.0.0-beta.3
-      version: 1.0.0-beta.3
+      specifier: 1.0.0-beta.4
+      version: 1.0.0-beta.4
+    '@aaplugin/platform-cursor':
+      specifier: 1.0.0-beta.4
+      version: 1.0.0-beta.4
+    '@aaplugin/platform-opencode':
+      specifier: 1.0.0-beta.4
+      version: 1.0.0-beta.4
+    '@aaplugin/platform-pi':
+      specifier: 1.0.0-beta.4
+      version: 1.0.0-beta.4
     '@antfu/eslint-config':
       specifier: 9.3.0
       version: 9.3.0
@@ -65,16 +77,28 @@ importers:
     devDependencies:
       '@aaplugin/extension-hooks':
         specifier: 'catalog:'
-        version: 1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))
+        version: 1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))
       '@aaplugin/kit':
         specifier: 'catalog:'
-        version: 1.0.0-beta.3(@types/node@26.2.0)
+        version: 1.0.0-beta.4(@types/node@26.2.0)
+      '@aaplugin/platform-antigravity':
+        specifier: 'catalog:'
+        version: 1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))
       '@aaplugin/platform-claude-code':
         specifier: 'catalog:'
-        version: 1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))
+        version: 1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))
       '@aaplugin/platform-codex':
         specifier: 'catalog:'
-        version: 1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))
+        version: 1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))
+      '@aaplugin/platform-cursor':
+        specifier: 'catalog:'
+        version: 1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))
+      '@aaplugin/platform-opencode':
+        specifier: 'catalog:'
+        version: 1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))
+      '@aaplugin/platform-pi':
+        specifier: 'catalog:'
+        version: 1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))
       '@types/node':
         specifier: 'catalog:'
         version: 26.2.0
@@ -90,28 +114,52 @@ importers:
 
 packages:
 
-  '@aaplugin/extension-hooks@1.0.0-beta.3':
-    resolution: {integrity: sha512-mgIcNArld+v9QmSzFJ1o3ScxzW8+9G/lx6Sv0MZbZC0kVy7GVQeZOCQvChyA/6BvHOfqJ40DGFjtSsRJ97wcnA==}
+  '@aaplugin/extension-hooks@1.0.0-beta.4':
+    resolution: {integrity: sha512-FP8/vh8ELHKTPdJcj2tT0KRz9tkZwJuN6gfFkCgVc4KxUzMhUXSAEkUwkkEPWgs/Zi4mACaLqU+VHksK2BAoyQ==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
     peerDependencies:
-      '@aaplugin/kit': ^1.0.0-beta.3
+      '@aaplugin/kit': ^1.0.0-beta.4
 
-  '@aaplugin/kit@1.0.0-beta.3':
-    resolution: {integrity: sha512-214jJVs+Bts8F4vNb/nUpSU6runG7vSJCRYMMUyEVqtfxSni2Cejlq13PCYIoGx8ObdhNr4RUCWjCVwg2TRj/A==}
+  '@aaplugin/kit@1.0.0-beta.4':
+    resolution: {integrity: sha512-DZY+FERYBPQ2iuX43+oWTcXKZd5Ul1Yxi2Zp8Zkp9UebsQHamqRGF8MN47zuqf7Qv4yV9C8FleD5O+fzmeQLcw==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
     hasBin: true
 
-  '@aaplugin/platform-claude-code@1.0.0-beta.3':
-    resolution: {integrity: sha512-1uXrkMHWjMkbr3V3M+JUTRj4hZkKNzbC1tipTip/jNbhXf/RNA9Fxl3Vlcasby/irlD2xnqZFo5tnlc1e+JL/w==}
+  '@aaplugin/platform-antigravity@1.0.0-beta.4':
+    resolution: {integrity: sha512-R1mTRprjkbWitPSoVkhLzvWIQCJdVEwflJShsIuxdF9wLl7KRHGgS/er1LwMMBmq4H6dw+Bi2sJF4qHCnvJRIA==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
     peerDependencies:
-      '@aaplugin/kit': ^1.0.0-beta.3
+      '@aaplugin/kit': ^1.0.0-beta.4
 
-  '@aaplugin/platform-codex@1.0.0-beta.3':
-    resolution: {integrity: sha512-znTVo4YchGYgX5el6KAC2gP1IoeMDZc6Bku3MM4E1OMjN4Ifnt5PbseVGrpUdHYPGP+ld1bWnlRHVLU0m0TyFw==}
+  '@aaplugin/platform-claude-code@1.0.0-beta.4':
+    resolution: {integrity: sha512-KZ/67zP5pAw/snu0PcRLUBo+IpYa64yZhG0ZDkO5zcVDH6J9CV5rjwg4lppf2sLkerxQpav353vLrCq8tJUckg==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
     peerDependencies:
-      '@aaplugin/kit': ^1.0.0-beta.3
+      '@aaplugin/kit': ^1.0.0-beta.4
+
+  '@aaplugin/platform-codex@1.0.0-beta.4':
+    resolution: {integrity: sha512-mu8X7WOkjwi3oPmlL74W9khcMVGAxcm58u1Rqfsuzbsus27pzrV3QG6WuOiM/uimdc9RI7wfY4d41/gWyY2uRg==}
+    engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
+    peerDependencies:
+      '@aaplugin/kit': ^1.0.0-beta.4
+
+  '@aaplugin/platform-cursor@1.0.0-beta.4':
+    resolution: {integrity: sha512-ZZbZvvFKy8bp5gBvnHZiZ+JbQL9EiQQO3ooIDWRkAkyRTYUIKZHSUCWUeZMtsOiPRlElCzXYcrzpY8MJMTtGrg==}
+    engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
+    peerDependencies:
+      '@aaplugin/kit': ^1.0.0-beta.4
+
+  '@aaplugin/platform-opencode@1.0.0-beta.4':
+    resolution: {integrity: sha512-y5qY+3ptwP0S6VBLHkIE2spqbdI/LAOPRwKdj8BuF8WudvN7Z7wZHKhhBplXrujq4qW3XLxAzJ0OD/lO+dOZCQ==}
+    engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
+    peerDependencies:
+      '@aaplugin/kit': ^1.0.0-beta.4
+
+  '@aaplugin/platform-pi@1.0.0-beta.4':
+    resolution: {integrity: sha512-dI1S3+TZUaZ5SxB9n7GCmfhQTliCcySoNInseyxcwba8vsvZ0w7mIGgijXqgPaUgyb6A2BpAr/tf1QDwPxJWgQ==}
+    engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
+    peerDependencies:
+      '@aaplugin/kit': ^1.0.0-beta.4
 
   '@antfu/eslint-config@9.3.0':
     resolution: {integrity: sha512-+CIC4G6MowUl1RHiT01Ah9Obo/wwVynw7uNlN8ODwEn2opo9W1KzaatCrmu4WhGGJjOkOkyT5w7kKfQ//agHrQ==}
@@ -822,6 +870,14 @@ packages:
     resolution: {integrity: sha512-lGq+9yr1/GuAWaVYIHRjvvySG5/4VfKIvC8EWxStPdcDh/Ka7FG3twP6v4d5BkravUilhIAsG4Qj83t02LWUPQ==}
     engines: {node: '>=0.4.0'}
     hasBin: true
+
+  ajv-formats@3.0.1:
+    resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
+    peerDependencies:
+      ajv: ^8.0.0
+    peerDependenciesMeta:
+      ajv:
+        optional: true
 
   ajv@6.15.0:
     resolution: {integrity: sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw==}
@@ -2076,11 +2132,11 @@ packages:
 
 snapshots:
 
-  '@aaplugin/extension-hooks@1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))':
+  '@aaplugin/extension-hooks@1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))':
     dependencies:
-      '@aaplugin/kit': 1.0.0-beta.3(@types/node@26.2.0)
+      '@aaplugin/kit': 1.0.0-beta.4(@types/node@26.2.0)
 
-  '@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0)':
+  '@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0)':
     dependencies:
       '@inquirer/prompts': 8.7.0(@types/node@26.2.0)
       commander: 14.0.1
@@ -2090,16 +2146,35 @@ snapshots:
     transitivePeerDependencies:
       - '@types/node'
 
-  '@aaplugin/platform-claude-code@1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))':
+  '@aaplugin/platform-antigravity@1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))':
     dependencies:
-      '@aaplugin/kit': 1.0.0-beta.3(@types/node@26.2.0)
+      '@aaplugin/kit': 1.0.0-beta.4(@types/node@26.2.0)
 
-  '@aaplugin/platform-codex@1.0.0-beta.3(@aaplugin/kit@1.0.0-beta.3(@types/node@26.2.0))':
+  '@aaplugin/platform-claude-code@1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))':
     dependencies:
-      '@aaplugin/kit': 1.0.0-beta.3(@types/node@26.2.0)
+      '@aaplugin/kit': 1.0.0-beta.4(@types/node@26.2.0)
+
+  '@aaplugin/platform-codex@1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))':
+    dependencies:
+      '@aaplugin/kit': 1.0.0-beta.4(@types/node@26.2.0)
       image-size: 2.0.2
       saxes: 6.0.0
       yaml: 2.9.0
+
+  '@aaplugin/platform-cursor@1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))':
+    dependencies:
+      '@aaplugin/kit': 1.0.0-beta.4(@types/node@26.2.0)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      picomatch: 4.0.7
+
+  '@aaplugin/platform-opencode@1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))':
+    dependencies:
+      '@aaplugin/kit': 1.0.0-beta.4(@types/node@26.2.0)
+
+  '@aaplugin/platform-pi@1.0.0-beta.4(@aaplugin/kit@1.0.0-beta.4(@types/node@26.2.0))':
+    dependencies:
+      '@aaplugin/kit': 1.0.0-beta.4(@types/node@26.2.0)
 
   '@antfu/eslint-config@9.3.0(@typescript-eslint/typescript-estree@8.68.0(typescript@6.0.3))(@typescript-eslint/utils@8.68.0(eslint@10.8.1)(typescript@6.0.3))(@vue/compiler-sfc@3.5.42)(eslint@10.8.1)(typescript@6.0.3)(vitest@4.1.10(@types/node@26.2.0)(vite@8.2.2(@types/node@26.2.0)(yaml@2.9.0)))':
     dependencies:
@@ -2738,6 +2813,10 @@ snapshots:
       acorn: 8.18.0
 
   acorn@8.18.0: {}
+
+  ajv-formats@3.0.1(ajv@8.20.0):
+    optionalDependencies:
+      ajv: 8.20.0
 
   ajv@6.15.0:
     dependencies:
