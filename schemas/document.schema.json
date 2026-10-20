@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plugydown.dev/schemas/context/document/v1.json",
+  "title": "Plugydown Context Document v1 front matter",
+  "type": "object",
+  "required": ["schema", "id", "description", "kind", "domain"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "plugydown.context.document/v1" },
+    "id": { "$ref": "#/$defs/documentId" },
+    "description": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["domain", "architecture", "decision", "guide", "reference", "reflection"] },
+    "domain": { "$ref": "#/$defs/domainId" },
+    "relations": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "requires": { "$ref": "#/$defs/documentIdList" },
+        "related": { "$ref": "#/$defs/documentIdList" },
+        "supersedes": { "$ref": "#/$defs/documentIdList" }
+      }
+    },
+    "code": {
+      "type": "object",
+      "required": ["paths"],
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sourcePattern" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "domainId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "documentId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)*$"
+    },
+    "documentIdList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/documentId" }
+    },
+    "sourcePattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!(?:\\.git|\\.scratch|context)(?:/|$))(?!.*(?:^|/)(?:\\.{1,2}|node_modules)(?:/|$))(?!.*[~$?\\[\\]{}!\\u0000-\\u001f\\u007f])(?!.*%[A-Za-z_]\\w*%)(?![^/]*\\*)(?!.*(?:^|/)(?!\\*\\*(?:/|$))[^/]*\\*\\*[^/]*(?:/|$))(?!.*(?:^|/)\\*\\*(?:/.*)?/(?:\\*\\*)(?:/|$))[^/]+(?:/[^/]+)*$"
+    }
+  }
+}
