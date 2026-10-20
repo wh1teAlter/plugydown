@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/hooks/session-start/handler.mjs\" cursor"
+      }
+    ]
+  },
+  "version": 1
+}
