@@ -80,12 +80,12 @@
     "delivery": {
       "bodyFingerprint": "d98d2b6c5395a36a08d6cb7caa4f7deeb325306fd50115ca8534fd0f2d377340",
       "frontMatterFingerprint": "6d6b4bf950292647eff81bc35eaf58cf551ef63680cd60c8775b3f7252a1669f",
-      "sourceFingerprint": "e343e385eb15dc84187f4c79f4e9d20d36e7290aacc620236813d3bce978b302"
+      "sourceFingerprint": "7ecd6ea50cd59f6653919b6dc639d7db2d2a0e6ffdf6061e80852645cead200e"
     },
     "delivery.build-and-acceptance": {
       "bodyFingerprint": "7e2ecb5b7364786cbfb43ecce34d3d51c5a64748a747de23dc0515914e8ae05b",
       "frontMatterFingerprint": "b53b8198bfcd9f0c8b46d78abd0239ea18c950d250c26e80fcf19a1b3ca6c5e7",
-      "sourceFingerprint": "e911f4bd879da6a1b04ab1e9867ac375a18690fffc27c98182a62bf97bfa7654"
+      "sourceFingerprint": "390fc7ca99c7c6779ad443873371ba7742b144a5b22a613088e483696634a3a7"
     },
     "delivery.ownership-boundary": {
       "bodyFingerprint": "9825c55f31985eeecd2f09537a66298b14e599b32b4bfe035412db6224196765",
@@ -95,12 +95,12 @@
     "delivery.packaging": {
       "bodyFingerprint": "5269a91bfe9feb3855ad0fb4aeee67af98a7c08a3dc3cbc2f5f29bc4b6af829b",
       "frontMatterFingerprint": "1a34c814ba36170935ba68ee9087214a851e78b2549a071bdaabde483dde48ca",
-      "sourceFingerprint": "7ad47d6b219c93d08f72ae0bd7d8f414751993c90d7a89e02938cb39ff0dae95"
+      "sourceFingerprint": "2eeee08b82894113f900cac56158a9b7a816c14505e5a2095a0e52430d75d54d"
     },
     "delivery.verification-and-gaps": {
       "bodyFingerprint": "a42a263e1686727ce2aaf7d0de40ff65f7d65ad786f189fc0419cc7eee58e08b",
       "frontMatterFingerprint": "1b3dc66e257bcddcb69874728c5f72e506a644830daee1963eea67fddde85a4d",
-      "sourceFingerprint": "8905c8640f5953f93a1b91ffd77130583887368ed18617facf9b1732e90b9e09"
+      "sourceFingerprint": "9aacb54759a81a8519beac49901d19887385e4c072316da2b59a765526ab17fc"
     },
     "knowledge-model": {
       "bodyFingerprint": "51317d6462ae0d562c8d6a26ab5f7be96d06fe15c4431e9479a6c06e0bb6a634",
@@ -196,8 +196,8 @@
   "fingerprintVersion": "1",
   "repository": {
     "baseline": {
-      "revision": "fed03b3340ca325087e6134318e570678ca425d7",
-      "sourceFingerprint": "e2654a93e08bafcd3af1abf8d1297c3fc63b2e7d4cc9d41f45934082181fd231"
+      "revision": "60776352f938b7952b9171c48c990fb305fa3763",
+      "sourceFingerprint": "b9e988148e40a26fcf59c0b76280bdc782383ca3159bde8fec4f867b15c39d40"
     }
   },
   "runtimeProtocol": "plugydown.context.runtime/v1",
