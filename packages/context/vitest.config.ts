@@ -5,7 +5,7 @@ export default defineConfig({
     coverage: {
       enabled: false,
     },
-    include: ['tests/runtime/*.test.ts'],
+    include: ['tests/**/*.test.ts'],
     testTimeout: 30_000,
   },
 })

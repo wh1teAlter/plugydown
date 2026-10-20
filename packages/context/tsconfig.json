@@ -7,6 +7,7 @@
     "aaplugin.config.ts",
     "vitest.config.ts",
     "extension/**/*.ts",
+    "scripts/**/*.ts",
     "src/**/*.ts",
     "tests/**/*.ts"
   ]

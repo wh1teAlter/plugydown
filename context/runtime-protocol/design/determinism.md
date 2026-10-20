@@ -11,6 +11,9 @@ code:
   paths:
     - packages/context/src/runtime/stable-json.ts
     - packages/context/src/runtime/document.ts
+    - packages/context/scripts/verify-delivery.ts
+    - packages/context/tests/delivery/platforms.test.ts
+    - pnpm-workspace.yaml
     - .github/workflows/ci.yml
     - AGENTS.md
 ---
@@ -85,8 +88,16 @@ as outside the integrity boundary until someone decides otherwise.
 
 ## Stability of the build
 
-Two consecutive builds must produce identical bytes, and CI checks it. After building, `.github/workflows/ci.yml`
-records the SHA-256 of every `dist/` file plus the `pnpm inspect` report, builds a second time, and diffs the two
-records; any difference fails the job (see `delivery.verification-and-gaps`).
+Two consecutive builds must produce identical artifact bytes, modes, and reports. `.github/workflows/ci.yml` uses
+`scripts/verify-delivery.ts --snapshot` to record relative path, SHA-256, and mode for every `dist/` file, including
+hidden directories, while rejecting symlinks and special files. It adds the JSON inspect report, builds again, and
+diffs both records; any difference fails the job.
 
-Byte-equivalence of build output is mandated by `AGENTS.md`, which is why `delivery` pins every dependency exactly.
+The delivery suite also compares repeated `BuildReport` values and snapshots, and confirms that expanding the selected
+Platforms preserves the existing Claude/Codex output. `verify:delivery` requires the Runtime and its adjacent license
+to have identical bytes across all Platforms, including OpenCode's different delivery root. This artifact-mode check
+does not change the separate Context fingerprint boundary described above.
+
+Byte-equivalence is mandated by `AGENTS.md`. The exact registry catalog in `pnpm-workspace.yaml` makes a builder upgrade
+explicit; deterministic comparison proves consistency for the selected source and dependency versions, not invariance
+across upgrades. See `delivery.verification-and-gaps` for the automated checks and unexecuted host sessions.

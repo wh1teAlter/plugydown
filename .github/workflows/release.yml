@@ -75,13 +75,14 @@ jobs:
         env:
           REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
         run: |
-          # Each platform's built marketplace, byte for byte, becomes the tree of its own branch. Installers clone a Git
-          # ref, never an archive, and main stays free of generated artifacts.
+          # Publish the complete delivery unit, including hidden configuration directories, without modifying bytes.
+          # Claude/Codex use marketplaces; the other hosts consume Plugin, workspace or package roots.
           publish() {
             platform=$1
+            unit=$2
             branch=release-$platform
             work=$(mktemp -d)
-            cp -R "packages/context/dist/$platform/marketplace/." "$work/"
+            cp -R "packages/context/dist/$platform/$unit/." "$work/"
             cd "$work"
             git init -q
             git checkout -q -b "$branch"
@@ -104,8 +105,9 @@ jobs:
             fi
             cd - >/dev/null
           }
-          publish claude-code
-          publish codex
+          while read -r platform unit; do
+            publish "$platform" "$unit"
+          done < <(node -e 'for (const [platform, unit] of Object.entries(require("./packages/context/delivery.json"))) console.log(platform, unit)')
       - name: Tag the release and publish its notes
         if: ${{ !inputs.dry_run }}
         env:

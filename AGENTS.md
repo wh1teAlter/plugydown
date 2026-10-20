@@ -2,8 +2,8 @@
 
 ## 项目定位
 
-Plugydown 是 AI 工作流技能 monorepo。每个子包用 AAPlugin 构建为同时交付 Claude Code 与
-Codex 的插件。子包是**产品**，不是框架；框架能力属于上游 AAPlugin。
+Plugydown 是 AI 工作流技能 monorepo。每个子包用 AAPlugin 从同一份源码交付 Claude Code、
+Codex、Cursor、Antigravity CLI、OpenCode 与 Pi。子包是**产品**，不是框架；框架能力属于上游 AAPlugin。
 
 ## 技术与工具约束
 
@@ -31,7 +31,7 @@ AAPlugin 依赖**必须使用精确版本**，集中在 `pnpm-workspace.yaml` �
 | 构建生命周期、诊断、事务 | AAPlugin Core | 只提供输入 |
 | Command / Skill 发现与转换 | Core + Platform | 提供 canonical 源文件 |
 | Runtime 编译与交付 | Core | 提供 `src/runtime/` 与 entry 声明 |
-| Claude/Codex manifest、路径、命名 | 各 Platform | **不得直接写入** |
+| 各宿主 manifest、路径、命名 | 各 Platform | **不得直接写入** |
 | Hook wire 与 Handler 打包 | 官方 Hooks Extension | 提供 `src/hooks/<id>/hook.ts` |
 
 ## 禁止事项
@@ -62,6 +62,7 @@ pnpm test
 pnpm build
 pnpm validate
 pnpm inspect
+pnpm verify:delivery
 ```
 
 新增功能必须按风险补充测试。高风险点必须覆盖：事务失败路径与故障注入、恢复的三种结局、
@@ -73,6 +74,12 @@ pnpm inspect
 
 生成文件与报告中不得出现时间戳、绝对路径、临时路径、环境值或凭据。
 连续两次构建的产物字节与报告必须一致。
+
+`packages/context/delivery.json` 是发布与验收共用的交付单元映射。Claude/Codex 发布 marketplace，
+Cursor/Antigravity 发布 plugin，OpenCode 发布 workspace，Pi 发布 package；保留隐藏目录、权限和许可证。
+Runtime 使用显式唯一 entry，保留 Node 24+ 与业务仓库 cwd。角色正文只有一份，由 Extension 的六个
+Contributor 交付原生 Agent 或私有 Markdown，并生成各宿主的调用索引；缺少 Contributor 在 strict 下失败。
+宿主工具和模型偏好不能被描述成 Runtime 强制权限，未执行的真实宿主会话不能标为通过。
 
 ## Git 与改动安全
 
