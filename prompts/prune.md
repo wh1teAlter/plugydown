@@ -6,7 +6,7 @@ description: Converge Plugydown Context without losing unique knowledge or sourc
 Load the Context Operating Skill first and follow its Runtime, status, Role Brief, approval, and reporting rules.
 
 1. Call `repository.inspect`; continue only from ready, synchronized Context or resume the active run. Prune is always
-   Deep.
+   Deep. Outstanding `reviewRequired` obligations must be settled through Update before Prune can begin.
 2. Call `growth.measure`. Treat duplicate, fragmented, orphaned, and concentrated results only as review candidates.
 3. An Investigator verifies unique constraints, decisions, procedures, Reflections, relations, and hard source
    coverage. Every merge, move, rewrite, split, or deletion needs an explicit survival location.
