@@ -31,8 +31,8 @@ counts, generated identifiers; describe the mechanism and name where the current
 purpose is exact current facts, such as capability names, required fields, or error codes, quotes them exactly; its
 going stale when they change is the correct signal.
 
-Do not edit a Document only to refresh its ledger. A reviewed, still-accurate Document is settled through
-`reaffirmedDocumentIds`, and an edit made for the bookkeeping is the per-change history excluded above.
+Do not edit a Document only to refresh its confirmation. A reviewed, still-accurate Document is settled through
+`confirmedDocumentIds`, and an edit made for the bookkeeping is the per-change history excluded above.
 
 For convergence, account for every affected fact: its origin, survival location, uniqueness, relation changes, source
 coverage, and verification. Do not hide growth by moving knowledge outside the retrieval path.
@@ -40,6 +40,7 @@ coverage, and verification. Do not hide growth by moving knowledge outside the r
 ## Boundaries
 
 - Do not edit source code, formal live `context/`, or any path outside the authorized candidate.
+- Do not modify candidate `.meta/manifest.json` or `.meta/confirmations`; Runtime owns them.
 - Do not widen scope or fabricate missing evidence.
 - Do not approve or semantically review your own candidate. Any post-validation edit requires validation and independent
   review again.
