@@ -4,20 +4,32 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { call, CLIENT_DOMAIN, createRepository, documentSource, handle, porcelainModified, PROTOCOL, removeRepository, REVISION_A, REVISION_C, SERVICE_DOMAIN, SERVICE_GUIDE, transactionCall, writeGitEvidence, writeMeta } from './fixture.js'
 
+// 当前测试文件拥有的临时仓库集合，由 afterEach 统一清理。
 const roots: string[] = []
+// 修改服务正文后的固定夹具，用于事务验证和恢复测试。
 const changedService = { ...SERVICE_DOMAIN, body: '# Service\n\nChanged service behavior.\n' }
 
+/** 测试主助手批准，绑定候选与源码证据两个指纹。 */
 interface Approval {
+  /** 是否显式批准；可提交的批准必须为 true。 */
   readonly approved: true
+  /** 已验证候选完整目录树的 SHA-256 指纹。 */
   readonly candidateFingerprint: string
+  /** 当前候选引用源码与显式证据的整体 SHA-256 指纹。 */
   readonly sourceEvidenceFingerprint: string
+  /** 审查批准的简短说明；不替代指纹绑定。 */
   readonly summary: string
 }
 
+/** 已验证测试事务及其候选、证据和批准，供故障注入复用。 */
 interface PreparedRun {
+  /** Runtime 生成的事务 UUID，也是运行目录和写锁所有权标识。 */
   readonly runId: string
+  /** 当前测试事务拥有的完整候选目录。 */
   readonly candidatePath: string
+  /** 本次工作流拥有的 .scratch/evidence/ 直接子目录。 */
   readonly gitEvidencePath: string
+  /** 对当前已验证候选与源码证据的显式批准。 */
   readonly approval: Approval
 }
 
@@ -26,13 +38,16 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(removeRepository))
 })
 
+/** 从测试响应取得必需字符串字段，缺失时立即失败。 */
 function dataString(response: RuntimeResponse, key: string): string {
+  // 从测试响应取得的必需字段，缺失或类型错误时立即失败。
   const value = response.data?.[key]
   if (typeof value !== 'string')
     throw new TypeError(`Response data.${key} is not a string.`)
   return value
 }
 
+/** 用验证响应的两个指纹构造测试批准。 */
 function approval(response: RuntimeResponse): Approval {
   return {
     approved: true,
@@ -42,7 +57,9 @@ function approval(response: RuntimeResponse): Approval {
   }
 }
 
+/** 创建具有领域、指南和固定账本基线的测试仓库。 */
 async function readyRoot(): Promise<string> {
+  // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
   const root = await createRepository({
     documents: [SERVICE_DOMAIN, SERVICE_GUIDE, CLIENT_DOMAIN],
     baselineRevision: REVISION_A,
@@ -51,11 +68,25 @@ async function readyRoot(): Promise<string> {
   return root
 }
 
+/** 检查测试仓库中的指定路径是否仍存在。 */
 async function exists(root: string, relative: string): Promise<boolean> {
   return fs.access(path.join(root, relative)).then(() => true, () => false)
 }
 
-async function beginUpdate(root: string, options: { readonly dryRun?: boolean, readonly evidencePaths?: readonly string[] } = {}): Promise<{ readonly runId: string, readonly candidatePath: string, readonly gitEvidencePath: string }> {
+/** 收集固定 Git 证据并开始 Update 测试事务。 */
+async function beginUpdate(root: string, options: {
+  /** 为 true 时验证后结束并清理，不切换正式 Context。 */
+  readonly dryRun?: boolean
+  /** 宿主显式补充的仓库相对证据声明，事务期间必须保持新鲜。 */
+  readonly evidencePaths?: readonly string[]
+} = {}): Promise<{
+  /** Runtime 生成的事务 UUID，也是运行目录和写锁所有权标识。 */
+  readonly runId: string
+  /** 当前事务拥有的完整候选 Context 相对目录。 */
+  readonly candidatePath: string
+  /** 本次工作流拥有的 .scratch/evidence/ 直接子目录。 */
+  readonly gitEvidencePath: string
+}> {
   const gitEvidencePath = await writeGitEvidence(root)
   const response = await transactionCall(root, 'begin', {
     command: 'update',
@@ -69,11 +100,19 @@ async function beginUpdate(root: string, options: { readonly dryRun?: boolean, r
   return { runId: dataString(response, 'runId'), candidatePath: dataString(response, 'candidatePath'), gitEvidencePath }
 }
 
-async function prepareChanged(root: string, options: { readonly dryRun?: boolean, readonly glob?: boolean } = {}): Promise<PreparedRun> {
+/** 建立含内容变化的候选并取得验证指纹，供提交和恢复测试使用。 */
+async function prepareChanged(root: string, options: {
+  /** 为 true 时验证后结束并清理，不切换正式 Context。 */
+  readonly dryRun?: boolean
+  /** 测试是否使用 glob 声明覆盖源码。 */
+  readonly glob?: boolean
+} = {}): Promise<PreparedRun> {
+  // 当前测试已建立的事务与候选路径。
   const prepared = await beginUpdate(root, {
     ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
     evidencePaths: options.glob ? ['src/*.ts'] : ['src/service.ts'],
   })
+  // 当前通过 ID 找到的文档，作为本次判断的依据。
   const document = options.glob ? { ...changedService, codePaths: ['src/*.ts'] } : changedService
   await fs.writeFile(path.join(root, prepared.candidatePath, SERVICE_DOMAIN.relativePath), documentSource(document))
   const validated = await transactionCall(root, 'validate', { runId: prepared.runId })
@@ -81,29 +120,39 @@ async function prepareChanged(root: string, options: { readonly dryRun?: boolean
   return { ...prepared, approval: approval(validated) }
 }
 
+/** 读取测试事务清单，用于核对阶段与冻结授权。 */
 async function readManifest(root: string, runId: string): Promise<Record<string, unknown>> {
   return JSON.parse(await fs.readFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), 'utf8')) as Record<string, unknown>
 }
 
+/** 按测试场景修改持久清单，以模拟中断或损坏状态。 */
 async function updateManifest(root: string, runId: string, update: (manifest: Record<string, unknown>) => Record<string, unknown>): Promise<void> {
+  // 当前受检文件的实际路径，仅用于内部读写操作。
   const file = path.join(root, '.scratch', 'runs', runId, 'manifest.json')
   await fs.writeFile(file, `${JSON.stringify(update(await readManifest(root, runId)), null, 2)}\n`)
 }
 
+/** 将已验证夹具标为正在提交，模拟目录切换前的崩溃窗口。 */
 async function markCommitting(root: string, run: PreparedRun): Promise<void> {
+  // 当前受检文件的实际路径，仅用于内部读写操作。
   const file = path.join(root, `.scratch/runs/${run.runId}/manifest.json`)
+  // 已解析的事务阶段、冻结输入和恢复事实。
   const manifest = await readManifest(root, run.runId)
   await fs.writeFile(file, `${JSON.stringify({ ...manifest, phase: 'committing', approval: run.approval }, null, 2)}\n`)
 }
 
+/** 写入已提交阶段，模拟提交完成但尚未清理的现场。 */
 async function markCommitted(root: string, run: PreparedRun): Promise<void> {
+  // 当前受检文件的实际路径，仅用于内部读写操作。
   const file = path.join(root, `.scratch/runs/${run.runId}/manifest.json`)
+  // 已解析的事务阶段、冻结输入和恢复事实。
   const manifest = await readManifest(root, run.runId)
   await fs.writeFile(file, `${JSON.stringify({ ...manifest, phase: 'committed', approval: run.approval }, null, 2)}\n`)
 }
 
 describe('transaction lifecycle', () => {
   it('stages a complete candidate under one write lock and leaves read capabilities available', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const first = await beginUpdate(root)
     const second = await transactionCall(root, 'begin', {
@@ -129,6 +178,7 @@ describe('transaction lifecycle', () => {
     ['prune', 'light', true, 'TRANSACTION_MODE_INVALID'],
     ['update', 'deep', false, 'TRANSACTION_PRECONDITION_FAILED'],
   ] as const)('enforces %s/%s begin preconditions', async (command, mode, withContext, code) => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await createRepository({
       ...(withContext ? { documents: [SERVICE_DOMAIN], baselineRevision: REVISION_A } : {}),
     })
@@ -148,6 +198,7 @@ describe('transaction lifecycle', () => {
   })
 
   it('initializes an absent repository from an empty complete candidate root', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await createRepository()
     roots.push(root)
     const gitEvidencePath = await writeGitEvidence(root)
@@ -159,7 +210,9 @@ describe('transaction lifecycle', () => {
       gitEvidencePath,
       evidencePaths: ['src/service.ts'],
     })
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = dataString(began, 'runId')
+    // 本测试事务独占的完整候选 Context 相对目录。
     const candidatePath = dataString(began, 'candidatePath')
     await fs.mkdir(path.join(root, candidatePath, 'service'), { recursive: true })
     await fs.writeFile(path.join(root, candidatePath, SERVICE_DOMAIN.relativePath), documentSource(SERVICE_DOMAIN))
@@ -172,6 +225,7 @@ describe('transaction lifecycle', () => {
   })
 
   it('commits a deep prune when complete source coverage remains', async () => {
+    // 允许在 Prune 中删除且不丢失唯一覆盖的文档夹具。
     const removableGuide = {
       relativePath: SERVICE_GUIDE.relativePath,
       id: SERVICE_GUIDE.id,
@@ -181,6 +235,7 @@ describe('transaction lifecycle', () => {
       relations: { requires: ['service'] },
       body: '# Retry\n\nRetry only transient failures.\n',
     }
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await createRepository({
       documents: [SERVICE_DOMAIN, removableGuide, CLIENT_DOMAIN],
       baselineRevision: REVISION_A,
@@ -195,7 +250,9 @@ describe('transaction lifecycle', () => {
       gitEvidencePath,
       evidencePaths: ['src/service.ts'],
     })
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = dataString(began, 'runId')
+    // 本测试事务独占的完整候选 Context 相对目录。
     const candidatePath = dataString(began, 'candidatePath')
     await fs.rm(path.join(root, candidatePath, 'service/manual'), { recursive: true })
     const validated = await transactionCall(root, 'validate', { runId })
@@ -207,8 +264,11 @@ describe('transaction lifecycle', () => {
   })
 
   it('derives Meta, binds approval, switches whole directories, returns a bounded summary, and clears owned leaves', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
+    // 已解析的事务阶段、冻结输入和恢复事实。
     const manifest = await readManifest(root, run.runId)
     const candidateMeta = JSON.parse(await fs.readFile(path.join(root, run.candidatePath, 'meta.json'), 'utf8')) as Record<string, unknown>
     const committed = await transactionCall(root, 'commit', { runId: run.runId, approval: run.approval })
@@ -238,8 +298,10 @@ describe('transaction lifecycle', () => {
   })
 
   it('terminates byte-equivalent candidates as no_change without a directory switch', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const before = await fs.readFile(path.join(root, 'context/meta.json'))
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await beginUpdate(root)
     const result = await transactionCall(root, 'validate', { runId: run.runId })
 
@@ -252,8 +314,10 @@ describe('transaction lifecycle', () => {
   })
 
   it('returns dry-run fingerprints, leaves formal Context untouched, and makes the cleaned run non-resumable', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const before = await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root, { dryRun: true })
 
     expect(await exists(root, '.scratch/locks/context-write')).toBe(false)
@@ -268,6 +332,7 @@ describe('transaction lifecycle', () => {
   })
 
   it('allows source-degraded deep Update, but rejects Prune and non-repository Init scope', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     await fs.rm(path.join(root, 'src/retry.ts'))
     const updateEvidence = await writeGitEvidence(root, { id: 'degraded-update' })
@@ -293,6 +358,7 @@ describe('transaction lifecycle', () => {
     })
     expect(prune).toMatchObject({ status: 'failed', diagnostics: [{ code: 'TRANSACTION_PRECONDITION_FAILED' }] })
 
+    // 解析缺省关系时使用的空关系集合。
     const empty = await createRepository()
     roots.push(empty)
     const initEvidence = await writeGitEvidence(empty, { id: 'invalid-init-scope' })
@@ -308,6 +374,7 @@ describe('transaction lifecycle', () => {
   })
 
   it('abandons only fresh staged or validated runs and cleans all owned leaves', async () => {
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const stagedRoot = await readyRoot()
     const staged = await beginUpdate(stagedRoot)
     const abandoned = await transactionCall(stagedRoot, 'resume', { runId: staged.runId, disposition: 'abandon' })
@@ -316,6 +383,7 @@ describe('transaction lifecycle', () => {
     expect(await exists(stagedRoot, staged.gitEvidencePath)).toBe(false)
     expect(await exists(stagedRoot, '.scratch/locks/context-write')).toBe(false)
 
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const validatedRoot = await readyRoot()
     const validated = await prepareChanged(validatedRoot)
     expect(await transactionCall(validatedRoot, 'resume', { runId: validated.runId, disposition: 'abandon' })).toMatchObject({
@@ -323,7 +391,9 @@ describe('transaction lifecycle', () => {
       data: { outcome: 'abandoned' },
     })
 
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const committingRoot = await readyRoot()
+    // 已经绑定批准、即将持久保存的提交中清单。
     const committing = await prepareChanged(committingRoot)
     await markCommitting(committingRoot, committing)
     const rejected = await transactionCall(committingRoot, 'resume', { runId: committing.runId, disposition: 'abandon' })
@@ -335,6 +405,7 @@ describe('transaction lifecycle', () => {
 
 describe('transaction validation and concurrency', () => {
   it('rejects incomplete candidates and prune candidates that lose source coverage', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const invalid = await beginUpdate(root)
     await fs.rm(path.join(root, invalid.candidatePath, 'service/domain.md'))
@@ -346,6 +417,7 @@ describe('transaction validation and concurrency', () => {
     expect(await exists(root, invalid.gitEvidencePath)).toBe(true)
     await transactionCall(root, 'resume', { runId: invalid.runId, disposition: 'abandon' })
 
+    // 当前工作流拥有的宿主 Git 证据叶子或已校验快照。
     const evidence = await writeGitEvidence(root, { id: 'prune' })
     const began = await transactionCall(root, 'begin', {
       command: 'prune',
@@ -355,7 +427,9 @@ describe('transaction validation and concurrency', () => {
       gitEvidencePath: evidence,
       evidencePaths: ['src/service.ts'],
     })
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = dataString(began, 'runId')
+    // 本次正在校验或推导的候选值。
     const candidate = dataString(began, 'candidatePath')
     await fs.rm(path.join(root, candidate, 'service/manual'), { recursive: true })
     const pruned = await transactionCall(root, 'validate', { runId })
@@ -367,6 +441,7 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('keeps a Prune candidate editable when live source coverage degrades after begin', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const gitEvidencePath = await writeGitEvidence(root, { id: 'prune-degraded' })
     const began = await transactionCall(root, 'begin', {
@@ -377,15 +452,14 @@ describe('transaction validation and concurrency', () => {
       gitEvidencePath,
       evidencePaths: ['src/service.ts'],
     })
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = dataString(began, 'runId')
-    // Prune requires complete live source at begin; losing a declared file afterwards must
-    // surface as an editable candidate rather than a silent pass or a hard mechanical failure.
+    // Prune 在 begin 时要求完整证据；之后丢失源码应保留可编辑候选，而不是静默通过或误报为机械失败。
     await fs.rm(path.join(root, 'src/retry.ts'))
 
     const result = await transactionCall(root, 'validate', { runId })
 
-    // The candidate's own source expansion reports the exact missing declaration first, so
-    // PRUNE_SOURCE_DEGRADED is a deeper backstop; either way the run stays editable and held.
+    // 候选源码展开首先报告具体缺失声明，PRUNE_SOURCE_DEGRADED 只是后备检查；两种情况都保留事务与锁。
     expect(result).toMatchObject({
       status: 'incomplete',
       data: { outcome: 'candidate_edit_required', nextAction: 'edit_candidate' },
@@ -396,7 +470,9 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('stops validate when declared source or formal Context changed after begin', async () => {
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const sourceRoot = await readyRoot()
+    // 当前故障场景建立的事务及候选路径，后续用于注入变化。
     const sourceRun = await beginUpdate(sourceRoot)
     await fs.appendFile(path.join(sourceRoot, 'src/service.ts'), 'export const changed = true\n')
     const sourceResult = await transactionCall(sourceRoot, 'validate', { runId: sourceRun.runId })
@@ -405,7 +481,9 @@ describe('transaction validation and concurrency', () => {
     expect(await exists(sourceRoot, `.scratch/runs/${sourceRun.runId}`)).toBe(false)
     expect(await exists(sourceRoot, sourceRun.gitEvidencePath)).toBe(false)
 
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const formalRoot = await readyRoot()
+    // 当前故障场景建立的事务及候选路径，后续用于注入变化。
     const formalRun = await beginUpdate(formalRoot)
     await fs.appendFile(path.join(formalRoot, 'context/service/domain.md'), '\n')
     const formalResult = await transactionCall(formalRoot, 'validate', { runId: formalRun.runId })
@@ -416,7 +494,9 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('treats any byte replacement of the frozen Git evidence as snapshot stale', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await beginUpdate(root)
     await fs.appendFile(path.join(root, run.gitEvidencePath, 'mid-operation.json'), '\n')
 
@@ -432,6 +512,7 @@ describe('transaction validation and concurrency', () => {
   })
 
   it.each(['add', 'delete', 'move', 'content'] as const)('rejects an out-of-scope %s mutation and preserves the editable candidate', async (mutation) => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const gitEvidencePath = await writeGitEvidence(root, { id: `scope-${mutation}` })
     const began = await transactionCall(root, 'begin', {
@@ -442,9 +523,12 @@ describe('transaction validation and concurrency', () => {
       gitEvidencePath,
       evidencePaths: ['src/client.ts'],
     })
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = dataString(began, 'runId')
+    // 本次正在校验或推导的候选值。
     const candidate = dataString(began, 'candidatePath')
     if (mutation === 'add') {
+      // 候选中新增的文档夹具，用于范围授权验证。
       const added = {
         relativePath: 'service/manual/new-guide.md',
         id: 'service.new-guide',
@@ -481,21 +565,27 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('returns incomplete without switching when candidate, source content, glob set, formal Context, or approval changes', async () => {
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const candidateRoot = await readyRoot()
+    // 当前故障场景建立的事务及候选路径，后续用于注入变化。
     const candidateRun = await prepareChanged(candidateRoot)
     await fs.appendFile(path.join(candidateRoot, candidateRun.candidatePath, SERVICE_DOMAIN.relativePath), '\n')
     const candidateResult = await transactionCall(candidateRoot, 'commit', { runId: candidateRun.runId, approval: candidateRun.approval })
     expect(candidateResult.status).toBe('incomplete')
     expect(candidateResult.data).toMatchObject({ outcome: 'candidate_stale', nextAction: 'validate' })
 
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const sourceRoot = await readyRoot()
+    // 当前故障场景建立的事务及候选路径，后续用于注入变化。
     const sourceRun = await prepareChanged(sourceRoot)
     await fs.appendFile(path.join(sourceRoot, 'src/service.ts'), 'export const concurrent = true\n')
     const sourceResult = await transactionCall(sourceRoot, 'commit', { runId: sourceRun.runId, approval: sourceRun.approval })
     expect(sourceResult.status).toBe('failed')
     expect(sourceResult.data).toMatchObject({ outcome: 'snapshot_stale', nextAction: 'restart_transaction' })
 
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const globRoot = await readyRoot()
+    // 当前故障场景建立的事务及候选路径，后续用于注入变化。
     const globRun = await prepareChanged(globRoot, { glob: true })
     await fs.writeFile(path.join(globRoot, 'src/new.ts'), 'export const added = true\n')
     expect(await transactionCall(globRoot, 'commit', { runId: globRun.runId, approval: globRun.approval })).toMatchObject({
@@ -503,7 +593,9 @@ describe('transaction validation and concurrency', () => {
       data: { outcome: 'snapshot_stale', nextAction: 'restart_transaction' },
     })
 
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const formalRoot = await readyRoot()
+    // 当前故障场景建立的事务及候选路径，后续用于注入变化。
     const formalRun = await prepareChanged(formalRoot)
     await fs.appendFile(path.join(formalRoot, 'context/client/domain.md'), '\n')
     expect(await transactionCall(formalRoot, 'commit', { runId: formalRun.runId, approval: formalRun.approval })).toMatchObject({
@@ -511,8 +603,11 @@ describe('transaction validation and concurrency', () => {
       data: { outcome: 'snapshot_stale', nextAction: 'restart_transaction' },
     })
 
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const approvalRoot = await readyRoot()
+    // 当前故障场景建立的事务及候选路径，后续用于注入变化。
     const approvalRun = await prepareChanged(approvalRoot)
+    // 故意破坏候选指纹的批准输入。
     const mismatched = { ...approvalRun.approval, candidateFingerprint: '0'.repeat(64) }
     const approvalResult = await transactionCall(approvalRoot, 'commit', { runId: approvalRun.runId, approval: mismatched })
     expect(approvalResult.status).toBe('incomplete')
@@ -520,6 +615,7 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('advances a settled repository baseline without prior-to-HEAD diff evidence, as after a squash merge', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const gitEvidencePath = await writeGitEvidence(root, { id: 'baseline-gap', revision: REVISION_C })
     const began = await transactionCall(root, 'begin', {
@@ -530,22 +626,34 @@ describe('transaction validation and concurrency', () => {
       gitEvidencePath,
       evidencePaths: ['src/service.ts'],
     })
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = dataString(began, 'runId')
+    // 本测试事务独占的完整候选 Context 相对目录。
     const candidatePath = dataString(began, 'candidatePath')
     await fs.writeFile(path.join(root, candidatePath, SERVICE_DOMAIN.relativePath), documentSource(changedService))
 
     const validated = await transactionCall(root, 'validate', { runId })
-    const meta = JSON.parse(await fs.readFile(path.join(root, candidatePath, 'meta.json'), 'utf8')) as { repository?: { baseline?: { revision?: string } } }
+    const meta = JSON.parse(await fs.readFile(path.join(root, candidatePath, 'meta.json'), 'utf8')) as {
+      /** 上次可证明全仓审查完成时记录的源码基线。 */
+      repository?: {
+        /** 特定用途的持久基线，不能因局部修复自动推进。 */
+        baseline?: {
+          /** 完整 Git 提交对象 ID，不依赖分支名称。 */
+          revision?: string
+        }
+      }
+    }
 
     expect(validated.status).toBe('success')
     expect(meta.repository?.baseline?.revision).toBe(REVISION_C)
   })
 
   it.each(['candidateFingerprint', 'sourceEvidenceFingerprint'] as const)('rejects an approval whose %s does not bind current bytes', async (field) => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
-    // Each fingerprint is bound independently: corrupting either one alone must be refused,
-    // so neither comparison can be dropped without a test noticing.
+    // 分别破坏两个批准指纹，验证任何一项比较都不能省略。
     const approval = { ...run.approval, [field]: 'b'.repeat(64) }
 
     const result = await transactionCall(root, 'commit', { runId: run.runId, approval })
@@ -559,8 +667,11 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('invalidates the old approval after a validated candidate changes', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
+    // 第二次更改的候选正文，用于验证旧批准失效。
     const changedAgain = { ...changedService, body: '# Service\n\nA second reviewed candidate.\n' }
     await fs.writeFile(path.join(root, run.candidatePath, SERVICE_DOMAIN.relativePath), documentSource(changedAgain))
     const revalidated = await transactionCall(root, 'validate', { runId: run.runId })
@@ -573,7 +684,9 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('includes every candidate code path in approval freshness even when it was not declared at begin', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await fs.appendFile(path.join(root, 'src/retry.ts'), 'export const concurrentRetry = true\n')
 
@@ -588,7 +701,9 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('rejects an invalid manifest without deleting the active scene', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await beginUpdate(root)
     await updateManifest(root, run.runId, manifest => ({ ...manifest, unexpected: true }))
 
@@ -601,10 +716,14 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('checks the current lock owner before reading a stale candidate', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await fs.appendFile(path.join(root, run.candidatePath, SERVICE_DOMAIN.relativePath), '\ninvalid after validation\n')
+    // 模拟竞争写者的固定事务 UUID。
     const otherRunId = '22222222-2222-4222-8222-222222222222'
+    // 模拟竞争事务拥有的运行目录。
     const otherDirectory = path.join(root, '.scratch', 'runs', otherRunId)
     await fs.mkdir(otherDirectory, { recursive: true })
     await fs.writeFile(
@@ -625,7 +744,9 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('resumes only fresh staged/validated runs and safely reacquires a lost same-run lock', async () => {
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const stagedRoot = await readyRoot()
+    // 当前故障场景建立的事务及候选路径，后续用于注入变化。
     const stagedRun = await beginUpdate(stagedRoot)
     await fs.rm(path.join(stagedRoot, '.scratch/locks/context-write'), { recursive: true })
     const staged = await transactionCall(stagedRoot, 'resume', { runId: stagedRun.runId })
@@ -636,7 +757,9 @@ describe('transaction validation and concurrency', () => {
     expect(stagedStale.status).toBe('failed')
     expect(stagedStale.data).toMatchObject({ outcome: 'snapshot_stale', nextAction: 'restart_transaction' })
 
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await fs.rm(path.join(root, '.scratch/locks/context-write'), { recursive: true })
     const fresh = await transactionCall(root, 'resume', { runId: run.runId })
@@ -650,7 +773,9 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('rebuilds a missing staged candidate only while every begin snapshot remains fresh', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await beginUpdate(root)
     await fs.rm(path.join(root, run.candidatePath), { recursive: true })
     await fs.rm(path.join(root, '.scratch/locks/context-write'), { recursive: true })
@@ -662,7 +787,9 @@ describe('transaction validation and concurrency', () => {
     })
     expect(await fs.readFile(path.join(root, run.candidatePath, SERVICE_DOMAIN.relativePath), 'utf8')).toBe(documentSource(SERVICE_DOMAIN))
 
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const staleRoot = await readyRoot()
+    // 当前故障场景建立的事务及候选路径，后续用于注入变化。
     const staleRun = await beginUpdate(staleRoot)
     await fs.rm(path.join(staleRoot, staleRun.candidatePath), { recursive: true })
     await fs.appendFile(path.join(staleRoot, 'src/service.ts'), 'export const staleBeforeRebuild = true\n')
@@ -675,9 +802,11 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('requires manual recovery for corrupt or differently owned locks', async () => {
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const corruptRoot = await readyRoot()
     await fs.mkdir(path.join(corruptRoot, '.scratch/locks/context-write'), { recursive: true })
     await fs.writeFile(path.join(corruptRoot, '.scratch/locks/context-write/owner.json'), '{}')
+    // 当前工作流拥有的宿主 Git 证据叶子或已校验快照。
     const evidence = await writeGitEvidence(corruptRoot)
     const corrupt = await transactionCall(corruptRoot, 'begin', {
       command: 'update',
@@ -690,7 +819,9 @@ describe('transaction validation and concurrency', () => {
     expect(corrupt.status).toBe('incomplete')
     expect(corrupt.data?.manualRecoveryRequired).toBe(true)
 
+    // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const ownerRoot = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await beginUpdate(ownerRoot)
     await fs.writeFile(path.join(ownerRoot, '.scratch/locks/context-write/owner.json'), JSON.stringify({
       schema: 'plugydown.context.lock/v1',
@@ -706,9 +837,10 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('settles a reaffirmed Document whose sources moved without inventing an edit', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const original = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
-    // SERVICE_GUIDE cites src/retry.ts, so its recorded source fingerprint goes stale.
+    // SERVICE_GUIDE 引用 src/retry.ts，因此该文件变化使其记录的源码指纹过期。
     await fs.writeFile(path.join(root, 'src/retry.ts'), 'retry C\n')
     expect((await call(root, 'graph.validate', {})).diagnostics?.map(item => item.code)).toEqual(['DOCUMENT_REVIEW_PENDING'])
 
@@ -723,12 +855,13 @@ describe('transaction validation and concurrency', () => {
       reaffirmedDocumentIds: ['service.retry'],
     })
     expect(began.status).toBe('success')
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = dataString(began, 'runId')
 
-    // No candidate edit at all: the whole point is that the Document is still accurate.
+    // 不修改候选正文，验证仍然准确的文档能通过明确重新确认结清审查。
     const first = await transactionCall(root, 'validate', { runId })
     expect(first.data).toMatchObject({ outcome: 'ready_for_review' })
-    // Validating again — as after candidate_stale — must keep the permission granted at begin.
+    // 重新验证仍须保留 begin 时冻结的重新确认授权。
     const validated = await transactionCall(root, 'validate', { runId })
     expect(validated.status).toBe('success')
     expect(validated.data).toMatchObject({ outcome: 'ready_for_review' })
@@ -744,8 +877,10 @@ describe('transaction validation and concurrency', () => {
   })
 
   it('refuses to reaffirm an unknown Document, one outside scope, or any non-update command', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const gitEvidencePath = await writeGitEvidence(root)
+    /** 使用可覆盖的冻结输入开始 Repair 或其他测试事务。 */
     const begin = async (patch: Record<string, unknown>): Promise<RuntimeResponse> => transactionCall(root, 'begin', {
       command: 'update',
       mode: 'deep',
@@ -758,17 +893,18 @@ describe('transaction validation and concurrency', () => {
 
     expect((await begin({ reaffirmedDocumentIds: ['service.absent'] })).diagnostics?.map(item => item.code))
       .toContain('TRANSACTION_SCOPE_INVALID')
-    // In scope terms `client` exists but was never authorized, so settling it would exceed the grant.
+    // client 虽然存在，但不在授权范围内，不能结清其记录。
     expect((await begin({ reaffirmedDocumentIds: ['client'] })).diagnostics?.map(item => item.code))
       .toContain('TRANSACTION_SCOPE_INVALID')
     expect((await begin({ command: 'prune', scope: { kind: 'repository' }, reaffirmedDocumentIds: ['service.retry'] })).diagnostics?.map(item => item.code))
       .toContain('TRANSACTION_SCOPE_INVALID')
 
-    // A lock must not survive a rejected begin.
+    // begin 被拒绝后不能留下写锁。
     expect(await exists(root, '.scratch/locks/context-write')).toBe(false)
   })
 
   it('still withholds a fresh ledger from an in-scope Document that was neither edited nor reaffirmed', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const original = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
     await fs.writeFile(path.join(root, 'src/retry.ts'), 'retry C\n')
@@ -786,21 +922,23 @@ describe('transaction validation and concurrency', () => {
       evidencePaths: ['src/retry.ts', 'src/service.ts'],
       reaffirmedDocumentIds: ['service.retry'],
     })
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = dataString(began, 'runId')
     const validated = await transactionCall(root, 'validate', { runId })
     await transactionCall(root, 'commit', { runId, approval: approval(validated) })
 
     const after = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
     expect(after.documents['service.retry']).not.toEqual(original.documents['service.retry'])
-    // `service` was authorized but neither edited nor reaffirmed: its stale ledger is the only
-    // record that nobody reviewed it, so it must survive.
+    // service 虽在授权范围内，但未经编辑或明确重新确认，其待审记录必须保留。
     expect(after.documents.service).toEqual(original.documents.service)
   })
 })
 
 describe('transaction crash recovery', () => {
   it('continues a uniquely safe pre-switch window', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await markCommitting(root, run)
 
@@ -812,6 +950,7 @@ describe('transaction crash recovery', () => {
   })
 
   it('completes an init pre-switch window when the snapshot and live tree are both absent', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await createRepository()
     roots.push(root)
     const gitEvidencePath = await writeGitEvidence(root, { id: 'init-crash' })
@@ -823,11 +962,14 @@ describe('transaction crash recovery', () => {
       gitEvidencePath,
       evidencePaths: ['src/service.ts'],
     })
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = dataString(began, 'runId')
+    // 本测试事务独占的完整候选 Context 相对目录。
     const candidatePath = dataString(began, 'candidatePath')
     await fs.mkdir(path.join(root, candidatePath, 'service'), { recursive: true })
     await fs.writeFile(path.join(root, candidatePath, SERVICE_DOMAIN.relativePath), documentSource(SERVICE_DOMAIN))
     const validated = await transactionCall(root, 'validate', { runId })
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run: PreparedRun = { runId, candidatePath, gitEvidencePath, approval: approval(validated) }
     await markCommitting(root, run)
 
@@ -841,10 +983,13 @@ describe('transaction crash recovery', () => {
   })
 
   it('restores a trusted backup after the live-to-backup crash window', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const before = await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await markCommitting(root, run)
+    // 当前事务原始 Context 备份的目录事实。
     const backup = path.join(root, `.scratch/runs/${run.runId}/backup/context`)
     await fs.mkdir(path.dirname(backup), { recursive: true })
     await fs.rename(path.join(root, 'context'), backup)
@@ -859,9 +1004,12 @@ describe('transaction crash recovery', () => {
   })
 
   it('finalizes an already switched approved candidate and cleans backup/lock', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await markCommitting(root, run)
+    // 当前事务原始 Context 备份的目录事实。
     const backup = path.join(root, `.scratch/runs/${run.runId}/backup/context`)
     await fs.mkdir(path.dirname(backup), { recursive: true })
     await fs.rename(path.join(root, 'context'), backup)
@@ -876,9 +1024,12 @@ describe('transaction crash recovery', () => {
   })
 
   it('finalizes an already switched candidate without re-reading changed source evidence', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await markCommitting(root, run)
+    // 当前事务原始 Context 备份的目录事实。
     const backup = path.join(root, `.scratch/runs/${run.runId}/backup/context`)
     await fs.mkdir(path.dirname(backup), { recursive: true })
     await fs.rename(path.join(root, 'context'), backup)
@@ -893,10 +1044,13 @@ describe('transaction crash recovery', () => {
   })
 
   it('preserves a corrupted switched candidate and trusted backup for manual recovery', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const before = await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await markCommitting(root, run)
+    // 当前事务原始 Context 备份的目录事实。
     const backup = path.join(root, `.scratch/runs/${run.runId}/backup/context`)
     await fs.mkdir(path.dirname(backup), { recursive: true })
     await fs.rename(path.join(root, 'context'), backup)
@@ -914,9 +1068,12 @@ describe('transaction crash recovery', () => {
   })
 
   it('finishes cleanup after a committed-manifest crash window', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await markCommitting(root, run)
+    // 当前事务原始 Context 备份的目录事实。
     const backup = path.join(root, `.scratch/runs/${run.runId}/backup/context`)
     await fs.mkdir(path.dirname(backup), { recursive: true })
     await fs.rename(path.join(root, 'context'), backup)
@@ -934,15 +1091,20 @@ describe('transaction crash recovery', () => {
   })
 
   it('honors restore intent after backup rename and never switches the still-approved candidate', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const before = await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await markCommitting(root, run)
+    // 当前事务原始 Context 备份的目录事实。
     const backup = path.join(root, `.scratch/runs/${run.runId}/backup/context`)
     await fs.mkdir(path.dirname(backup), { recursive: true })
     await fs.rename(path.join(root, 'context'), backup)
     await fs.symlink(path.join('.scratch', 'runs', run.runId, 'candidate', 'context'), path.join(root, 'context'))
+    // 故障注入前保留的真实 fs.rename 实现。
     const realRename = fs.rename.bind(fs)
+    // 故障注入是否已执行，或负责注入的可恢复测试替身。
     const injected = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
       if (String(from).endsWith('/backup/context'))
         throw new TypeError('injected unknown restore failure')
@@ -962,8 +1124,10 @@ describe('transaction crash recovery', () => {
   })
 
   it('does not trust a terminal phase when directory facts still describe pre-switch state', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const before = await fs.readFile(path.join(root, 'context/service/domain.md'), 'utf8')
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await markCommitted(root, run)
 
@@ -978,12 +1142,16 @@ describe('transaction crash recovery', () => {
   })
 
   it('preserves conflicting complete copies for manual recovery', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await markCommitting(root, run)
+    // 当前事务原始 Context 备份的目录事实。
     const backup = path.join(root, `.scratch/runs/${run.runId}/backup/context`)
     await fs.mkdir(path.dirname(backup), { recursive: true })
     await fs.cp(path.join(root, 'context'), backup, { recursive: true })
+    // 与原始快照和候选均不同的有效知识副本。
     const conflicting = { ...CLIENT_DOMAIN, body: '# Client\n\nConcurrent valid knowledge.\n' }
     await fs.writeFile(path.join(root, 'context/client/domain.md'), documentSource(conflicting))
     await writeMeta(root, [SERVICE_DOMAIN, SERVICE_GUIDE, conflicting], { baselineRevision: REVISION_A })
@@ -998,7 +1166,9 @@ describe('transaction crash recovery', () => {
   })
 
   it('fails without deleting diagnostics when no complete trusted copy remains', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
     await markCommitting(root, run)
     await fs.rm(path.join(root, 'context'), { recursive: true })
@@ -1013,11 +1183,15 @@ describe('transaction crash recovery', () => {
   })
 
   it('returns mechanical_failure and cleans when a known filesystem failure occurs before the first switch', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
+    // 故障注入前保留的真实 fs.rename 实现。
     const realRename = fs.rename.bind(fs)
     vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
       if (String(from).endsWith('manifest.json.tmp')) {
+        // 本测试主动构造的文件系统异常，不来自外部环境。
         const error = new Error('injected known failure') as NodeJS.ErrnoException
         error.code = 'EACCES'
         throw error
@@ -1038,9 +1212,12 @@ describe('transaction crash recovery', () => {
   })
 
   it('leaves no unreadable lock owner when an unknown failure escapes before the manifest exists', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const gitEvidencePath = await writeGitEvidence(root)
+    // 故障注入前保留的真实目录创建实现。
     const realMkdir = fs.mkdir.bind(fs)
+    // 故障注入是否已执行，或负责注入的可恢复测试替身。
     const injected = vi.spyOn(fs, 'mkdir').mockImplementation(async (target, options) => {
       if (String(target).includes('/.scratch/runs/') && !String(target).endsWith('/runs'))
         throw new TypeError('injected unknown run staging failure')
@@ -1057,8 +1234,7 @@ describe('transaction crash recovery', () => {
     })).rejects.toThrow('injected unknown run staging failure')
     injected.mockRestore()
 
-    // No manifest was ever written, so the lock must not survive pointing at a run that
-    // can never be read: a later begin has to be able to proceed.
+    // 尚未写入清单时不能留下指向不可读事务的锁，后续 begin 必须仍可进行。
     expect(await exists(root, '.scratch/locks/context-write')).toBe(false)
     const retried = await transactionCall(root, 'begin', {
       command: 'update',
@@ -1072,8 +1248,11 @@ describe('transaction crash recovery', () => {
   })
 
   it('rejects unknown switch failures as transport errors and preserves the committing scene', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
+    // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await prepareChanged(root)
+    // 故障注入前保留的真实 fs.rename 实现。
     const realRename = fs.rename.bind(fs)
     vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
       if (String(to).endsWith('/backup/context'))

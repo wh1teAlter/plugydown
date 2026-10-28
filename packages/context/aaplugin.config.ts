@@ -9,9 +9,7 @@ import pi from '@aaplugin/platform-pi'
 import internalRoles from './extension/internal-roles.js'
 import pkg from './package.json' with { type: 'json' }
 
-// `package.json` is the single source of truth for package identity. Only fields with no
-// npm equivalent are declared here: the plugin name (npm's is the scoped `@plugydown/context`)
-// and the human-facing display name.
+// package.json 是包身份的唯一来源；此处只声明没有 npm 对应字段的插件名和展示名。
 export default defineConfig({
   name: 'context',
   version: pkg.version,
@@ -60,8 +58,8 @@ export default defineConfig({
   ],
   runtime: {
     entries: {
-      // Keep this explicit: other top-level Runtime files are helpers, not executables.
-      // `agents` is reserved for the Extension's invocation index and private role resources.
+      // 显式声明唯一可执行入口，其他 Runtime 顶层文件均为辅助模块。
+      // agents 名称保留给 Extension 的调用索引与私有角色资源。
       context: { entry: 'cli.ts', kind: 'executable' },
     },
   },

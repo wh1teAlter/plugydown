@@ -3,9 +3,11 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { call, CLIENT_DOMAIN, createRepository, feedbackId, removeRepository, REVISION_A, SERVICE_DOMAIN, SERVICE_GUIDE } from './fixture.js'
 
+// 当前测试文件拥有的临时仓库集合，由 afterEach 统一清理。
 const roots: string[] = []
 afterEach(async () => Promise.all(roots.splice(0).map(removeRepository)))
 
+// 固定复盘文档夹具，用于反馈匹配和检索测试。
 const REFLECTION = {
   relativePath: 'service/reflections/retry-learning.md',
   id: 'service.retry-learning',
@@ -16,7 +18,9 @@ const REFLECTION = {
   body: '# Retry learning\n\nRetry only transient failures and preserve permanent errors.\n',
 }
 
+/** 创建可读取的正式 Context 及固定源码基线。 */
 async function ready(): Promise<string> {
+  // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
   const root = await createRepository({ documents: [SERVICE_DOMAIN, SERVICE_GUIDE, CLIENT_DOMAIN, REFLECTION], baselineRevision: REVISION_A })
   roots.push(root)
   return root
@@ -24,6 +28,7 @@ async function ready(): Promise<string> {
 
 describe('read queries', () => {
   it('reports absent, ready, and invalid Context/Meta L0 states without returning bodies or Git details', async () => {
+    // 尚未创建正式 Context 的隔离测试仓库。
     const absent = await createRepository()
     roots.push(absent)
     expect(await call(absent, 'repository.inspect', {})).toMatchObject({
@@ -31,6 +36,7 @@ describe('read queries', () => {
       data: { context: { state: 'absent' }, meta: { state: 'absent' } },
     })
 
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
     const readyResponse = await call(root, 'repository.inspect', {})
     expect(readyResponse).toMatchObject({
@@ -48,7 +54,9 @@ describe('read queries', () => {
   })
 
   it('reports a short active write run without blocking read-only queries', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = '00000000-0000-4000-8000-000000000001'
     await fs.mkdir(path.join(root, `.scratch/locks/context-write`), { recursive: true })
     await fs.writeFile(path.join(root, `.scratch/locks/context-write/owner.json`), JSON.stringify({ schema: 'plugydown.context.lock/v1', runId }))
@@ -61,7 +69,9 @@ describe('read queries', () => {
   })
 
   it('does not echo malformed lock owner or manifest identity values', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = '00000000-0000-4000-8000-000000000002'
     await fs.mkdir(path.join(root, '.scratch/locks/context-write'), { recursive: true })
     await fs.writeFile(path.join(root, '.scratch/locks/context-write/owner.json'), JSON.stringify({ schema: 'plugydown.context.lock/v1', runId }))
@@ -76,13 +86,15 @@ describe('read queries', () => {
   })
 
   it('rejects a lock owner that the transaction plane would call corrupt', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
+    // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = '00000000-0000-4000-8000-000000000003'
     await fs.mkdir(path.join(root, '.scratch/locks/context-write'), { recursive: true })
     await fs.mkdir(path.join(root, `.scratch/runs/${runId}`), { recursive: true })
     await fs.writeFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), JSON.stringify({ runId, command: 'update', phase: 'staged' }))
 
-    // A well-formed manifest must not make an owner without the lock schema look live.
+    // 清单即使合法，也不能把缺少锁格式标识的所有者误判为活动事务。
     for (const owner of [{ runId }, { schema: 'plugydown.context.lock/v1', runId, extra: 1 }]) {
       await fs.writeFile(path.join(root, '.scratch/locks/context-write/owner.json'), JSON.stringify(owner))
       const inspect = await call(root, 'repository.inspect', {})
@@ -93,9 +105,11 @@ describe('read queries', () => {
   })
 
   it('provides L1 Domain metadata, L2 Document metadata, and only L3 bodies', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
     const l1 = await call(root, 'frontier.query', { depth: 1 })
     const l2 = await call(root, 'frontier.query', { depth: 2, selectors: { domainIds: ['service'] } })
+    // 显式选择正文及前置依赖的深度三查询参数。
     const l3Input = { depth: 3 as const, selectors: { documentIds: ['service.retry'] }, requiresClosure: true }
     const l3 = await call(root, 'frontier.query', l3Input)
     const l3Body = await call(root, 'frontier.query', l3Input, { cursor: l3.cursor as string })
@@ -116,6 +130,7 @@ describe('read queries', () => {
   })
 
   it('supports Domain, Document, kind, relation, and code path selectors with explained requires closure', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
     const byDomain = await call(root, 'frontier.query', { depth: 2, selectors: { domainIds: ['client'] } })
     expect((byDomain.data?.items as Array<Record<string, unknown>>).map(item => item.id)).toEqual(['client'])
@@ -135,6 +150,7 @@ describe('read queries', () => {
   })
 
   it('selects every Document whose declaration falls inside a code path glob', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
 
     const wide = await call(root, 'frontier.query', { depth: 2, selectors: { codePaths: ['src/**'] } })
@@ -149,6 +165,7 @@ describe('read queries', () => {
   })
 
   it('derives targeted source freshness for compact continuation', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
     const fresh = await call(root, 'repository.inspect', { selectedDocumentIds: ['service.retry', 'missing'] })
     expect(fresh.data?.selected).toEqual([
@@ -162,6 +179,7 @@ describe('read queries', () => {
   })
 
   it('keeps formal-only reads usable when an unrelated source is unavailable', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
     await fs.rm(path.join(root, 'src/client.ts'))
 
@@ -182,9 +200,13 @@ describe('read queries', () => {
 
   it('measures current/baseline/delta/per-Domain growth and stable convergence candidates without writes', async () => {
     const { relations: _relations, codePaths: _codePaths, ...guideBase } = SERVICE_GUIDE
+    // 用于触发碎片化候选的小型文档夹具。
     const tinyA = { ...guideBase, id: 'service.a', relativePath: 'service/manual/a.md', body: '# A\n' }
+    // 与同领域小文档并列的第二份碎片化夹具。
     const tinyB = { ...tinyA, id: 'service.b', relativePath: 'service/manual/b.md' }
+    // 与同领域小文档并列的第三份碎片化夹具。
     const tinyC = { ...tinyA, id: 'service.c', relativePath: 'service/manual/c.md' }
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await createRepository({ documents: [SERVICE_DOMAIN, tinyA, tinyB, tinyC] })
     roots.push(root)
     const before = JSON.stringify((await call(root, 'repository.inspect', {})).data)
@@ -205,18 +227,24 @@ describe('read queries', () => {
   })
 
   it('matches temporary Feedback and formal Reflection deterministically without score, promotion, or writes', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
+    // 固定的反馈情境、行为、结果与复用边界。
     const feedbackFields = {
       context: 'Retry requests',
       observedBehavior: 'Permanent errors retried',
       outcomeOrCorrection: 'Retry transient failures only',
       reuseBoundary: 'Service requests',
     }
+    // 从反馈匹配字段生成的持久叶子身份。
     const storedId = feedbackId(feedbackFields)
+    // 当前测试拥有的反馈 Markdown 相对路径。
     const feedbackPath = `.scratch/feedback/${storedId}.md`
     await fs.mkdir(path.dirname(path.join(root, feedbackPath)), { recursive: true })
+    // 当前测试使用的完整反馈 Markdown 文本或匹配响应。
     const feedback = `# Context\n${feedbackFields.context}\n# Observed behavior\n${feedbackFields.observedBehavior}\n# Outcome or correction\n${feedbackFields.outcomeOrCorrection}\n# Evidence\nsrc/retry.ts\n# Reuse boundary\n${feedbackFields.reuseBoundary}\n`
     await fs.writeFile(path.join(root, feedbackPath), feedback)
+    // 当前能力已解析的业务参数。
     const input = { context: 'Retry service requests', observedBehavior: 'Permanent errors retried', outcomeOrCorrection: 'Retry transient failures only', reuseBoundary: 'Service requests' }
     const first = await call(root, 'feedback.match', input)
     const second = await call(root, 'feedback.match', input)
@@ -232,10 +260,13 @@ describe('read queries', () => {
   })
 
   it('paginates Growth and Feedback candidates instead of truncating them', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
     await fs.mkdir(path.join(root, '.scratch/feedback'), { recursive: true })
     for (const label of ['one', 'two']) {
+      // 当前协议对象需要校验的业务字段集合。
       const fields = { context: `${label} retry`, observedBehavior: 'retry', outcomeOrCorrection: 'retry', reuseBoundary: 'retry' }
+      // 根据反馈身份生成的叶子文件名。
       const name = feedbackId(fields)
       await fs.writeFile(path.join(root, `.scratch/feedback/${name}.md`), `# Context\n${fields.context}\n# Observed behavior\nretry\n# Outcome or correction\nretry\n# Evidence\nretry\n# Reuse boundary\nretry\n`)
     }
@@ -247,7 +278,9 @@ describe('read queries', () => {
   })
 
   it('binds Inspect and Feedback cursors to their capability-owned datasets', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
+    // 指定多个文档身份的分页检查请求。
     const selectedInput = { selectedDocumentIds: ['client', 'service', 'service.retry', 'service.retry-learning'] }
     const inspect = await call(root, 'repository.inspect', selectedInput, {
       budget: { items: 1, bytes: 1024 * 1024, estimatedTokens: 128000 },
@@ -260,14 +293,19 @@ describe('read queries', () => {
     })
 
     await fs.mkdir(path.join(root, '.scratch/feedback'), { recursive: true })
+    // 测试创建的反馈文件路径，供后续修改来源验证游标过期。
     const stored: string[] = []
     for (const label of ['first', 'second']) {
+      // 当前协议对象需要校验的业务字段集合。
       const fields = { context: `${label} retry`, observedBehavior: 'retry failed', outcomeOrCorrection: 'retry transient', reuseBoundary: 'service' }
+      // 当前从队列或所有者键解析出的稳定文档身份。
       const id = feedbackId(fields)
+      // 当前文件相对所属根目录的稳定路径。
       const relative = `.scratch/feedback/${id}.md`
       stored.push(relative)
       await fs.writeFile(path.join(root, relative), `# Context\n${fields.context}\n# Observed behavior\n${fields.observedBehavior}\n# Outcome or correction\n${fields.outcomeOrCorrection}\n# Evidence\none\n# Reuse boundary\n${fields.reuseBoundary}\n`)
     }
+    // 用于跨页验证的固定反馈匹配参数。
     const feedbackInput = { context: 'retry', observedBehavior: 'retry failed', outcomeOrCorrection: 'retry transient', reuseBoundary: 'service' }
     const feedback = await call(root, 'feedback.match', feedbackInput, {
       budget: { items: 1, bytes: 1024 * 1024, estimatedTokens: 128000 },
@@ -282,6 +320,7 @@ describe('read queries', () => {
   })
 
   it('rejects Feedback outside the unified slug plus short content hash naming contract', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
     await fs.mkdir(path.join(root, '.scratch/feedback'), { recursive: true })
     await fs.writeFile(path.join(root, '.scratch/feedback/retry.md'), '# Context\nretry\n# Observed behavior\nretry\n# Outcome or correction\nretry\n# Evidence\nretry\n# Reuse boundary\nretry\n')
@@ -292,10 +331,14 @@ describe('read queries', () => {
   })
 
   it('accepts BOM/CRLF Feedback, uses the ASCII fallback, and rejects duplicate headings', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
+    // 当前协议对象需要校验的业务字段集合。
     const fields = { context: '重试请求', observedBehavior: '永久错误', outcomeOrCorrection: '只重试瞬态失败', reuseBoundary: '服务请求' }
+    // 当前从队列或所有者键解析出的稳定文档身份。
     const id = feedbackId(fields)
     expect(id).toMatch(/^feedback-[a-f0-9]{8}$/)
+    // 当前文件相对所属根目录的稳定路径。
     const relative = `.scratch/feedback/${id}.md`
     await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true })
     const valid = `\uFEFF# Context\r\n${fields.context}\r\n# Observed behavior\r\n${fields.observedBehavior}\r\n# Outcome or correction\r\n${fields.outcomeOrCorrection}\r\n# Evidence\r\n任意证据\r\n# Reuse boundary\r\n${fields.reuseBoundary}\r\n`
@@ -310,7 +353,9 @@ describe('read queries', () => {
   })
 
   it('rejects Feedback filename/body identity mismatch without disclosing the leaf', async () => {
+    // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
+    // 当前文件相对所属根目录的稳定路径。
     const relative = '.scratch/feedback/private-deadbeef.md'
     await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true })
     await fs.writeFile(path.join(root, relative), '# Context\nretry\n# Observed behavior\nretry\n# Outcome or correction\nretry\n# Evidence\nsecret\n# Reuse boundary\nretry\n')

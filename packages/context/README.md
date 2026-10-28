@@ -11,6 +11,7 @@ Plugydown Context 为 AI 编码助手提供可路由、可验证、可收敛的�
 | `init` | 首次建立最小完整的 Domain 与 Document 体系 |
 | `update` | 同步获得授权范围内的持久工程事实 |
 | `prune` | 在保留唯一知识和源码覆盖的前提下收敛知识 |
+| `repair` | 修复 Git 合并后的内容指纹失配，保留文档内容和待复核状态 |
 
 产品支持 Claude Code、Codex、Cursor、Antigravity CLI、OpenCode 与 Pi。Investigator 建立工程事实，Reflector 整理可复用的临时反馈，
 Recorder 是 transaction candidate 的唯一语义作者；Main Assistant 负责授权边界和最终批准。
@@ -136,6 +137,42 @@ Cursor 的模型与工具偏好仅作为说明；OpenCode 配置原生工具与�
 - 长期未处理的待复核 Document 会让 repository baseline 停住，定期运行 repository 范围的 `update` 即可；
 - squash 合并可能让 baseline 所在的分支提交从历史中消失。待复核队列只看指纹，不受影响；
   只是在下一次 repository 范围的 `update` 前移 baseline 之前，新增的未被引用路径只能看到工作区里的部分。
+
+## Git merge / rebase 后恢复
+
+从 0.7.0 开始，`repair` 为内容指纹失配提供正式事务入口。先完成 Git 合并或 rebase，清除冲突标记；
+有活动 Runtime 事务时先 `resume`。`repository.inspect` 的 `status: success` 仅代表检查执行成功，
+仍须检查 `data.context.state`；`repairable: true` 表示正式结构符合内容指纹修复条件。
+
+1. 调用 `repository.inspect`，输入 `{"repair":true,"selectedDocumentIds":["domain.document-id"]}`。
+   `data.repair.items` 按文档列出字段旧值、新值及是否在指定范围内。结果支持 budget/cursor；需要读取完整
+   计划才能确定全部失配范围。未选中的失配文档会阻止事务，不会被自动纳入修复。
+2. 收集新 Git evidence，运行 `transaction.begin`：`command: repair`、`mode: deep`、
+   `scope: {kind: documents, ids: [...]}`、`dryRun: true`、`evidencePaths: []`。
+   `repair_staged` 后直接调用 `transaction.validate`，不要修改候选。验证返回计划摘要和候选指纹，
+   随后清理临时事务；正式文件不变。
+3. 在已有修复授权范围内重新收集 evidence，以 `dryRun: false` 开始新事务。验证后审查候选，使用
+   `candidateFingerprint` 与 `sourceEvidenceFingerprint` 绑定批准，再调用 `transaction.commit`。
+4. 再次 inspect 指定文档并运行 `graph.validate`。内容指纹错误应消失，但文档仍有 `reviewRequired: true`
+   和 `DOCUMENT_REVIEW_PENDING`。正常查询和 `delta.compute` 恢复可用。
+5. 运行获授权的 `update` 对照源码逐篇复核。仍准确的文档通过 `reaffirmedDocumentIds` 确认，需要修改的
+   在候选中修改；验证、审查、批准提交后才清除待复核状态。源码未变、没有 `code.paths` 的文档也不例外。
+
+Repair 仅重算指定文档失配的 `bodyFingerprint` / `frontMatterFingerprint`，并记录内容待复核义务。
+它保持所有 Markdown 字节、路径、权限，以及原有 `sourceFingerprint`、repository baseline、convergence
+和其他文档记录。引用源码必须可以安全读取，供事务绑定当前证据；读取成功不代表已经完成语义复核。
+Schema 损坏、缺失账本记录、重复 ID、关系错误和不安全路径仍然阻断，不属于 Repair 的修复范围。
+
+新 Runtime 读取 Meta v1 与 v2。首次实际 Repair 在同一事务内把 `$schema` 升为 `plugydown.context.meta/v2`，
+以容纳 `reviewRequired: true`；一致的账本返回 `no_change`，不会为了迁移而写文件。新 Init 使用 v2，
+普通 Update 保留已有版本。原有三个指纹算法和 Runtime 协议均不变。旧 Runtime 不识别 v2，团队应先统一
+升级插件，再提交迁移后的账本。插件统一交付 `schemas/meta.schema.json`，根据账本的 `$schema` 字段
+校验 v1/v2：旧账本仍仅允许三个指纹字段，v2 才允许 `reviewRequired`。旧插件版本保留其自带的 Schema。
+
+候选或源码变化会使旧批准失效；正式 Context 变化需要重新开始事务。`backup_restored` 加上
+`REPAIR_ROLLED_BACK` 表示已恢复原始副本，原来的失配仍然存在，修复没有完成；人工恢复结果须保留现场。
+不要通过手改 hash 或伪造 `sourceFingerprint` 来消除报错。完整请求和恢复规则见随 Skill 交付的
+[Runtime reference](src/skills/context/references/runtime.md)。
 
 ## 正式知识
 
