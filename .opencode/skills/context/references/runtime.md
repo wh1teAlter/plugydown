@@ -43,7 +43,7 @@ The only capabilities and owned inputs are:
 
 | Capability | Input |
 |---|---|
-| `repository.inspect` | optional `selectedDocumentIds` |
+| `repository.inspect` | optional `selectedDocumentIds`; optional `repair: true` for a paged repair plan |
 | `frontier.query` | `depth: 1|2|3`; optional `selectors`, `requiresClosure` |
 | `graph.validate` | empty object |
 | `delta.compute` | `gitEvidencePath`, `scope`, four `taskEvidence` booleans |
@@ -118,10 +118,15 @@ may share the same evidence leaf.
 ```
 
 `reaffirmedDocumentIds` is optional and Update-only. List the Documents that review before `begin` confirmed are still
-accurate against their changed sources; their ledgers are then settled without an edit. Every ID must exist and sit
+accurate against their current sources, including Documents pending after Repair; their ledgers are then settled
+without an edit. Every ID must exist and sit
 inside the authorized scope, or `begin` fails with `TRANSACTION_SCOPE_INVALID` before taking the lock. It is fixed at
 `begin` like every other input, and it permits rather than forbids: a listed Document may still be edited. Without it,
 an accurate Document whose sources moved cannot be settled at all — no edit means no ledger refresh.
+
+`command` is `init`, `update`, `prune`, or `repair`. `evidencePaths` may be empty only for Repair: Runtime still
+collects and binds all Documents' declared source evidence. Repair requires `mode: deep`, Document scope, and no
+`reaffirmedDocumentIds`. Prune refuses outstanding content review obligations; settle them through Update first.
 
 Call `validate` or `resume` with only `runId`. Call `commit` with `runId` and an approval containing exactly
 `approved: true`, the returned `candidateFingerprint`, the returned `sourceEvidenceFingerprint`, and a short nonempty
@@ -130,6 +135,74 @@ Call `validate` or `resume` with only `runId`. Call `commit` with `runId` and an
 `dry_run` ends at validate: Runtime returns fingerprints, removes candidate/run/evidence and the write lock, and never
 turns that run into a real commit. `no_change` is also terminal. Normal commit returns the final Context fingerprint and
 approved fingerprint bindings; it does not return or retain a report file.
+
+## Content fingerprint repair after merge/rebase
+
+Repair is available in Context 0.7.0 and later. All collaborators must upgrade before writing Meta v2. Runtime reads
+both Meta v1 and v2; the single `schemas/meta.schema.json` validates each according to its `$schema` discriminator.
+Only v2 permits `reviewRequired`. Repair migrates only when it actually changes fingerprints. New Init writes v2;
+normal Update preserves the existing schema. Runtime protocol and fingerprint algorithms remain v1.
+
+Start with a read-only preview, using the authorized Document IDs:
+
+```json
+{
+  "protocol": "plugydown.context.runtime/v1",
+  "capability": "repository.inspect",
+  "input": {"repair": true, "selectedDocumentIds": ["domain.document-id"]}
+}
+```
+
+`data.repair` contains `eligible`, Document counts, `schemaMigrationRequired`, `planFingerprint`, and paged `items`.
+Each item names a Document, whether it is selected, and exact field changes (`field`, `before`, `after`). A `null`
+`before` means the review obligation was absent. The stream includes unselected mismatches so the host can discover
+the complete required scope. Continue every page needed to establish scope; a cursor is invalidated by Context changes.
+Eligibility covers formal structure only: source availability, Git state and write locks are checked by the transaction.
+
+Only valid Meta and Documents with content fingerprint mismatches qualify. Missing records, duplicate IDs, invalid
+relations, unsafe paths and conflict markers are not repaired. Finish Git operations first. If other mismatched
+Documents remain outside scope, `REPAIR_SCOPE_INCOMPLETE` blocks begin; do not silently expand authorization.
+
+After collecting fresh Git evidence, call `transaction.begin`:
+
+```json
+{
+  "protocol": "plugydown.context.runtime/v1",
+  "capability": "transaction",
+  "action": "begin",
+  "input": {
+    "command": "repair", "mode": "deep", "dryRun": true,
+    "scope": {"kind": "documents", "ids": ["domain.document-id"]},
+    "gitEvidencePath": ".scratch/evidence/context-repair",
+    "evidencePaths": []
+  }
+}
+```
+
+`repair_staged` returns `nextAction: validate`: no role edits the candidate. Runtime preserves every Markdown byte,
+path and permission, derives only mismatched body/front-matter fingerprints, and sets `reviewRequired: true` on the
+affected records. The old source fingerprints, repository baseline, convergence baseline and other records remain.
+All declared sources must be safely readable; inability to gather evidence blocks validation rather than fabricating
+source review. For candidate/source problems, restore the untouched candidate or abandon the staged/validated run
+with `transaction.resume` and `disposition: abandon`, resolve the cause, and begin again.
+
+Validation returns the candidate/source fingerprints and a bounded `repair` summary with `documentCount` and
+`planFingerprint`; correlate it with the paged preview. A dry run then cleans its artifacts without changing formal
+files. For a real write collect fresh evidence, begin with `dryRun: false`, validate, and have an Investigator review
+the candidate for faithful preservation, exact scope and honest pending-review state. The Main Assistant approves the
+returned fingerprints and commits. This approval authorizes consistency restoration, not source reaffirmation.
+
+After commit, inspect the repaired IDs and run `graph.validate`: content mismatch errors should disappear, while
+`reviewRequired` / `DOCUMENT_REVIEW_PENDING` remain. Run a separately authorized Update to review each affected
+Document against its current sources. Even when source bytes did not change or `code.paths` is absent, the review
+obligation remains until Update edits or explicitly reaffirms the Document under candidate review and approval.
+It also prevents repository baseline advancement. Repairing an already consistent ledger is `no_change` and does
+not clear review obligations.
+
+Candidate or source changes invalidate approval. Formal Context changes require a fresh transaction. If failure
+recovery reports `backup_restored` with `REPAIR_ROLLED_BACK`, the original mismatched snapshot is back: the repair
+failed and the mismatch still needs attention. Conflicting or missing trusted copies retain the existing manual
+recovery rules. Never manually edit live Meta or replace source fingerprints with sentinel values.
 
 ## Scratch ownership and cleanup
 
@@ -164,13 +237,15 @@ continue or when `manualRecoveryRequired`/`no_trusted_copy` needs human recovery
 - `failed`: stop the affected workflow and report diagnostics. If `manualRecoveryRequired` is true, preserve the named
   recovery leaves and lock; otherwise clean any host-owned leaf that Runtime could not own.
 
-A `success` may carry warnings. `DOCUMENT_REVIEW_PENDING` from `graph.validate` names a Document whose cited sources
-changed since it was last reviewed: an Update signal, never damage. Errors such as `META_DOCUMENT_*` do mean damage.
+A `success` may carry warnings. `DOCUMENT_REVIEW_PENDING` from `graph.validate` names a Document with changed or
+unavailable sources, or an explicit content review obligation after Repair: an Update signal, never damage.
+Errors such as `META_DOCUMENT_*` do mean damage.
 
 Transaction outcomes are distinct results, never one generic retry:
 
 | Outcome | Meaning | Do this |
 |---|---|---|
+| `repair_staged` | Runtime owns the ledger candidate | Validate without editing the candidate |
 | `candidate_edit_required` | The candidate is repairable in place | Fix the candidate, then validate again |
 | `candidate_stale` | Candidate or source changed after validation | Validate again, then obtain a fresh review |
 | `approval_mismatch` | The approval is not bound to current bytes | Review again and approve the current fingerprints |
