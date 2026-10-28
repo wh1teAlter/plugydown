@@ -16,243 +16,154 @@ On OpenCode, resolve `.opencode/runtime/context/main.mjs` from the actual busine
 Hook configuration variables are expanded inside Skill text or arbitrary shell commands. Keep the whole installed
 delivery unit, including Skills, Runtime, role resources, and licenses.
 
-One process accepts exactly one JSON value on stdin and emits exactly one JSON value on stdout. For example:
+One process accepts exactly one JSON value on stdin and emits exactly one JSON response on stdout:
 
 ```sh
 node "<resolved-runtime-path>" <<'JSON'
-{"protocol":"plugydown.context.runtime/v1","capability":"repository.inspect","input":{}}
+{"protocol":"plugydown.context.runtime","format":1,"capability":"repository.inspect","input":{}}
 JSON
 ```
 
-Check both the exit status and stdout. A valid Runtime response has only `protocol`, `capability`, `status`, and optional
-`data`, `cursor`, or `diagnostics`. A nonzero exit, empty/multiple output, or invalid JSON is a transport failure.
+Require Node 24+, a regular non-symlink installed Runtime, and the business repository root as cwd. Do not pass a root
+in JSON. Nonzero exit, invalid JSON or multiple responses are transport failures. A product response always contains
+`protocol`, `format`, `capability`, `status`; optional `data`, `cursor`, `diagnostics` depend on status. Format is one
+compatibility generation shared by wire, metadata and temporary state; compatible plugin upgrades do not change hashes.
+Old `/v1` wire requests and unknown format fail. Do not retry them by deleting format or pretending migration occurred.
 
-## Requests
+## Read capabilities
 
-Every request requires:
-
-```json
-{
-  "protocol": "plugydown.context.runtime/v1",
-  "capability": "<capability>",
-  "input": {}
-}
-```
-
-The only capabilities and owned inputs are:
-
-| Capability | Input |
+| Capability | Input / meaning |
 |---|---|
-| `repository.inspect` | optional `selectedDocumentIds`; optional `repair: true` for a paged repair plan |
-| `frontier.query` | `depth: 1|2|3`; optional `selectors`, `requiresClosure` |
-| `graph.validate` | empty object |
-| `delta.compute` | `gitEvidencePath`, `scope`, four `taskEvidence` booleans |
-| `growth.measure` | empty object |
+| `repository.inspect` | optional `selectedDocumentIds` OR `migration: true`; missing, legacy, invalid, ready and active run discovery |
+| `frontier.query` | `depth: 1|2|3`, optional `selectors`, `requiresClosure`; current Markdown is the content authority |
+| `graph.validate` | `{}`; checks structure, record integrity and all declared sources; success is not semantic confirmation |
+| `confirmation.check` | optional `scope` (repository default), `explain` (false default); derived match facts |
+| `delta.compute` | `gitEvidencePath`, `scope`; scoped mismatches, changed paths, source impact and reading prerequisites |
+| `growth.measure` | `{}`; current metrics and optional convergence baseline |
 | `feedback.match` | `context`, `observedBehavior`, `outcomeOrCorrection`, `reuseBoundary` |
-| `transaction` | required `action: begin|validate|commit|resume` plus the action-owned input |
 
-Selectors may contain unique `domainIds`, `documentIds`, `kinds`, `codePaths`, or one relation selector with
-`type: requires|related` and `documentId`. Depth 2 or 3 requires a selector. A scope is exactly one of:
+A scope is exactly one of `{"kind":"repository"}`, `{"kind":"domains","ids":["domain"]}`,
+`{"kind":"documents","ids":["domain.guide"]}`, or `{"kind":"paths","paths":["src/file.ts"]}`.
+IDs are unique and nonempty. Source patterns use the restricted grammar in `schemas/document.schema.json`.
+Frontier selectors accept unique `domainIds`, `documentIds`, `kinds`, `codePaths`, or a relation selector with
+`type: requires|related` and `documentId`. Depth 2/3 requires a selector.
 
-```json
-{"kind":"repository"}
-{"kind":"domains","ids":["domain-id"]}
-{"kind":"documents","ids":["domain.document-id"]}
-{"kind":"paths","paths":["src/file.ts"]}
-```
+Paged reads accept `budget` and `cursor`. Default: 100 items, 262144 bytes, 32000 estimated tokens. Hard maximum:
+1000 items, 1048576 bytes, 128000 estimated tokens. Follow an unchanged query's cursor; a page is not the complete result.
+Changed Context, selected sources, input or capability invalidates continuation. Never treat incomplete data as CI success.
 
-Paged capabilities accept optional `budget` and `cursor`. The default budget is 100 items, 262144 bytes, and 32000
-estimated tokens; the maximum is 1000 items, 1048576 bytes, and 128000 estimated tokens. Continue only an unchanged
-query with its returned cursor. Never treat a cursor page as a complete result.
+## Confirmation facts and CI
+
+Current data is in `context/.meta/manifest.json` and `.meta/confirmations/<document-id>/<key>.json`. Each immutable record
+has exactly `documentId`, `frontMatterFingerprint`, `bodyFingerprint`, `sourceFingerprint`. Its key binds the whole tuple
+and format; fields from different records cannot be combined into an approval. Current state is computed, never stored.
+
+`confirmation.check` reports scope `{kind, requestFingerprint}`, structureState, recordStore state/coverage, sourceState,
+snapshotFingerprint, summary and paged items. Summary covers all repository Documents: checked is the selected count,
+matched/unmatched/unavailable partition checked; unchecked is outside scope. Counts describe the complete snapshot,
+not the current page. Record integrity is currently checked repository-wide even when sources are selected locally.
+
+Each item has documentId, path, sourceState and confirmationState:
+
+- `matched`: currentKey equals a validated matchedKey. Inputs are unchanged from one recorded confirmation.
+- `unmatched`: sources are readable, but the complete current tuple is absent. `documentContentKnown` says whether
+  any record has the same front matter and body; source-only drift remains distinguishable from a new combination.
+- `unavailable`: no currentKey can be computed from complete sources; diagnostics explain missing/unreadable/unsafe input.
+- `unchecked`: reserved for inputs not sampled. Scope coverage must never be inferred from structure validation alone.
+
+`explain: true` returns `NO_CONFIRMATION`, `SOURCE_BASIS_CHANGED`, `DOCUMENT_CONTENT_UNKNOWN` or `SOURCE_UNAVAILABLE`.
+A missing source is not a sentinel hash. A successful check with unmatched/unavailable items is not a passing CI gate.
+CI must parse format, status, full repository scope, counts and all pages. Its policy must be explicitly chosen:
+`exact_basis` requires all matched; `content_guard` additionally allows source-only drift when documentContentKnown is
+true and all sources/structures are valid. The latter must report drift. Runtime exposes facts and does not select or
+weaken repository policy. Do not change an existing CI gate as part of ordinary Context maintenance.
 
 ## Git evidence
 
-The host shell, not Runtime, collects Git bytes. Create one uniquely owned leaf named with lowercase kebab-case or a
-UUID:
+Runtime never invokes Git. The host collects fixed evidence into its unique `.scratch/evidence/<id>/` leaf:
 
 ```text
-.scratch/evidence/<evidence-id>/
-├── head.txt
-├── mid-operation.json
-├── status.bin
-└── diff.bin?
+head.txt
+mid-operation.json
+status.bin
+diff.bin?          # appears together with comparison.json
+comparison.json?   # {"kind":"two-tree","base":"<full object ID>","head":"<full object ID>"}
 ```
 
-Collect from the business repository root:
+Collect HEAD and `git status --porcelain=v2 --branch -z --untracked-files=all` as raw bytes. mid-operation is exactly
+`{"active":false}` or `{"active":true,"kind":"rebase"}`; allowed kinds also include merge, cherry-pick, revert and bisect.
+When historical comparison is useful, first fix base/head object IDs and collect `git diff --name-status -z <base> <head>`.
+Resolve merge-base explicitly if desired. comparison.head must equal head.txt. Check HEAD/Git operation state again
+before using collected evidence; discard and recollect your own leaf if it moved. Do not line-split or rewrite NUL data.
+No comparison means `historyCoverage: not_provided`, not “no historical changes”. Confirmation checks do not require Git
+history, branch names or a repository baseline; squash, shallow clones and inaccessible old revisions do not alter keys.
 
-```sh
-git rev-parse HEAD > "$evidence_dir/head.txt"
-git status --porcelain=v2 --branch -z --untracked-files=all > "$evidence_dir/status.bin"
-git diff --name-status -z "$baseline"...HEAD > "$evidence_dir/diff.bin"
-```
+## Transactions
 
-Write `mid-operation.json` as exactly `{"active":false}` or, for example,
-`{"active":true,"kind":"merge"}` after checking Git state. An active `kind` must be one of `merge`, `rebase`,
-`cherry-pick`, `revert`, or `bisect`. Create `diff.bin`
-only when the ledger baseline differs from HEAD and `git cat-file -e "$baseline^{commit}"` succeeds. After a squash
-merge, other clones may never have fetched the baseline commit; when the check fails, omit `diff.bin`. `delta.compute`
-then reports `changedPathsComplete: false`: changed and unreferenced paths cover only the working tree, `directImpact`
-stays complete, and the missing history blocks neither Light nor the baseline.
-Do not decode, line-split, trim, or rewrite the two NUL-delimited files. `delta.compute` and a following transaction
-may share the same evidence leaf.
-
-## Transaction inputs
-
-`begin` owns the complete candidate and lock:
+Only explicit Init/Update/Prune/Migrate authorization permits writes. All use the existing candidate, lock, validation,
+semantic review, two-fingerprint approval, whole-directory switch and recovery contract.
 
 ```json
-{
-  "protocol": "plugydown.context.runtime/v1",
-  "capability": "transaction",
-  "action": "begin",
-  "input": {
-    "command": "update",
-    "mode": "deep",
-    "dryRun": false,
-    "scope": {"kind":"repository"},
-    "gitEvidencePath": ".scratch/evidence/<evidence-id>",
-    "evidencePaths": ["src/**/*.ts"],
-    "reaffirmedDocumentIds": ["domain.document-id"]
-  }
-}
+{"protocol":"plugydown.context.runtime","format":1,"capability":"transaction","action":"begin","input":{
+  "command":"update","mode":"deep","dryRun":false,"scope":{"kind":"documents","ids":["domain.guide"]},
+  "gitEvidencePath":".scratch/evidence/context-update","evidencePaths":[],"confirmedDocumentIds":["domain.guide"]
+}}
 ```
 
-`reaffirmedDocumentIds` is optional and Update-only. List the Documents that review before `begin` confirmed are still
-accurate against their current sources, including Documents pending after Repair; their ledgers are then settled
-without an edit. Every ID must exist and sit
-inside the authorized scope, or `begin` fails with `TRANSACTION_SCOPE_INVALID` before taking the lock. It is fixed at
-`begin` like every other input, and it permits rather than forbids: a listed Document may still be edited. Without it,
-an accurate Document whose sources moved cannot be settled at all — no edit means no ledger refresh.
+Commands: init/update/prune/migrate. Init/Migrate require repository scope; Init/Prune/Migrate require Deep. evidencePaths
+is required and may be empty: normal transactions still bind every candidate Document's actual declared sources.
+Update may begin with missing sources or unmatched confirmations; the candidate must fix invalid declarations before
+validation can succeed. Unsafe declarations, damaged records, conflicts and concurrent writers remain rejected.
 
-`command` is `init`, `update`, `prune`, or `repair`. `evidencePaths` may be empty only for Repair: Runtime still
-collects and binds all Documents' declared source evidence. Repair requires `mode: deep`, Document scope, and no
-`reaffirmedDocumentIds`. Prune refuses outstanding content review obligations; settle them through Update first.
+confirmedDocumentIds is optional, Update-only, fixed at begin and within scope. List only Documents actually reviewed
+against current sources and found accurate. Runtime also derives records for authorized new or content-changed surviving
+Documents; path-only moves do not require new records. Deleted Documents leave historical confirmations intact. Scope
+is permission, not evidence that every scoped Document was reviewed. The final candidate and every new record require
+semantic review before Main Assistant approval. Recorder cannot modify `.meta`.
 
-Call `validate` or `resume` with only `runId`. Call `commit` with `runId` and an approval containing exactly
-`approved: true`, the returned `candidateFingerprint`, the returned `sourceEvidenceFingerprint`, and a short nonempty
-`summary`. Any candidate or source change requires validate and semantic review again.
+`validate` and `resume` take `{runId}`; resume optionally accepts `disposition: abandon` for fresh staged/validated runs.
+`commit` takes `{runId, approval:{approved:true,candidateFingerprint,sourceEvidenceFingerprint,summary}}`.
+Use the two exact returned fingerprints and a nonempty short review summary. Changes invalidate old approval.
+Revalidation removes only obsolete records generated by this run. It never overwrites or deletes historical records.
+Update preserves both baselines; Init/Prune create/update convergence only. Legacy repository baseline remains inert.
 
-`dry_run` ends at validate: Runtime returns fingerprints, removes candidate/run/evidence and the write lock, and never
-turns that run into a real commit. `no_change` is also terminal. Normal commit returns the final Context fingerprint and
-approved fingerprint bindings; it does not return or retain a report file.
+## Migration
 
-## Content fingerprint repair after merge/rebase
+Old root `context/meta.json` is read only for discovery/explicit migration; both old and new entries together are invalid.
+Use inspect `migration: true` for a complete paged `import-trusted` preview. Migrate begin requires
+`migrationStrategy: import-trusted|reconfirm` with no default. Import copies exact old tuples except reviewRequired=true;
+reconfirm imports none. Neither rehashes current content into a historical confirmation. Existing Markdown paths, bytes,
+permissions and baselines survive unchanged. The old entry is removed only in the candidate directory switch.
 
-Repair is available in Context 0.7.0 and later. All collaborators must upgrade before writing Meta v2. Runtime reads
-both Meta v1 and v2; the single `schemas/meta.schema.json` validates each according to its `$schema` discriminator.
-Only v2 permits `reviewRequired`. Repair migrates only when it actually changes fingerprints. New Init writes v2;
-normal Update preserves the existing schema. Runtime protocol and fingerprint algorithms remain v1.
+Migration binds the original Context tree and derived candidate; it does not claim current sources were reviewed, and
+missing sources do not prevent historical conversion. Explicit evidencePaths, if supplied, still bind current files.
+Follow the Migrate command for Investigator conversion review and final approval. A dry run terminates at validate.
+Upgrade paired clients and CI before merging new layout. Resolve old active transactions with the compatible old Runtime;
+never change lock/run version labels or create fake source files to bypass a migration check.
 
-Start with a read-only preview, using the authorized Document IDs:
+## Outcomes and ownership
 
-```json
-{
-  "protocol": "plugydown.context.runtime/v1",
-  "capability": "repository.inspect",
-  "input": {"repair": true, "selectedDocumentIds": ["domain.document-id"]}
-}
-```
+| Outcome | Required next action |
+|---|---|
+| staged | Edit authorized candidate Markdown, then validate |
+| migration_staged | Validate; no role edits |
+| ready_for_review | Review candidate and sources, then approve the bound fingerprints |
+| candidate_edit_required | Correct candidate/inputs and validate, or abandon safely |
+| candidate_stale | Validate and obtain fresh approval |
+| approval_mismatch | Review and approve the current pair |
+| active_run | Resume that run; do not delete its lock |
+| snapshot_stale | Old run is cleaned; recollect evidence and begin again |
+| no_change | Formal bytes unchanged; run cleaned |
+| validated with dry_run | Validated only; cleaned run cannot be committed |
+| committed / candidate_completed | Verified candidate is live; cleanup completed |
+| backup_restored | Original tree restored; operation failed, migration remains legacy |
+| manual_recovery / no_trusted_copy | Keep all copies and lock for human recovery |
 
-`data.repair` contains `eligible`, Document counts, `schemaMigrationRequired`, `planFingerprint`, and paged `items`.
-Each item names a Document, whether it is selected, and exact field changes (`field`, `before`, `after`). A `null`
-`before` means the review obligation was absent. The stream includes unselected mismatches so the host can discover
-the complete required scope. Continue every page needed to establish scope; a cursor is invalidated by Context changes.
-Eligibility covers formal structure only: source availability, Git state and write locks are checked by the transaction.
+success/no_change/dry_run, safe pre-write failure and trusted-backup restoration clean only workflow-owned evidence/run/
+lock leaves. Preserve continuable and manual-recovery scenes. Host cleans its own Investigation at a safe terminal point.
+Transport failure preserves any established transaction; report failure instead of treating it as absent Context.
 
-Only valid Meta and Documents with content fingerprint mismatches qualify. Missing records, duplicate IDs, invalid
-relations, unsafe paths and conflict markers are not repaired. Finish Git operations first. If other mismatched
-Documents remain outside scope, `REPAIR_SCOPE_INCOMPLETE` blocks begin; do not silently expand authorization.
-
-After collecting fresh Git evidence, call `transaction.begin`:
-
-```json
-{
-  "protocol": "plugydown.context.runtime/v1",
-  "capability": "transaction",
-  "action": "begin",
-  "input": {
-    "command": "repair", "mode": "deep", "dryRun": true,
-    "scope": {"kind": "documents", "ids": ["domain.document-id"]},
-    "gitEvidencePath": ".scratch/evidence/context-repair",
-    "evidencePaths": []
-  }
-}
-```
-
-`repair_staged` returns `nextAction: validate`: no role edits the candidate. Runtime preserves every Markdown byte,
-path and permission, derives only mismatched body/front-matter fingerprints, and sets `reviewRequired: true` on the
-affected records. The old source fingerprints, repository baseline, convergence baseline and other records remain.
-All declared sources must be safely readable; inability to gather evidence blocks validation rather than fabricating
-source review. For candidate/source problems, restore the untouched candidate or abandon the staged/validated run
-with `transaction.resume` and `disposition: abandon`, resolve the cause, and begin again.
-
-Validation returns the candidate/source fingerprints and a bounded `repair` summary with `documentCount` and
-`planFingerprint`; correlate it with the paged preview. A dry run then cleans its artifacts without changing formal
-files. For a real write collect fresh evidence, begin with `dryRun: false`, validate, and have an Investigator review
-the candidate for faithful preservation, exact scope and honest pending-review state. The Main Assistant approves the
-returned fingerprints and commits. This approval authorizes consistency restoration, not source reaffirmation.
-
-After commit, inspect the repaired IDs and run `graph.validate`: content mismatch errors should disappear, while
-`reviewRequired` / `DOCUMENT_REVIEW_PENDING` remain. Run a separately authorized Update to review each affected
-Document against its current sources. Even when source bytes did not change or `code.paths` is absent, the review
-obligation remains until Update edits or explicitly reaffirms the Document under candidate review and approval.
-It also prevents repository baseline advancement. Repairing an already consistent ledger is `no_change` and does
-not clear review obligations.
-
-Candidate or source changes invalidate approval. Formal Context changes require a fresh transaction. If failure
-recovery reports `backup_restored` with `REPAIR_ROLLED_BACK`, the original mismatched snapshot is back: the repair
-failed and the mismatch still needs attention. Conflicting or missing trusted copies retain the existing manual
-recovery rules. Never manually edit live Meta or replace source fingerprints with sentinel values.
-
-## Scratch ownership and cleanup
-
-Context uses the business repository paths directly:
-
-```text
-.scratch/evidence/<evidence-id>/
-.scratch/feedback/<slug>-<short-identity-hash>.md
-.scratch/investigations/<slug>-<short-identity-hash>.md
-.scratch/runs/<runtime-uuid>/
-.scratch/locks/context-write/
-```
-
-Use lowercase plural collection names, kebab-case singleton names, UUID run IDs, and Markdown names built from an ASCII
-slug plus an 8-hex stable identity hash. Feedback identity derives from its four matching fields and Investigation
-identity from the Role Brief goal/questions/scope, not from the whole file, so appended Evidence never forces a rename.
-Never use timestamps. Never delete `.scratch/`, a collection root, or unknown siblings.
-
-On `success`, `no_change`, `dry_run`, trusted-backup restoration, or a safe pre-write failure, remove every leaf owned
-by the completed workflow. Runtime removes transaction evidence/run/lock; the Main Assistant removes workflow-owned
-Investigation files. Delete Feedback after its Reflection is successfully committed or when the user explicitly
-discards it; keep unpromoted Feedback. Preserve run/evidence/Investigation/lock only while an `incomplete` result can
-continue or when `manualRecoveryRequired`/`no_trusted_copy` needs human recovery. Never expire a lock by time or PID.
-
-## Status handling
-
-- `success`: use the complete result.
-- `no_change`: report that formal bytes were unchanged; the run is already cleaned. If review found Documents still
-  accurate but they were not passed as `reaffirmedDocumentIds`, they remain pending; begin again listing them.
-- `dry_run`: report validation without a formal write; the run is already cleaned and cannot resume.
-- `incomplete`: follow only the returned cursor, `nextAction`, active run, evidence, authorization, review, or recovery need.
-- `failed`: stop the affected workflow and report diagnostics. If `manualRecoveryRequired` is true, preserve the named
-  recovery leaves and lock; otherwise clean any host-owned leaf that Runtime could not own.
-
-A `success` may carry warnings. `DOCUMENT_REVIEW_PENDING` from `graph.validate` names a Document with changed or
-unavailable sources, or an explicit content review obligation after Repair: an Update signal, never damage.
-Errors such as `META_DOCUMENT_*` do mean damage.
-
-Transaction outcomes are distinct results, never one generic retry:
-
-| Outcome | Meaning | Do this |
-|---|---|---|
-| `repair_staged` | Runtime owns the ledger candidate | Validate without editing the candidate |
-| `candidate_edit_required` | The candidate is repairable in place | Fix the candidate, then validate again |
-| `candidate_stale` | Candidate or source changed after validation | Validate again, then obtain a fresh review |
-| `approval_mismatch` | The approval is not bound to current bytes | Review again and approve the current fingerprints |
-| `active_run` | Another run owns the write lock | Resume that run; never delete its lock |
-| `snapshot_stale` | Formal, Git or declared evidence moved; the run is cleaned | Collect evidence and begin a new transaction |
-| `manual_recovery` / `no_trusted_copy` | Copies conflict or none is trustworthy | Stop, keep the scene, ask for human recovery |
-
-For a transport failure, preserve an existing active/recoverable transaction exactly as found and stop. When no run
-was established, delete only this workflow's no-longer-used evidence or Investigation leaf. Never present transport
-failure as absent knowledge, no change, or success.
+Temporary paths are exactly `.scratch/evidence/<id>/`, `.scratch/runs/<runtime-uuid>/`, `.scratch/locks/context-write/`,
+`.scratch/investigations/<slug>-<8-hex-identity>.md`, `.scratch/feedback/<slug>-<8-hex-identity>.md`. Use lowercase names,
+no timestamps, and never delete collections or unknown siblings. No lock expiry by PID/time. Promoted Feedback is removed
+only after successful commit; otherwise retain it. Formal confirmation files are collaboration evidence, not cache.
