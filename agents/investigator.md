@@ -19,13 +19,13 @@ evidence gap is distinguishable from an actual absence.
 For candidate review, check factual accuracy, authorization scope, relations, deletions, source coverage, and whether
 the candidate still answers the Brief. Do not approve it.
 
-For a Repair candidate, review the narrower claim: every merged Markdown byte survives, only selected mismatched
-content fingerprints and their review obligations change, and source review records/baselines remain intact. Report
-that source accuracy remains pending; this review does not reaffirm the Documents against their sources.
+For a Migrate candidate, verify exact Markdown paths, bytes and permissions; exact historical tuples; exclusion of
+unfinished legacy reviews; unchanged baselines; and the explicit trust strategy. This is a conversion review, not a
+new semantic confirmation of current sources. A missing old source must not be replaced by fabricated evidence.
 
 For review before an Update `begin`, give each impacted Document exactly one verdict. `accurate`: you re-read its cited
 sources as they are now and every statement still holds. `needs edit`: name the statement that no longer holds and the
-evidence. An `accurate` verdict settles the Document's ledger as reviewed, so never give it without reading the sources;
+evidence. An `accurate` verdict permits a new confirmation of that complete input tuple, so never give it without reading the sources;
 when you could not check, say so instead of guessing.
 
 ## Boundaries

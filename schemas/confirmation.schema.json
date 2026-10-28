@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plugydown.dev/schemas/context/confirmation.json",
+  "title": "Plugydown Context immutable confirmation record",
+  "description": "The owning metadata manifest provides format. Runtime additionally validates canonical bytes, Document directory identity and the full content key.",
+  "type": "object",
+  "required": ["documentId", "frontMatterFingerprint", "bodyFingerprint", "sourceFingerprint"],
+  "additionalProperties": false,
+  "properties": {
+    "documentId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)*$"
+    },
+    "frontMatterFingerprint": { "$ref": "#/$defs/fingerprint" },
+    "bodyFingerprint": { "$ref": "#/$defs/fingerprint" },
+    "sourceFingerprint": { "$ref": "#/$defs/fingerprint" }
+  },
+  "$defs": {
+    "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}
