@@ -1,101 +1,232 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://plugydown.dev/schemas/context/meta.json",
-  "title": "Plugydown Context Meta validity and review ledger",
-  "type": "object",
-  "required": ["$schema", "toolVersion", "runtimeProtocol", "fingerprintVersion", "documents"],
-  "additionalProperties": false,
-  "properties": {
-    "$schema": { "enum": ["plugydown.context.meta/v1", "plugydown.context.meta/v2"] },
-    "toolVersion": { "type": "string", "minLength": 1 },
-    "runtimeProtocol": { "const": "plugydown.context.runtime/v1" },
-    "fingerprintVersion": { "const": "1" },
-    "documents": {
-      "type": "object",
-      "propertyNames": { "$ref": "#/$defs/documentId" },
-      "additionalProperties": { "$ref": "#/$defs/documentLedger" }
-    },
-    "repository": {
-      "type": "object",
-      "required": ["baseline"],
-      "additionalProperties": false,
-      "properties": {
-        "baseline": {
-          "type": "object",
-          "required": ["revision", "sourceFingerprint"],
-          "additionalProperties": false,
-          "properties": {
-            "revision": { "type": "string", "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" },
-            "sourceFingerprint": { "$ref": "#/$defs/fingerprint" }
-          }
-        }
-      }
-    },
-    "convergence": {
-      "type": "object",
-      "required": ["source", "documentCount", "frontMatterBytes", "bodyBytes", "estimatedTokens", "perDomain"],
-      "additionalProperties": false,
-      "properties": {
-        "source": { "enum": ["init", "prune"] },
-        "documentCount": { "type": "integer", "minimum": 0 },
-        "frontMatterBytes": { "type": "integer", "minimum": 0 },
-        "bodyBytes": { "type": "integer", "minimum": 0 },
-        "estimatedTokens": { "type": "integer", "minimum": 0 },
-        "perDomain": {
-          "type": "object",
-          "propertyNames": { "$ref": "#/$defs/domainId" },
-          "additionalProperties": { "$ref": "#/$defs/metrics" }
-        }
-      }
-    }
-  },
-  "allOf": [
+  "title": "Plugydown Context metadata entry and legacy ledger",
+  "oneOf": [
     {
-      "if": {
-        "properties": { "$schema": { "const": "plugydown.context.meta/v1" } },
-        "required": ["$schema"]
-      },
-      "then": {
-        "properties": {
-          "documents": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "object",
-              "properties": { "reviewRequired": false }
-            }
-          }
-        }
-      }
+      "$ref": "#/$defs/legacy"
+    },
+    {
+      "$ref": "#/$defs/metadataManifest"
     }
   ],
   "$defs": {
-    "domainId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "domainId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
     "documentId": {
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)*$"
     },
-    "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "documentLedger": {
       "type": "object",
-      "required": ["frontMatterFingerprint", "bodyFingerprint", "sourceFingerprint"],
+      "required": [
+        "frontMatterFingerprint",
+        "bodyFingerprint",
+        "sourceFingerprint"
+      ],
       "additionalProperties": false,
       "properties": {
-        "frontMatterFingerprint": { "$ref": "#/$defs/fingerprint" },
-        "bodyFingerprint": { "$ref": "#/$defs/fingerprint" },
-        "sourceFingerprint": { "$ref": "#/$defs/fingerprint" },
-        "reviewRequired": { "const": true }
+        "frontMatterFingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "bodyFingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "sourceFingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "reviewRequired": {
+          "const": true
+        }
       }
     },
     "metrics": {
       "type": "object",
-      "required": ["documentCount", "frontMatterBytes", "bodyBytes", "estimatedTokens"],
+      "required": [
+        "documentCount",
+        "frontMatterBytes",
+        "bodyBytes",
+        "estimatedTokens"
+      ],
       "properties": {
-        "documentCount": { "type": "integer", "minimum": 0 },
-        "frontMatterBytes": { "type": "integer", "minimum": 0 },
-        "bodyBytes": { "type": "integer", "minimum": 0 },
-        "estimatedTokens": { "type": "integer", "minimum": 0 }
+        "documentCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "frontMatterBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bodyBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimatedTokens": {
+          "type": "integer",
+          "minimum": 0
+        }
       },
       "additionalProperties": false
+    },
+    "legacy": {
+      "type": "object",
+      "required": [
+        "$schema",
+        "toolVersion",
+        "runtimeProtocol",
+        "fingerprintVersion",
+        "documents"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "$schema": {
+          "enum": [
+            "plugydown.context.meta/v1",
+            "plugydown.context.meta/v2"
+          ]
+        },
+        "toolVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeProtocol": {
+          "const": "plugydown.context.runtime/v1"
+        },
+        "fingerprintVersion": {
+          "const": "1"
+        },
+        "documents": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/documentId"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/documentLedger"
+          }
+        },
+        "repository": {
+          "type": "object",
+          "required": [
+            "baseline"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "baseline": {
+              "type": "object",
+              "required": [
+                "revision",
+                "sourceFingerprint"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "revision": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
+                },
+                "sourceFingerprint": {
+                  "$ref": "#/$defs/fingerprint"
+                }
+              }
+            }
+          }
+        },
+        "convergence": {
+          "type": "object",
+          "required": [
+            "source",
+            "documentCount",
+            "frontMatterBytes",
+            "bodyBytes",
+            "estimatedTokens",
+            "perDomain"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "init",
+                "prune"
+              ]
+            },
+            "documentCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "frontMatterBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bodyBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "estimatedTokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "perDomain": {
+              "type": "object",
+              "propertyNames": {
+                "$ref": "#/$defs/domainId"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/metrics"
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "$schema": {
+                "const": "plugydown.context.meta/v1"
+              }
+            },
+            "required": [
+              "$schema"
+            ]
+          },
+          "then": {
+            "properties": {
+              "documents": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "reviewRequired": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "metadataManifest": {
+      "type": "object",
+      "required": [
+        "format"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": 1
+        },
+        "repository": {
+          "$ref": "#/$defs/legacy/properties/repository"
+        },
+        "convergence": {
+          "$ref": "#/$defs/legacy/properties/convergence"
+        }
+      }
     }
   }
 }

@@ -1,5 +1,0 @@
-interface:
-  display_name: context-repair
-  short_description: Restore content fingerprint consistency after Git merges while retaining pending source review.
-policy:
-  allow_implicit_invocation: false

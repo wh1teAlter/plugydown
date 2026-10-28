@@ -1,0 +1,5 @@
+interface:
+  display_name: context-migrate
+  short_description: Explicitly migrate legacy Context ledgers into immutable confirmation records.
+policy:
+  allow_implicit_invocation: false

@@ -1,5 +1,5 @@
 interface:
   display_name: context-update
-  short_description: Synchronize authorized persistent repository changes into Plugydown Context.
+  short_description: Review changed Context inputs and update only the authorized knowledge that needs editing.
 policy:
   allow_implicit_invocation: false
