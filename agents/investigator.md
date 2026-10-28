@@ -19,6 +19,10 @@ evidence gap is distinguishable from an actual absence.
 For candidate review, check factual accuracy, authorization scope, relations, deletions, source coverage, and whether
 the candidate still answers the Brief. Do not approve it.
 
+For a Repair candidate, review the narrower claim: every merged Markdown byte survives, only selected mismatched
+content fingerprints and their review obligations change, and source review records/baselines remain intact. Report
+that source accuracy remains pending; this review does not reaffirm the Documents against their sources.
+
 For review before an Update `begin`, give each impacted Document exactly one verdict. `accurate`: you re-read its cited
 sources as they are now and every statement still holds. `needs edit`: name the statement that no longer holds and the
 evidence. An `accurate` verdict settles the Document's ledger as reviewed, so never give it without reading the sources;

@@ -6,15 +6,17 @@ description: Synchronize authorized persistent repository changes into Plugydown
 Load the Context Operating Skill first and follow its Runtime, status, Role Brief, approval, and reporting rules.
 
 1. Call `repository.inspect`, collect Git evidence, and call `delta.compute` with the user-authorized scope and current
-   task evidence. Stop or resume when Context/run state requires it. `directImpact` is the complete queue of Documents
-   whose cited sources changed since they were last reviewed.
+   task evidence. Stop or resume when Context/run state requires it; content fingerprint damage needs Repair first.
+   `directImpact` includes changed/unavailable sources and content review obligations created by Repair, even when
+   source bytes are unchanged or `code.paths` is absent.
 2. Use Light only when Runtime blockers are empty and intent, mapping, impact closure, Domain shape, cross-Domain
    contracts, and scope are all known. Otherwise use Deep. The choice is yours: Runtime reports blockers but does not
    enforce the mode. Expanding beyond authorization requires user approval.
 3. Before `begin`, review every `directImpact` Document against its current cited sources — complementary
    Investigators in Deep, the Main Assistant in Light — and give each one verdict with evidence: `accurate` or
    `needs edit`. Pass exactly the `accurate` IDs as `reaffirmedDocumentIds`. Never pass `directImpact` wholesale: a
-   listed Document's ledger is settled as reviewed, so listing one nobody read records a review that did not happen.
+   listed Document's ledger is settled as reviewed and its content review obligation cleared, so listing one nobody
+   read records a review that did not happen. For a source-free Document, review its claims against relevant evidence.
 4. Use repository scope for a full synchronization. Only it can advance the repository baseline, and only when the
    commit leaves no impacted Document unreviewed; a narrower authorized scope is fine but leaves the baseline in place.
 5. Use exactly one Recorder with a `synchronize` Role Brief naming the `needs edit` Documents, and allow writes only in
