@@ -17,5 +17,5 @@
   "name": "context",
   "repository": "https://github.com/wh1teAlter/plugydown",
   "skills": "./skills/*/SKILL.md",
-  "version": "0.6.0"
+  "version": "0.7.0"
 }

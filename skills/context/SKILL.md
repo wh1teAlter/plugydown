@@ -18,7 +18,8 @@ executable, collecting Git evidence, interpreting transport, and forming protoco
 Call `repository.inspect` before relying on formal knowledge.
 
 - `absent`: mention that Init is available when relevant; do not create formal knowledge during an ordinary task.
-- `invalid`: report the Runtime diagnostics and do not guess from the damaged tree.
+- `invalid`: report the Runtime diagnostics and do not guess from the damaged tree. If `context.repairable` is true,
+  offer the Repair workflow; a read-only `repository.inspect` with `repair: true` can preview its scope.
 - `ready`: select only the task-relevant frontier.
 - `activeRun`: do not start another write; use `transaction.resume` before deciding the next action.
 
@@ -45,8 +46,9 @@ Update signal. Continue a cursor only while the next page is useful.
 - `incomplete`: follow only the returned stable `nextAction`, cursor, active-run, evidence, review, or recovery need.
 - `failed`: stop the affected workflow and report diagnostics; never present it as completion.
 
-A `success` may carry warnings. `DOCUMENT_REVIEW_PENDING` means a Document's cited sources changed since it was last
-reviewed — an Update signal, never damage.
+A `success` may carry warnings. `DOCUMENT_REVIEW_PENDING` means a Document needs review because its sources changed,
+are unavailable, or its content fingerprints were repaired without source review. It is an Update signal, never a
+claim that the Document is already accurate. `contentReviewRequiredCount` counts explicit content review obligations.
 
 A Transport failure is separate from these statuses. Preserve an existing active/recoverable run and stop; if no run
 was established, remove only this workflow's now-unused evidence/Investigation leaf. For a read, report a short failure
@@ -68,24 +70,25 @@ Every Internal Role receives a short Markdown Brief with exactly these headings:
 
 Unlisted writes are forbidden. Investigator establishes facts and reviews candidates but cannot edit knowledge.
 Reflector evaluates reusable feedback and may write only explicitly allowed temporary Feedback. Recorder is the only
-candidate author and never writes live Context or source. Before invoking a role, read
+semantic candidate author and never writes live Context or source. Runtime alone generates Repair ledger changes.
+Before invoking a role, read
 `../../runtime/agents/index.md` relative to this Skill's directory. It identifies this installation's native Agents or
 private role resources, model guidance, and tool boundaries. Follow its instructions with the same Brief.
 
 The Main Assistant owns authorization scope and final semantic approval. Recorder cannot review itself; Reflector
-cannot approve a formal Reflection. Init, Deep Update, Prune, and Feedback promotion require Investigator candidate
+cannot approve a formal Reflection. Init, Deep Update, Prune, Repair, and Feedback promotion require Investigator candidate
 review. Light Update may be reviewed directly by the Main Assistant unless uncertainty appears.
 
 ## Common write contract
 
-Only explicit Init, Update, or Prune authorization permits formal writes. All three use the same contract:
+Only explicit Init, Update, Prune, or Repair authorization permits formal writes. They use the same contract:
 
 ```text
 resolve authorization and scope
 → collect Git evidence and deterministic signals
 → Update only: review impacted Documents; keep the IDs found still accurate
 → transaction.begin (Update passes those IDs as reaffirmedDocumentIds)
-→ one Recorder edits the complete candidate
+→ one Recorder edits the complete candidate (Repair: Runtime derives the ledger; no role edits)
 → transaction.validate
 → semantic review of the validated candidate
 → Main Assistant approval bound to candidateFingerprint and sourceEvidenceFingerprint
@@ -97,7 +100,9 @@ resolve authorization and scope
 Never edit live `context/` directly. Any candidate or source change after validation invalidates review and approval.
 Never expand beyond authorized scope without the user's decision. Preserve conflicting copies for manual recovery. The
 command documents own command-specific sequencing: Init is Deep, Update chooses Light/Deep from blockers and evidence,
-and Prune is Deep.
+and Prune and Repair are Deep. Repair authorization permits only the selected content fingerprints and review
+obligations plus the necessary Meta v2 schema migration. It never authorizes source reaffirmation or baseline
+advancement. Follow the Repair command and the repair section of `references/runtime.md` after merge/rebase damage.
 
 ## Ordinary task completion
 

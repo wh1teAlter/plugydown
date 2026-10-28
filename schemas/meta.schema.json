@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://plugydown.dev/schemas/context/meta/v1.json",
-  "title": "Plugydown Context Meta v1 validity ledger",
+  "$id": "https://plugydown.dev/schemas/context/meta.json",
+  "title": "Plugydown Context Meta validity and review ledger",
   "type": "object",
   "required": ["$schema", "toolVersion", "runtimeProtocol", "fingerprintVersion", "documents"],
   "additionalProperties": false,
   "properties": {
-    "$schema": { "const": "plugydown.context.meta/v1" },
+    "$schema": { "enum": ["plugydown.context.meta/v1", "plugydown.context.meta/v2"] },
     "toolVersion": { "type": "string", "minLength": 1 },
     "runtimeProtocol": { "const": "plugydown.context.runtime/v1" },
     "fingerprintVersion": { "const": "1" },
@@ -49,6 +49,25 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "$schema": { "const": "plugydown.context.meta/v1" } },
+        "required": ["$schema"]
+      },
+      "then": {
+        "properties": {
+          "documents": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": { "reviewRequired": false }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "domainId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
     "documentId": {
@@ -63,7 +82,8 @@
       "properties": {
         "frontMatterFingerprint": { "$ref": "#/$defs/fingerprint" },
         "bodyFingerprint": { "$ref": "#/$defs/fingerprint" },
-        "sourceFingerprint": { "$ref": "#/$defs/fingerprint" }
+        "sourceFingerprint": { "$ref": "#/$defs/fingerprint" },
+        "reviewRequired": { "const": true }
       }
     },
     "metrics": {
