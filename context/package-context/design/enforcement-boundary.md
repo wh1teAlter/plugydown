@@ -19,8 +19,9 @@ code:
     - packages/context/public/schemas/runtime.schema.json
     - packages/context/tests/runtime/fixture.ts
     - packages/context/src/runtime/transaction.ts
-    - packages/context/src/runtime/repair.ts
-    - packages/context/src/commands/repair.md
+    - packages/context/src/runtime/confirmation.ts
+    - packages/context/src/runtime/migration.ts
+    - packages/context/src/commands/migrate.md
 ---
 
 # Enforcement boundary
@@ -32,14 +33,14 @@ neither a source fingerprint nor a successful request proves that a semantic rev
 
 The Runtime will refuse, or fail, if any of these is violated:
 
-- protocol string, capability name, action name, and every request field shape, including rejection of unknown fields
+- fixed protocol name and shared format, capability name, action name, and every request field shape, including rejection of unknown fields
 - request size (1 MiB) and strict UTF-8 decoding
 - Document front-matter grammar, the closed field set, size limits, and non-empty body
 - canonical two-level placement, filename shape, `domain` matching its directory, and the `<domain-id>.` id prefix
 - Domain completeness: every Domain has a valid `domain.md`; the tree has at least one Domain
 - global Document id uniqueness
 - relation validity: no self-reference, no dangling `requires`/`related`, no `requires` cycle
-- Meta shape, and exact agreement between Meta ids/fingerprints and the Markdown tree
+- metadata entry shape and canonical confirmation payload/path/key identity; missing current confirmation is not structural damage
 - symlink refusal, path safety, forbidden source segments, glob language, and every resource ceiling
 - Git evidence directory shape and strict byte-level parsing
 - transaction ordering: `begin` → `validate` → `commit`, with phase preconditions
@@ -48,8 +49,9 @@ The Runtime will refuse, or fail, if any of these is violated:
 - scope authorization over Documents, including `CANDIDATE_SCOPE_VIOLATION`
 - prune source-coverage preservation (`PRUNE_COVERAGE_LOST`)
 - post-commit re-verification of the committed tree against the approved fingerprint
-- `init`, `prune` and `repair` must be `deep`; Init requires absent Context and repository scope; Prune requires ready source and no explicit content review obligations
-- Repair qualification, complete explicit Document scope, exact Markdown preservation and retained source/baseline records
+- `init`, `prune` and `migrate` must be `deep`; Init requires absent Context and repository scope; Prune requires ready sources
+- Migrate qualification, repository scope, explicit strategy, exact Markdown preservation and retained baselines
+- immutable record ownership and revalidation of new records against complete candidate source evidence
 - output budgets, the never-truncate rule, and cursor integrity
 
 ## Convention only
@@ -61,11 +63,10 @@ Nothing in the Runtime checks any of these:
 - **That a review happened, or that the reviewer was not the author.** The Runtime proves only that committed bytes equal
   approved bytes.
 - **That exactly one Recorder edited the candidate.** Any number of writers, or none, produces the same result.
-- **That a reaffirmed Document was actually reviewed.** `reaffirmedDocumentIds` is the caller's statement. The Runtime
+- **That an explicitly confirmed Document was actually reviewed.** `confirmedDocumentIds` is the caller's statement. The Runtime
   proves only that each id names a Document inside the authorized scope, and it never infers the list.
-- **Light versus Deep for Update.** Runtime parses and freezes the mode, but does not compare an Update mode with
-  delta.compute Light eligibility. Deep gates for Init, Prune and Repair do not add such an Update check; declaring
-  Light while Update blockers are active is accepted.
+- **Light versus Deep for Update.** Runtime parses and freezes mode but does not decide semantic review depth. Delta
+  provides scoped facts; the host chooses Light or Deep. Deep-only gates for Init/Prune/Migrate are separate.
 - **The reading ladder.** L0 → L1 → L2 → L3 is prescribed by `SKILL.md`; nothing stops a caller opening at depth 3.
 - **`.scratch/investigations/` in its entirety.** Zero Runtime representation: no constant, no validation, no cleanup.
 - **Investigation identity-hash derivation.** Prose only. (The Feedback equivalent *is* enforced.)
@@ -78,16 +79,16 @@ Nothing in the Runtime checks any of these:
 
 Three places could give false confidence if they stopped saying what is true:
 
-1. `packages/context/src/commands/update.md` step 2 says the Light/Deep choice is the caller's: the Runtime reports
-   blockers but does not enforce Update mode. Repair has its own enforced Deep gate.
-2. `packages/context/README.md` documents scratch Markdown filenames as `<short-identity-hash>`, matching `SKILL.md`,
-   `references/runtime.md`, and the code: an identity hash over a few normalized fields, explicitly not the whole file.
-3. The three published schemas, including `packages/context/public/schemas/runtime.schema.json`, are a validated
-   contract. `packages/context/tests/runtime/fixture.ts` compiles all of them with ajv 2020 in strict mode and holds
-   every Runtime response, every request the Runtime accepted, and — after each successful commit — the committed
-   `meta.json` and every Document's front matter to them. A schema that drifts from the implementation fails the test
-   that exposed it; `ajv` is a pinned catalog devDependency. The check is as wide as the suite: a response shape no test
-   produces is not compared. See `package-context.verification-and-gaps`.
+1. The Update command assigns semantic mode and actual review to the host. confirmedDocumentIds permits new records
+   without an edit, but listing an ID does not prove anyone read its sources.
+2. The README and Skill specify scratch identity hashes, not whole-file hashes. Invocation and recovery prose must
+   preserve that ownership boundary rather than describing temporary files as shared product state.
+3. Four published Schemas describe Document, metadata/legacy ledger, confirmation and Runtime wire contracts. The
+   strict Ajv checks in tests/runtime/fixture.ts validate produced responses, accepted requests and committed current
+   metadata/front matter/confirmation shapes. Tests in confirmation.test.ts and migration.test.ts exercise canonical
+   identities and legacy conversion. The check is only as wide as the shapes exercised by tests.
+4. A successful confirmation.check is a successful computation, not a CI verdict. The repository selects its explicit
+   policy; malformed sources or records cannot be hidden by accepting status alone.
 
 ## Why the split is acceptable
 

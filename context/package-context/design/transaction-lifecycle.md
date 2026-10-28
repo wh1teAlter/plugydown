@@ -14,179 +14,103 @@ relations:
 code:
   paths:
     - packages/context/src/runtime/transaction.ts
-    - packages/context/src/runtime/repair.ts
+    - packages/context/src/runtime/confirmation.ts
+    - packages/context/src/runtime/migration.ts
     - packages/context/tests/runtime/transaction.test.ts
-    - packages/context/tests/runtime/repair.test.ts
+    - packages/context/tests/runtime/migration.test.ts
 ---
 
 # Transaction lifecycle
 
-## Four actions
+All formal writes use one transaction mechanism in transaction.ts: a complete candidate, atomic directory lock, fixed
+scope/evidence, validation, fingerprint-bound semantic approval, directory switch and recovery. No secondary migration
+or confirmation state manager exists.
+
+## Four actions and seven phases
 
 | Action | Input | Purpose |
 |---|---|---|
-| `begin` | `command`, `mode`, `dryRun`, `scope`, `gitEvidencePath`, `evidencePaths`, optional `reaffirmedDocumentIds` | acquire the lock, snapshot reality, stage a candidate |
-| `validate` | `runId` | prove the candidate, derive Meta, produce the two fingerprints |
-| `commit` | `runId`, `approval` | re-prove, switch directories, verify |
-| `resume` | `runId`, optional `disposition` | continue or abandon an existing run |
+| begin | command, mode, dryRun, scope, gitEvidencePath, evidencePaths; optional confirmedDocumentIds, command-required migrationStrategy | freeze inputs, acquire lock, stage complete candidate |
+| validate | runId | validate candidate, derive machine records and return approval fingerprints |
+| commit | runId and approval | re-prove inputs and switch the directory |
+| resume | runId and optional disposition | continue or safely abandon the existing run |
 
-`validate` and `resume` take nothing but `runId` (plus `disposition`). The Runtime holds all other state in the manifest,
-so a caller cannot change the terms of a run midway.
-
-## Seven phases
-
-```
-staged → validated → committing → committed
-                          ↓
-              restored | recovery_required | failed
+```text
+staged -> validated -> committing -> committed
+                           -> restored | recovery_required | failed
 ```
 
-Phase lives in `.scratch/runs/<run-id>/manifest.json`. The manifest type is a **discriminated union on phase**, so which
-of `candidateFingerprint`, `sourceEvidenceFingerprint`, `approval`, and `recovery` may appear is enforced by the type
-system rather than by a parallel validation matrix. `parseManifest` re-proves every one of those combinations on read,
-which is what makes a hand-edited or truncated manifest fail rather than mislead. Examples of what it rejects:
+The persistent manifest is a discriminated union on phase. It uses kind: plugydown.context.transaction and the shared
+format: 1, not an independently versioned protocol. Only validated phases carry the candidate/source fingerprint pair;
+approved/recovery phases carry the corresponding approval and allowed recovery facts. Parsing rejects inconsistent
+combinations. begin fixes all authorization fields; callers cannot replace them through later actions.
 
-- a `staged` manifest carrying any fingerprint, approval, or recovery fact
-- a `validated` manifest carrying an approval
-- an approval whose fingerprints do not equal the manifest's own validated pair
-- a `dryRun: true` manifest in any phase past `validated`
-- `snapshot.contextState: 'present'` without `contextFingerprint`, or vice versa
-- a `committing` restore intent when the snapshot recorded no live Context to restore
-- a `reaffirmedDocumentIds` entry that is empty, duplicated, or not a well-formed Document id
+## Lock, staging and snapshots
 
-`reaffirmedDocumentIds` is one of the base facts rather than a phase-gated one: it is recorded at `begin`, survives
-re-validation (`baseFacts` carries it forward), and has its shape re-checked on every read. Shape is all `parseManifest`
-checks; that each id names a real Document inside the authorized scope was proven only at `begin`. What bounds the effect
-of a hand-edited list is later: `refreshedDocumentIds` refreshes a Document only if scope also authorizes it, so a listed
-id outside the scope settles nothing.
+The worktree-local `.scratch/locks/context-write/` directory is acquired by atomic mkdir. Its owner contains only kind:
+plugydown.context.lock, format and Runtime-generated runId. Missing, valid, corrupt and orphaned owners are distinguished;
+there is no PID or time-based expiry. Foreign or damaged ownership must not be removed to start another write.
 
-## The lock
+Init starts an empty candidate and requires absent Context. Other commands copy the complete formal tree. New-layout
+Update requires valid structure and records, but allows source degradation or unmatched confirmations at begin. Prune
+requires readable existing sources. Init/Prune/Migrate are Deep; Init/Migrate have repository scope. Migrate reads only
+eligible legacy structure and requires an explicit trust strategy.
 
-`.scratch/locks/context-write/` — a directory created by plain `fs.mkdir`, which is atomic. `EEXIST` means the lock
-belongs to someone else. Inside it, `owner.json` holds exactly `{schema: 'plugydown.context.lock/v1', runId}`.
+begin freezes the formal tree fingerprint, host Git evidence fingerprint/revision and explicit declared-evidence
+fingerprint. Before consequential steps, changed formal bytes, supplied Git bytes or declared evidence produce
+FORMAL_CONTEXT_CONFLICT, GIT_EVIDENCE_CONFLICT or DECLARED_EVIDENCE_CONFLICT, resulting in snapshot_stale and safe cleanup.
+Runtime rechecks the supplied evidence, not live Git commands; collection freshness is the host's responsibility.
 
-`classifyLock` produces four facts:
+## Validate and derived-file ownership
 
-| Fact | Meaning | Response |
-|---|---|---|
-| `absent` | free | proceed |
-| `valid` | owner readable and its manifest loads with a matching id | `active_run` (or proceed if it is our own run) |
-| `corrupt` | not a directory, or `owner.json` unreadable or wrong shape | `manual_recovery` |
-| `orphan` | owner valid but its manifest is missing or unreadable | `manual_recovery`, carrying the runId |
+Normal validation parses candidate Markdown without requiring derived metadata to be current, reads all candidate source
+declarations plus explicit evidence, checks Document scope, and enforces Prune source coverage. It then derives:
 
-A lock is never expired by time or PID. There is no timeout anywhere. The only ways it goes away are a terminal cleanup
-by its own run, or a human deciding.
+- the manifest entry: Update preserves it; Init/Prune change convergence only;
+- immutable records for authorized new/content-changed Documents and explicitly confirmedDocumentIds;
+- a sourceEvidenceFingerprint over the complete candidate declarations and explicit evidence.
 
-### Lock-owner validation
+A path-only move does not create a record. Deleting a Document does not delete its history. Scope alone does not confirm
+an unchanged sibling. Source errors keep the candidate editable; no partial or fabricated source tuple is written.
 
-`readLockOwner` in `repository.ts` is the single implementation. Call sites: `queries.ts` `activeRun`; `transaction.ts`
-`classifyLock` and `releaseLock`. `LOCK_SCHEMA` is `plugydown.context.lock/v1` and lives in `repository.ts`.
+Runtime persists cumulative derivedConfirmationKeys and derivedMetadataFingerprints in a staged manifest before writing
+machine files. assertManagedCandidate protects existing confirmation bytes/modes and rejects unowned candidate changes.
+Revalidation removes only obsolete records generated by this run. recoverDerivedTemps removes only registered candidate
+temporary leaves after interruption; unknown or unsafe temporary files are refused. These are temporary ownership facts,
+not a persistent business review queue.
 
-Valid: the lock path is a directory, `owner.json` is a record with **exactly two keys**, `schema === LOCK_SCHEMA`, and
-`runId` is a UUID v4 (`[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}`). Absent: the path is
-missing. Corrupt: not a directory, parse/IO/`RuntimeFault`, extra or missing keys, wrong schema, or a bad UUID.
-`classifyLock` then maps a valid owner plus a missing, unreadable, or mismatched manifest to `orphan`. A lock owner
-that is missing `schema` or carries an extra key is `WRITE_LOCK_INVALID` from `repository.inspect` and is not an
-`activeRun`.
+After deriving files, validation reloads the full candidate, validates the record store, re-samples sources, rechecks
+scope/expected records and compares the final metadata/tree snapshot. Changed sources or candidate bytes require further
+validation. A ready candidate returns both fingerprints and a bounded confirmation summary, then requires semantic review.
+Every revalidation discards old approval and recovery facts.
 
-## Staging the candidate
+An identical candidate is terminal no_change. A dry run terminates at validate, returns dry_run and cleans its run; it
+cannot later become a real commit. Neither terminal shortcut writes the formal tree.
 
-The candidate lives at `.scratch/runs/<run-id>/candidate/context/`.
+## Migration branch
 
-- `init` stages an **empty** directory. There is nothing to copy.
-- `update`, `prune` and `repair` `fs.cp` the live `context/` tree with `errorOnExist: true`, `force: false`,
-  `preserveTimestamps: false`.
+Migrate derives the selected historical conversion plan from the original legacy tree. import-trusted copies exact old
+three-hash tuples except unfinished reviews; reconfirm imports none. It preserves all Markdown paths/bytes/modes and both
+baselines. It binds explicit evidencePaths but does not require current deleted source files to copy historical evidence.
+The old root meta.json is removed and new `.meta` files are created only in the candidate. Final structural/store checks
+and approval use the same transaction machinery. This conversion does not claim a new semantic review of current sources.
 
-`begin` preconditions, from `validateBeginInput`:
+## Commit and recovery
 
-- `init` — must be `deep`, must be `repository` scope, requires `formalState: absent`
-- `update` — requires `formalState: ready`
-- `prune` — must be `deep`, requires `formalState: ready`, `sourceState: ready`, and no explicit content review obligations
-- `repair` — must be `deep`, requires valid Meta and only content fingerprint damage (or an already consistent tree), no conflict markers or unfinished Git operation, and complete explicit Document scope
-- `reaffirmedDocumentIds` — `update` only; every id must exist and fall inside the authorized scope
+commit requires validated phase and checks lock ownership before candidate/source reads. validatedFacts recomputes the
+candidate, current source evidence, expected metadata and immutable record ownership; stale input refuses the old
+approval. Approval must contain approved: true, the exact candidateFingerprint and sourceEvidenceFingerprint, and a
+nonempty summary. The lock is checked again before recording committing.
 
-Prune adds a source-coverage preservation check because it is the dedicated convergence workflow. Update can also
-remove authorized Documents, so do not treat deletion as exclusive to Prune. The reaffirm restrictions are narrower: Init has no prior ledger to
-settle, Prune already demands ready source evidence, an id naming no Document is a typo worth failing on, and an id
-outside the scope would settle a ledger the caller never asked to touch. All four reject with
-`TRANSACTION_SCOPE_INVALID` before the lock is taken, so a rejected `begin` leaves nothing behind.
+directorySwitch renames live context to the run's backup (except Init), then candidate to live. finalizeCommitted proves
+the live tree equals the approved fingerprint and validates current structure/store, writes committed and cleans owned
+artifacts. It does not claim that sources remained unchanged after the completed switch. The two-rename interruption
+window is handled by recovery rather than described as a filesystem-wide atomic exchange.
 
-`reaffirmedDocumentIds` is frozen here along with everything else, which is why it reads as *permission* rather than a
-claim: it allows those Documents' ledgers to be recomputed when their Markdown is unchanged. A Recorder who then finds
-one of them genuinely wrong edits it and refreshes through the normal path — an assertion would have deadlocked, since
-`validate` and `commit` accept only a `runId` and offer no way to withdraw it.
+Recovery compares live/candidate/backup tree facts and persisted intent. It may complete the candidate, restore the
+original, preserve conflicts for manual recovery or report no trusted copy. Restore intent is persisted before its
+rename and cannot be overwritten by an unrelated recovery branch. See `package-context.outcomes-and-recovery`.
 
-Note that `mode` is otherwise inert; see `package-context.delta-and-light`.
-
-## The snapshot
-
-`begin` records: whether live Context was absent or present plus its fingerprint, the declared-evidence fingerprint (from
-expanding `evidencePaths`), the Git evidence fingerprint, and the Git revision.
-
-`assertPreSwitchSnapshotFresh` re-proves all three before every consequential step — during validate, before commit,
-during resume, and inside recovery. Each has its own failure: `FORMAL_CONTEXT_CONFLICT`, `DECLARED_EVIDENCE_CONFLICT`,
-`GIT_EVIDENCE_CONFLICT`. All three collapse to the `snapshot_stale` outcome.
-
-## Validate
-
-`transaction.validate` runs a long sequence, each step of which can only produce a legal outcome:
-
-1. require phase `staged` or `validated`; require the lock to be ours
-2. re-prove the snapshot
-3. load the candidate with `ignoreMeta: true, requireMeta: false` — Init has no ledger yet, while copied candidates may carry stale content fingerprints before Runtime derives the new ledger
-4. if the candidate is not `ready`, return `candidate_edit_required` with its diagnostics
-5. expand candidate source; issues → `candidate_edit_required`
-6. compute authorized Documents and reject out-of-scope mutations (`CANDIDATE_SCOPE_VIOLATION`)
-7. for `prune`, require live `sourceState: ready` and no lost coverage (`PRUNE_COVERAGE_LOST`)
-8. derive Meta and write it into the candidate; Repair uses repairMeta and separately checks exact Markdown preservation, rather than refreshing source review records
-9. **reload the candidate with Meta required** and re-expand source. A reload that is not `ready` →
-   `candidate_edit_required` with its diagnostics. If re-expansion has issues, or the recomputed source evidence
-   fingerprint differs from step 5's, the source moved mid-validation → `candidate_edit_required`, carrying only
-   whatever diagnostics the reload and expansion produced — there is no code for the mismatch itself. Then, for every
-   refreshed Document, the `sourceFingerprint` written into Meta must equal the one just recomputed, or the outcome is
-   `candidate_edit_required` with `CANDIDATE_SOURCE_STALE`
-10. re-prove the snapshot once more, then record `phase: validated` with the two fingerprints
-
-Step 9 is the subtle one: validation reads the world twice and refuses to certify a candidate whose source shifted
-between the reads. `CANDIDATE_SOURCE_STALE` is the per-Document half of that check, not the evidence-fingerprint
-comparison.
-
-Two terminal shortcuts: if the candidate fingerprint equals the live snapshot fingerprint, the outcome is `no_change` and
-artifacts are cleaned. If `dryRun`, the outcome is `validated` and artifacts are cleaned — a dry run can never become a
-real commit.
-
-Re-validating always rebuilds the manifest from base facts plus the two fresh fingerprints, discarding any prior approval
-and recovery fact. There is no path by which an old approval survives a re-validation.
-
-## Commit and the atomic switch
-
-`transaction.commit` requires phase `validated`, so it loads the manifest first. It then checks the lock **before the
-candidate or any source read**, so a foreign owner is never masked by a candidate error belonging to another run — the
-source comment states exactly this. Then it re-proves the snapshot, recomputes the candidate
-and source fingerprints, compares them to the manifest, checks the approval against those recomputed facts, re-checks the
-lock, and only then writes `phase: committing`.
-
-`directorySwitch` performs two renames:
-
-1. live `context/` → `.scratch/runs/<run-id>/backup/context` (skipped when the snapshot said absent)
-2. candidate → live `context/`
-
-Then `finalizeCommitted` re-proves: the live tree fingerprint must equal the approved candidate fingerprint, and the tree
-must load as `ready` with that same fingerprint. Failure is `FINAL_VERIFICATION_FAILED`, which routes into recovery.
-
-The candidate tree fingerprint is computed with paths rewritten to a canonical `context/` prefix (see
-`package-context.determinism`), which is why the fingerprint survives the rename unchanged.
-
-If the switch or verification throws, `recoverCommitting` reads live, candidate, and backup tree facts and decides among
-completing, restoring, and stopping. Those decisions are enumerated in `package-context.outcomes-and-recovery`.
-
-## Repair and concurrency boundaries
-
-Repair may begin from a structurally invalid content-fingerprint snapshot, but the original tree must stay byte-exact
-and the complete final candidate must become ready. Repair rechecks exact Markdown paths, bytes and permissions during
-validation and before commit/resume. It keeps source review records and both baselines, and persists reviewRequired for
-affected Documents. The common snapshot and approval guards still apply.
-
-The tests exercise rival-lock states and concurrent begin calls in one process, including Repair. They do not establish
-multiprocess stress behavior or atomic directory creation on every network filesystem. No lock timeout or PID expiry
-is used; do not describe those unexecuted scenarios as passed.
+Tree fingerprints bind paths and bytes, not general permissions. Migration and record ownership have separate mode checks;
+see `package-context.determinism`. Same-process concurrent begin tests and worktree fixtures do not establish adversarial
+multiprocess or network-filesystem guarantees.

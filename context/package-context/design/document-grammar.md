@@ -35,7 +35,8 @@ a Document with a title line above the fence is `DOCUMENT_FRONT_MATTER_MISSING`.
 | `code` | no | object with exactly one key, `paths` |
 
 Any other key is `DOCUMENT_FIELD_UNKNOWN`. There is no extension point. The body must be non-empty after trim
-(`DOCUMENT_BODY_EMPTY`).
+(`DOCUMENT_BODY_EMPTY`). Git conflict markers in the document are rejected as
+`DOCUMENT_CONFLICT_MARKER`; resolving them is a content decision, not a hash repair.
 
 Note the asymmetry on relation lists: each of `requires`, `related`, `supersedes` must be a **non-empty** array of
 unique, valid Document ids if present. An empty list is an error, not a no-op — write nothing instead. Likewise a
@@ -62,6 +63,9 @@ front matter, front matter over its 64 KiB limit, unparseable YAML, and YAML tha
 - any other depth — `DOCUMENT_PLACEMENT_INVALID`.
 
 Filenames must match `^[a-z0-9]+(-[a-z0-9]+)*\.md$`. No underscores, no uppercase, no dots beyond the extension.
+
+The current layout reserves `.meta/` for its unique manifest and immutable confirmations; it is not a Domain.
+Legacy root meta.json is recognized only for explicit migration, and mixed entries fail.
 
 Directory scanning in `graph.ts` adds the structural rules: unknown entries in the Context root, unknown directories
 inside a Domain, non-`.md` files inside a category, and empty category directories

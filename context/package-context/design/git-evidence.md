@@ -41,11 +41,12 @@ Exactly one leaf directly under `.scratch/evidence/`, named in lowercase kebab-c
 ├── head.txt              required
 ├── mid-operation.json    required
 ├── status.bin            required
-└── diff.bin              optional
+├── diff.bin              optional, paired with comparison.json
+└── comparison.json       optional, paired with diff.bin
 ```
 
 `assertGitEvidencePath` requires exactly three path segments with the first two being `.scratch/evidence`. No nesting, no
-sharing, no evidence outside that collection. Any file in the directory other than these four, or any non-regular entry,
+sharing, no evidence outside that collection. Any file in the directory other than these five, or any non-regular entry,
 is `GIT_EVIDENCE_UNKNOWN_FILE` — extra files are refused rather than ignored, so a partially rewritten evidence leaf
 cannot be silently consumed.
 
@@ -61,8 +62,8 @@ are refused because a prefix is not a stable identity.
 
 **`mid-operation.json`** must be exactly `{"active":false}` or `{"active":true,"kind":K}` where K is one of `merge`,
 `rebase`, `cherry-pick`, `revert`, `bisect`. The key set is compared exactly, so `{"active":false,"kind":"merge"}` is
-`GIT_MID_OPERATION_INVALID`. A leading BOM is stripped. This flag matters: a Git mid-operation is an unconditional
-Light-eligibility blocker in `package-context.capabilities`, and it prevents `deriveMeta` from advancing the repository baseline.
+`GIT_MID_OPERATION_INVALID`. A leading BOM is stripped. Migrate refuses an active operation. Delta exposes gitMidOperation for the host; it does not derive a Light
+eligibility flag. Ordinary Update never advances a repository baseline.
 
 **`status.bin`** is porcelain v2, NUL-delimited, and must end with a NUL. Parsing recognizes only:
 
@@ -74,13 +75,18 @@ Light-eligibility blocker in `package-context.capabilities`, and it prevents `de
   `git status --porcelain=v2 --branch -z --untracked-files=all`.
 - `1 XY …` ordinary, where the change kind comes from X unless X is `.`, in which case Y
 - `2 XY …` rename or copy, which consumes the *following* record as the previous path; a missing or empty one is an error
-- `u …` unmerged, recorded as modified and setting `hasUnmergedPaths`; Repair rejects this flag even when the supplied mid-operation flag is false
+- `u …` unmerged, recorded as modified and setting `hasUnmergedPaths`; Migrate rejects this flag even when the supplied mid-operation flag is false
 
 Exactly one `branch.oid` and one `branch.head` are required. Any unrecognized record is a hard failure — the parser has
 no tolerant fallback, so a Git version emitting something new fails loudly instead of silently under-reporting changes.
 
 **`diff.bin`** is `--name-status -z`. Statuses match `^[ACDMRTUXB]\d*$`; `R`/`C` consume two paths, everything else one.
 Incomplete records are `GIT_DIFF_INVALID`. Empty is legal.
+
+**`comparison.json`** must contain exactly kind: two-tree, a full lowercase base object ID and a head object ID equal
+to head.txt. It appears together with diff.bin or neither appears; invalid combinations are GIT_COMPARISON_INVALID.
+The host fixes the comparison explicitly and runs git diff --name-status -z <base> <head>, resolving merge-base to an
+object ID first if desired. Runtime validates the descriptor and bytes; it does not fetch or inspect the Git objects.
 
 Every path from either file passes back through `assertSafeRelativePath`, so Git cannot introduce a path the rest of the
 Runtime would refuse.
@@ -94,9 +100,10 @@ Changes from both files are merged, sorted by `path\0kind\0previousPath`, and de
 The evidence fingerprint is SHA-256 over each present file's name and content hash, sorted by name — so it covers
 `diff.bin`'s presence or absence as well as its content.
 
-`hasDiff` is exposed separately, but it decides only `changedPathsComplete` in `delta.compute`: when the recorded
-repository baseline differs from HEAD and no diff was supplied, the changes between them are unlisted and the result
-covers only the working tree. The host supplies `diff.bin` only when the baseline differs from HEAD and
-`git cat-file -e "$baseline^{commit}"` succeeds, since a baseline commit orphaned by a squash merge may never have been
-fetched into this clone; otherwise it omits the file. Nothing else reads `hasDiff`: the review queue comes from
-fingerprints and `package-context.transaction-lifecycle` does not consult it.
+`hasDiff` determines Delta's historyCoverage: provided or not_provided. Without the pair, changedPaths contains only
+supplied working-tree/index state; absence of historical evidence does not mean an empty history. The retained repository
+baseline is not a default comparison base. Confirmation matching uses current declared inputs and is independent of
+commit reachability, rebase and squash.
+
+Recheck HEAD and Git operation state after collecting the leaf and before using it. The Runtime can detect replacement
+of evidence bytes, but it cannot detect an unreported checkout merely by rereading an unchanged evidence file.

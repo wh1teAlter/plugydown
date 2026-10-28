@@ -133,20 +133,20 @@ Each role declares a `role-delivery` capability subject. A selected Platform wit
 `packages/context/src/hooks/session-start/hook.ts` is deliberately almost nothing:
 
 - reads only `input.cwd`
-- `lstat`s `<cwd>/context/meta.json`
+- `lstat`s `<cwd>/context`
 - returns `{decision: 'continue'}` **always**
-- adds `additionalContext` only when that path is a regular file
+- adds `additionalContext` when that path is a directory or symlink, leaving validity to Runtime
 
 It performs no writes, spawns nothing, and swallows every error. The comment states the design: SessionStart is fail-open,
 and absence or inspection errors must not affect the host session. Its own doc comment calls it a best-effort discovery
 hint and defers authority to Runtime inspection.
 
 So the hook is a hint, not a source of truth. The `additionalContext` string it injects tells the assistant to load the
-skill and call `repository.inspect` — it never asserts that Context is usable. A `meta.json` that exists but is invalid
-still produces the hint, and `repository.inspect` is what discovers the problem.
+skill and call `repository.inspect` — it never asserts that Context is usable. Current-layout, legacy and incomplete directories all produce a discovery hint. A linked Context also prompts
+inspection, which rejects the unsafe path; the hook itself never claims that the directory is usable.
 
 ## Public schemas
 
-`public/schemas/` is copied verbatim into the artifact: `document.schema.json`, `meta.schema.json`, and
-`runtime.schema.json`. All three are held to the implementation by the test suite; see `package-context.verification-and-gaps`.
+`public/schemas/` is copied verbatim into the artifact: `document.schema.json`, `meta.schema.json`, `confirmation.schema.json`, and
+`runtime.schema.json`. All four are held to the implementation by the test suite; see `package-context.verification-and-gaps`.
 The mapped complete delivery unit reaches installers through the hand-started Git release workflow described there.

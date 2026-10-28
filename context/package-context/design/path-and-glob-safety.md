@@ -12,6 +12,7 @@ relations:
 code:
   paths:
     - packages/context/src/runtime/repository.ts
+    - packages/context/src/runtime/confirmation.ts
     - packages/context/public/schemas/document.schema.json
     - packages/context/public/schemas/runtime.schema.json
 ---
@@ -99,7 +100,8 @@ working tree.
 |---|---|---|
 | `MAX_MARKDOWN_BYTES` | 1 MiB | one Document |
 | `MAX_FRONT_MATTER_BYTES` | 64 KiB | one front-matter block |
-| `MAX_JSON_TEXT_BYTES` | 4 MiB | Meta, manifest, lock owner, tree files |
+| `MAX_JSON_TEXT_BYTES` | 4 MiB | metadata manifest, legacy Meta, transaction manifest, lock owner, tree files |
+| `MAX_CONFIRMATION_BYTES` | 4 KiB | one immutable confirmation record |
 | `MAX_GIT_EVIDENCE_BYTES` | 16 MiB | one Git evidence file |
 | `MAX_SOURCE_FILES` | 10000 | selected files in one expansion, counted across all owners; a file selected twice counts once |
 | `MAX_SOURCE_BYTES` | 512 MiB | one expansion, accumulated |
@@ -124,3 +126,8 @@ other expansion problem is attributed to its owning Document as a recoverable is
 
 A zero-match glob is an error (`SOURCE_GLOB_ZERO_MATCH`), and a missing exact declaration is
 `SOURCE_EXACT_MISSING`. Silence would let knowledge claim coverage it does not have.
+
+Confirmation storage is validated independently: ordinary directories by Document ID, ordinary record files by full
+lowercase key, canonical payload bytes and matching identity. It uses the shared file-count and byte ceilings; even
+historical records without a current Document must be structurally valid. Current confirmation state is never computed
+from a partial source expansion, and source-unavailable inputs receive no fabricated key.

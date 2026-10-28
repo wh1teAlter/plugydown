@@ -26,13 +26,13 @@ code:
 A successful process emits a **Runtime response**:
 
 ```
-protocol, capability, status, data?, cursor?, diagnostics?
+protocol, format, capability, status, data?, cursor?, diagnostics?
 ```
 
 A process that could not safely transport the request emits a **transport envelope** instead:
 
 ```
-transport: 'plugydown.context.runtime.transport/v1', status: 'failed', diagnostics
+transport: 'plugydown.context.runtime.transport', format: 1, status: 'failed', diagnostics
 ```
 
 These are disjoint. The transport envelope has no `protocol` and no `capability`, and it accompanies exit code 1. Only
@@ -47,27 +47,32 @@ failed" as the same condition will report a malformed request as a knowledge fai
 
 ## The closed capability set
 
-Six read capabilities plus one write capability. The list in `protocol.ts` is the single source of truth:
+Seven read capabilities plus one write capability. The list in `protocol.ts` is the single source of truth:
 
 | Capability | Action | Input |
 |---|---|---|
-| `repository.inspect` | — | optional `selectedDocumentIds`, `repair: true` |
+| `repository.inspect` | — | optional `selectedDocumentIds` OR `migration: true` |
 | `frontier.query` | — | `depth: 1\|2\|3`, optional `selectors`, optional `requiresClosure` |
 | `graph.validate` | — | exactly `{}` |
-| `delta.compute` | — | `gitEvidencePath`, `scope`, `taskEvidence` |
+| `confirmation.check` | — | optional `scope`, `explain` |
+| `delta.compute` | — | `gitEvidencePath`, `scope` |
 | `growth.measure` | — | exactly `{}` |
 | `feedback.match` | — | four non-empty strings |
 | `transaction` | required `begin`\|`validate`\|`commit`\|`resume` | action-owned |
 
-Two `transaction` actions have an optional input field. `begin` takes `reaffirmedDocumentIds`, a unique list of Document
-ids; `resume` takes `disposition`, `continue` or `abandon`. The inputs of `validate` and `commit` are exactly their
-required set, which together with the frozen manifest is what keeps a run's terms unchangeable once `begin` has recorded
-them.
+Begin accepts Update-only confirmedDocumentIds and Migrate-only migrationStrategy. Resume accepts optional disposition,
+continue or abandon. Validate and commit accept only their required fields. The frozen manifest prevents changing a
+run's scope, mode or evidence between phases.
+
+Every request and Runtime response requires protocol `plugydown.context.runtime` and format: 1. Transport errors use
+the same format under their separate fixed transport label. Unknown format, missing format or old `/v1` requests fail;
+there is no silent semantic fallback. The compatibility generation is shared with metadata, locks, runs and cursors,
+while package release versions remain separate.
 
 `frontier.query` `selectors.codePaths` uses the same `sourcePattern` language as `scope.paths`.
 
 `action` is required for `transaction` and forbidden for everything else. `budget` and `cursor` are accepted only by the
-five paged capabilities; `graph.validate` and `transaction` reject them with `REQUEST_FIELD_INVALID`. That rejection is
+six paged capabilities; `graph.validate` and `transaction` reject them with `REQUEST_FIELD_INVALID`. That rejection is
 deliberate: those two produce a whole-or-nothing answer, so a partial page would be a lie.
 
 ## Statuses and legality by construction
@@ -86,7 +91,7 @@ For transactions the same discipline is applied by types instead of runtime chec
 discriminated union in which each variant carries exactly the fields its outcome permits, and `TRANSACTION_SHAPES` maps
 each outcome name to its one legal status plus derived fields such as `nextAction` and `manualRecoveryRequired`. A
 caller therefore cannot receive, say, `committed` without `contextFingerprint`, because there is no way to construct it.
-The full outcome table is documented in `package-context.transaction-lifecycle`.
+The full outcome table is documented in `package-context.outcomes-and-recovery`.
 
 ## Failures are values
 
@@ -117,16 +122,20 @@ Domain ids match `^[a-z0-9]+(-[a-z0-9]+)*$`; Document ids are dot-separated runs
 be 64 lowercase hex characters. `runId` must be a v4 UUID — the Runtime rejects any id it did not generate the shape of.
 These are checked at parse time, so downstream code never handles a malformed identifier.
 
-## Repair and evidence vocabulary
+## Commands and evidence vocabulary
 
-Transaction commands are init, update, prune and repair. Repair requires Deep mode and explicit Document scope, forbids
-reaffirmedDocumentIds, and uniquely allows empty evidencePaths. A repair_staged response directs the caller to validate
-without editing. See `package-context.content-fingerprint-repair` for the official recovery sequence.
+Transaction commands are init, update, prune and migrate. Init/Prune/Migrate require Deep; Init/Migrate require repository
+scope. Migrate requires explicit migrationStrategy, forbids confirmedDocumentIds and returns migration_staged with
+nextAction validate. The new layout has no Repair command.
 
-Keep four meanings of evidence distinct: raw Git bytes collected in a workflow-owned leaf; source declarations in
-code.paths/evidencePaths; caller assertions in taskEvidence; and the prose Evidence section of a Role Brief. A transaction
-candidate is a staged complete directory tree, whereas a growth candidate is only a suggestion returned by analysis.
+All commands accept an empty evidencePaths array. Normal transactions still bind every candidate Document's declared
+source evidence. Migration binds historical conversion and only any sources explicitly supplied as evidencePaths; it
+does not certify current source semantics. See `package-context.migration-and-confirmation`.
 
-Request parsing first requires an object and checks the top-level closed field set, then checks the protocol identifier.
-Thus an unknown field can be reported before a protocol mismatch. handleRequest extracts the capability name before
-parsing so that a failure response can identify the requested capability.
+Keep evidence meanings distinct: raw Git bytes collected in a workflow-owned leaf; source declarations in code.paths and
+evidencePaths; and the prose Evidence section of a Role Brief. taskEvidence is no longer an API field. A transaction
+candidate is a complete staged tree; a growth candidate is a suggestion with no write authority.
+
+Request parsing checks the top-level closed field set before protocol/format, so an unknown or missing field can precede
+a protocol mismatch. handleRequest extracts the capability before parsing to identify known requested capabilities on
+failure. A successful read describes completed computation, not a semantic approval or a passing CI policy.

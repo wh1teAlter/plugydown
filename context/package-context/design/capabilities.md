@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: package-context.capabilities
-description: Context read projections, paged Repair preview, content/source pending-review states, explicit-body retrieval and non-mutating growth/feedback analysis.
+description: "Current read projections, immutable confirmation checks, explicit legacy migration preview, bounded retrieval and non-mutating growth/feedback analysis."
 kind: architecture
 domain: package-context
 relations:
@@ -15,41 +15,52 @@ code:
     - packages/context/src/runtime/delta.ts
     - packages/context/src/runtime/graph.ts
     - packages/context/src/runtime/queries.ts
-    - packages/context/src/runtime/repair.ts
+    - packages/context/src/runtime/confirmation.ts
+    - packages/context/src/runtime/migration.ts
 ---
 
 # Read capabilities
 
-The six read capabilities are implemented in queries.ts and delta.ts. All mutating Runtime filesystem calls remain
-in transaction.ts; reading, including a repair preview, does not create, replace or remove repository files.
+The seven read capabilities compose queries.ts, delta.ts, confirmation.ts and migration.ts. All mutating Runtime filesystem calls remain
+in transaction.ts; reading, including a migration preview, does not create, replace or remove repository files.
 The Skill prescribes inspect → Domain metadata → selected domain.md → Document metadata and prerequisites → explicitly
 selected bodies; Runtime supports but does not enforce that reading sequence.
 
 ## `repository.inspect`
 
-The one capability with no precondition. It reports `context.state` (`absent` | `ready` | `invalid`),
-`context.sourceState`, `context.fingerprint` when the tree exists, `meta.state`, per-category `counts` (omitted when
-absent), and `activeRun` when a write lock is present. Formal issues come back as diagnostics even on `success`, which
-is how a caller learns *why* a tree is invalid without a second call.
+Inspection discovers the current layout and reports context state (`absent`, `legacy`, `ready`, `invalid`), sourceState,
+the available Context fingerprint, metadata state/layout, counts and an active-run hint. A successful call may still
+report invalid knowledge with diagnostics. Bad records or unsafe resources can also produce a failed response; callers
+must inspect both product status and the returned facts.
 
-With `selectedDocumentIds` it also returns per-id freshness. Four states:
+Default inspection is formal-only. Optional selectedDocumentIds runs real source/confirmation checks and returns
+per-Document confirmation items; unknown IDs fail rather than being silently dropped. This is not a persisted freshness
+field. A current layout also reports its validated confirmationCount, including historical records.
 
-- `missing` — no such Document
-- `source_unavailable` — expansion failed for it, or no ledger could be built
-- `fresh` — recomputed ledger equals the recorded Meta entry, compared by canonical JSON
-- `stale` — otherwise
+Alternatively, migration: true previews the unique legacy entry, reporting eligible, strategy, documentCount,
+importCount, planFingerprint and paged import/skip items. Preview uses import-trusted; the write command must explicitly
+choose a strategy. Migration preview and selectedDocumentIds cannot be combined. Structural eligibility does not establish
+Git state, lock ownership or semantic correctness of current content.
 
-Selecting ids switches the source policy from `formal-only` to `selected`, so freshness costs a real filesystem
-expansion. Omit the field when you only need the tree state.
+## `confirmation.check`
 
-With `repair: true`, the capability instead uses formal-only loading and pages the complete content repair plan. It
-reports eligibility, selected/remaining counts, migration need and a plan fingerprint; each item names before/after
-fields and whether it is selected. Unselected mismatches remain visible. Eligibility here does not prove Git state,
-source availability or lock ownership; the transaction checks those.
+Input has optional scope (default repository) and explain (default false). Current Markdown, canonical record storage
+and actual selected sources determine each item: matched, unmatched or unavailable. Complete source facts are required
+for a currentKey; matchedKey is returned only for an exact record. documentContentKnown means some historical record has
+the same front matter and body, not that the current sources were confirmed.
 
-`context.repairable` marks qualifying invalid trees, and `contentReviewRequiredCount` counts explicit content review
-obligations. Selected entries include `reviewRequired: true` where applicable and cannot report fresh while that flag
-remains, even if their source bytes are unchanged.
+With explain enabled, reasons use NO_CONFIRMATION, SOURCE_BASIS_CHANGED, DOCUMENT_CONTENT_UNKNOWN or SOURCE_UNAVAILABLE.
+No mutable review flag is written. Without explain, reasons are empty but the state and content-known fact remain.
+
+The response reports scope kind/requestFingerprint, structureState, recordStore state/coverage, sourceState,
+snapshotFingerprint, summary and paged items. Summary covers the whole snapshot, not the page: documents is the repository
+Document count, checked is the selected count, matched+unmatched+unavailable=checked, and checked+unchecked=documents.
+An empty path selection is successful with no items and unchecked sources. Record integrity is currently checked across
+the repository even when source matching is local; coverage does not imply all sources were read.
+
+The implementation reads Context and selected source evidence twice and rejects changes. Path selection also rechecks
+its source expansion. Cursors bind the request and snapshot. A success with unavailable or unmatched entries is not a
+passing CI gate; the consumer must apply its explicit policy after reading the complete result.
 
 ## `frontier.query` — the depth projection
 
@@ -83,21 +94,13 @@ absent.
 
 ## `graph.validate`
 
-The strictest capability and the only one with just two possible statuses: `success` or `failed`. No `budget`, no
-`cursor`, no partial answer. It demands `formalState: ready` and `sourceState: ready` — nothing else — then returns
-`contextFingerprint`, `domainCount`, `documentCount`, `relationCount`, `sourceDeclarationCount`.
+This capability returns success or failed, accepts no budget/cursor and never gives a partial page. It requires a valid
+current-format graph, complete readable sources and a valid confirmation store. It returns contextFingerprint,
+domainCount, documentCount, relationCount and sourceDeclarationCount.
 
-It reports explicit `reviewRequired` obligations and Documents whose recorded `sourceFingerprint` differs from the
-recomputed one, through `reviewPendingIds` in `graph.ts`. That helper also includes unreadable sources.
-`delta.compute` builds `directImpact` from the same helper,
-and `repository.inspect` freshness compares the Documents it selects. Ordinary loading skips the comparison because it
-needs filesystem expansion; explicit content review obligations do not. A review obligation is **not a failure**: the Document is reported as the warning
-`DOCUMENT_REVIEW_PENDING`, with `path` set to that Document's path, on a response whose status is still `success`. Code
-changing ahead of knowledge is the normal state of an active repository, so the warning means the next Update has
-Documents to settle, never damage. A tree that every other capability calls ready can therefore fail here only through
-source evidence: a cited path that cannot be expanded (`sourceState: degraded`), or an expansion that exceeds the source
-resource limits (`SOURCE_FILE_LIMIT_EXCEEDED`, `SOURCE_BYTE_LIMIT_EXCEEDED`), which fails the whole request rather than
-being attributed to one Document. That is the intended division of labour, not an inconsistency.
+It does not require every current tuple to be matched and does not return the old DOCUMENT_REVIEW_PENDING warning.
+Use confirmation.check for that separate question. Unavailable sources, malformed records, unsafe paths and hard resource
+limits still fail strict validation. Ordinary structure-only reads can remain usable when a source is unavailable.
 
 ## `growth.measure`
 

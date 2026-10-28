@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: package-context.meta-ledger
-description: Meta v1/v2 in a single Schema, content integrity versus source review, explicit reviewRequired obligations, readiness axes and the independent source/size baselines.
+description: "Current metadata layout, immutable complete-input confirmations, derived match states, explicit legacy migration and non-advancing repository baselines."
 kind: architecture
 domain: package-context
 relations:
@@ -10,94 +10,99 @@ relations:
     - package-context
   related:
     - package-context.determinism
-    - package-context.content-fingerprint-repair
+    - package-context.migration-and-confirmation
   supersedes:
     - knowledge-model.meta-ledger
 code:
   paths:
     - packages/context/public/schemas/meta.schema.json
-    - packages/context/src/runtime/delta.ts
+    - packages/context/public/schemas/confirmation.schema.json
+    - packages/context/src/runtime/confirmation.ts
     - packages/context/src/runtime/document.ts
     - packages/context/src/runtime/graph.ts
-    - packages/context/src/runtime/queries.ts
-    - packages/context/src/runtime/repair.ts
+    - packages/context/src/runtime/migration.ts
     - packages/context/src/runtime/transaction.ts
 ---
 
-# Meta ledger and review obligations
+# Metadata and immutable confirmations
 
-`context/meta.json` is machine-managed. Ordinary transactions derive it in transaction.ts; Repair uses the restricted
-repairMeta derivation. Validation serializes and strictly reloads the candidate before approval. Neither roles nor users
-hand-edit live Meta.
+Current Markdown and front matter are the authority for current knowledge. The Runtime stores historical confirmation
+of complete inputs separately; a missing match is an Update signal, not a damaged current-content ledger.
 
-## Formats and fields
+## One metadata area
 
-Runtime reads `plugydown.context.meta/v1` and `plugydown.context.meta/v2`. A single public meta.schema.json validates
-both through the `$schema` discriminator. Required top-level fields are `$schema`, toolVersion, runtimeProtocol,
-fingerprintVersion and documents; repository and convergence are optional. Unknown fields and incomplete shapes fail.
+```text
+context/.meta/manifest.json
+context/.meta/confirmations/<document-id>/<key>.json
+```
 
-Each v1 document record contains exactly frontMatterFingerprint, bodyFingerprint and sourceFingerprint, all 64-character
-lowercase SHA-256 values. V2 additionally permits `reviewRequired: true`; false or another value is invalid. Absence of
-the flag is not a standalone claim of freshness: the existing source comparison still applies.
+The manifest requires `format: 1` and permits only optional `repository` and `convergence` baselines. There is no current
+Document map. `parseMetadataManifest` checks the closed shape and canonical JSON; `inspectMetadataLayout` rejects mixed
+legacy/current entries, incomplete metadata directories, unknown entries and unsafe paths. Legacy `context/meta.json`
+is used only for discovery and explicit migration, never as an ordinary-read fallback.
 
-New Init writes v2. Normal Update preserves the current ledger version. Repair upgrades v1 to v2 only when it actually
-repairs content fingerprints; a consistent ledger returns no_change without migration. Older Runtimes reject v2, so
-collaborators must upgrade before committing the migrated ledger. Protocol and fingerprint algorithms remain v1.
+One compatibility generation is shared by the manifest, wire protocol, transaction state, lock and cursor. The plugin
+release version is separate and is not part of confirmation identity. The existing fixed Markdown grammar label remains
+`plugydown.context.document/v1`; no mass rewriting of that label is required.
 
-The fingerprint algorithm version must change if its computation changes. Read FINGERPRINT_VERSION and TOOL_VERSION
-in document.ts for current values; toolVersion is a ledger constant, not the package release version.
+## Complete immutable records
 
-## Separate integrity from review
+Every confirmation contains exactly four fields:
 
 | Field | Meaning |
 |---|---|
-| frontMatterFingerprint | canonical projection of the current document metadata |
-| bodyFingerprint | normalized current document body |
-| sourceFingerprint | declarations and source bytes recorded as the last review basis |
-| reviewRequired | explicit obligation to review content reconciled without source reaffirmation |
+| `documentId` | stable Document identity, matching the parent directory |
+| `frontMatterFingerprint` | canonical business-metadata projection at confirmation |
+| `bodyFingerprint` | normalized body at confirmation |
+| `sourceFingerprint` | complete declared source patterns, resolved paths and source bytes at confirmation |
 
-Body/front-matter equality proves agreement with the current document bytes under normalization. It does not prove
-that those statements match the source. Repair recalculates the first two and sets reviewRequired, retaining the old
-sourceFingerprint. Even with unchanged source bytes or no code.paths, the repaired document remains pending.
+All fingerprints are full lowercase SHA-256 values. `confirmationKey` hashes UTF-8 `compactJson({format, record})`;
+`stableJson(record)` supplies the canonical file bytes. The record does not repeat format, release version, commit ID,
+reviewer, timestamp or a latest pointer. `readConfirmationStore` checks canonical bytes, record shape, directory identity
+and filename key, including historical records for Documents no longer present. Unknown or malformed records are errors,
+not records to silently discard or repair by hashing again.
 
-`reviewPendingIds` unifies explicit content obligations, differences between recorded and current source fingerprints,
-and source expansion issues. Delta's directImpact uses that queue; graph.validate reports DOCUMENT_REVIEW_PENDING;
-inspect exposes explicit review flags and a contentReviewRequiredCount. A source-unavailable document is not silently
-settled. Only a normally reviewed Update edit or explicit reaffirmedDocumentIds can clear the content obligation.
+Records represent one complete tuple. Fields from different branch records must never be combined to manufacture a
+confirmation. Ordinary Git can retain independent keys from both branches. An exact previously confirmed tuple remains
+matched after rebase; a third combination of prose or sources does not inherit semantic approval from either parent.
 
-## Two baselines
+## Read-time facts
 
-repository.baseline records the Git revision and aggregate cited-source fingerprint at the last whole-repository
-settlement. Init establishes it. Update may advance it only with repository scope, no Git mid-operation, every source
-fingerprint equal to its current value and no reviewRequired flag remaining. A scoped Update preserves it. Git history
-availability is not a condition: a squash-orphaned baseline may be replaced when all review is actually settled.
-Unreferenced path changes do not themselves pin the baseline because no document claims them as evidence.
+`checkConfirmations` reads the current graph and selected sources, validates the record store and samples Context and
+sources again before returning a snapshot. Changing inputs causes `CHECK_SNAPSHOT_CHANGED` instead of a mixed result.
 
-The review queue is independent of baseline history. Missing diff.bin limits historical changed/unreferenced paths,
-not directImpact. Source expansion does not consult .gitignore; a cited ignored file can still change a fingerprint,
-which is why declarations should name stable tracked sources.
+- `matched`: one valid record equals the complete current tuple.
+- `unmatched`: complete sources are available, but no record matches. `documentContentKnown` distinguishes previously
+  confirmed body/front matter with changed sources from content that has no matching historical content pair.
+- `unavailable`: sources cannot be safely and completely read; no current key or fabricated source hash is returned.
+- `unchecked`: inputs not sampled. The public summary separately counts Documents outside the requested scope.
 
-convergence is a size baseline established only by Init or Prune, with per-Domain metrics. Update preserves it so
-routine edits or Domain reorganization do not disguise growth. Repair preserves both baselines unconditionally.
+No `reviewRequired`, replacement pending flag, per-Document latest pointer or persistent review queue exists in the
+current layout. `LegacyDocumentLedger` retains the old flag only to reject its import as trusted completed review.
+Hash equality proves unchanged inputs, not natural-language correctness or that a review actually occurred.
 
-## Three independent readiness axes
+## Separate validation responsibilities
 
-- formalState: absent, ready or invalid. Covers Markdown structure, placement, graph relations, Meta shape, exact ID set
-  and equality of both content fingerprints.
-- sourceState: unchecked, ready or degraded. Describes requested source expansion only; ready means readable evidence,
-  not semantic approval. An invalid formal tree leaves ordinary source loading unchecked.
-- metaState: absent, valid or invalid. Describes the ledger's own format independently of its agreement with documents.
+`loadKnowledge` checks Markdown placement, IDs, relations and the metadata entry. Its `formalState` is absent, ready or
+invalid. `metaState` describes entry validity; `sourceState` describes only the requested source sample as unchecked,
+ready or degraded. These states do not assert semantic confirmation.
 
-Source policies are formal-only, selected, all-strict and all-tolerant. Strict graph validation requires formal and
-source readiness. Review debt remains a warning while unreadable source evidence can fail that strict check.
+`graph.validate` requires valid structure, valid confirmation storage and readable sources. `confirmation.check` reports
+match facts independently, with explicit selection and coverage. Unmatched inputs do not block Update begin. Missing
+sources can be fixed in its candidate; final validation still requires all candidate source declarations to be valid.
+Unsafe declarations and truly broken structure remain errors.
 
-## Content mismatches and recovery
+## Baselines and ownership
 
-META_DOCUMENT_SET_MISMATCH means the ledger IDs differ from the Markdown tree. META_DOCUMENT_FINGERPRINT_MISMATCH means
-one or both current content fingerprints disagree. These remain strict formal errors; ordinary reads and Update do
-not bypass them. Only the qualified Repair transaction may start from content-only mismatch and must produce a complete
-valid candidate. Schema damage, duplicate IDs, relation failures and unsafe paths remain blocked.
+Migration preserves `repository.baseline` and `convergence` values. Repository baseline is inert historical data: ordinary
+Update never advances it and Delta never silently selects it as a comparison base. Init creates no repository baseline.
+Convergence is established by Init and updated by Prune only; Update preserves it. Conflicting baseline objects require
+an explicit decision, not per-field mixing or automatic selection by revision/date.
 
-Exact paths and controlled globs are valid code.paths. Empty declarations produce a deterministic source fingerprint
-over an empty set and do not erase content review obligations. See `package-context.content-fingerprint-repair` for the
-merge/rebase SOP and `package-context.path-and-glob-safety` for source constraints.
+Only the transaction plane writes current metadata and new confirmations. It preserves existing confirmation bytes and
+permissions, appends records for authorized new/changed or explicitly confirmed Documents and keeps historical records
+when a Document is removed. There is no automatic history GC or cross-branch revocation mechanism. Deleting a record in
+one branch is not a reliable global revocation.
+
+See `package-context.migration-and-confirmation` for the operational workflow and `package-context.determinism` for the
+normalization and permission boundaries.

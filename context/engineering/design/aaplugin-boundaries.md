@@ -61,8 +61,8 @@ First exhaust clean Extension, Contributor, Public and Runtime combinations. Rec
 issue only for a general, worthwhile framework capability. Until it is resolved, explicitly state any unavailable
 capability rather than silently omitting it.
 
-A product Runtime defect belongs to that package unless evidence establishes a framework gap. For example, Context's
-content-ledger repair is product functionality. Its filesystem restrictions and scratch lifecycle are documented under
+A product Runtime defect belongs to that package unless evidence establishes a framework gap. Product-specific
+filesystem and maintenance rules belong in its package Domain. Context's rules are documented under
 `package-context.path-and-glob-safety` and `package-context.scratch-lifecycle`, not imposed on every package Runtime.
 
 ## Related repository requirements

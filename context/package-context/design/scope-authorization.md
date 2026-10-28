@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: package-context.scope-authorization
-description: How a scope authorizes Documents rather than actors, why the Runtime is role-blind, and the refreshedDocumentIds rule that keeps unchanged siblings visible to the next delta.
+description: "Document-scoped authorization, role-blind enforcement, immutable record ownership and explicit confirmation targets without automatic sibling review."
 kind: architecture
 domain: package-context
 relations:
@@ -28,7 +28,7 @@ This is why the Runtime is described as role-blind. The Investigator/Recorder/Re
 editor — it only checks *which Documents changed*, which is a property of the candidate tree, not of who wrote it.
 
 The practical upshot: scope is a safety net against accidental over-reach, not an access control mechanism. A caller that
-declares `{kind: 'repository'}` has authorized everything.
+declares `{kind: 'repository'}` has authorized all Documents, not arbitrary changes to Runtime-owned metadata.
 
 ## The four scope kinds
 
@@ -49,6 +49,7 @@ and new Domain covers the move.
 
 `paths` scope is the most involved. For each Document it builds the union of:
 
+- exact declarations from either side, including paths currently missing
 - source files currently matched by the live Document's declarations
 - source files matched by the candidate Document's declarations
 - changed paths from the Git evidence that match either side's declarations
@@ -59,8 +60,8 @@ Document that used to own it is still authorizable.
 
 `authorizedDocumentIds` takes only the candidate-side path map it actually reads, not a whole source-facts record, which
 is what lets `begin` call it with an empty map: at that point no candidate exists yet, so the live tree is passed as both
-sides. `begin` uses it to prove every `reaffirmedDocumentIds` entry is inside the grant — reaffirming outside scope would
-settle a ledger the authorization never covered.
+sides. `begin` uses it to prove every `confirmedDocumentIds` entry is inside the grant — confirming outside scope would
+confirm inputs the authorization never covered.
 
 ## Detecting out-of-scope mutation
 
@@ -72,7 +73,7 @@ both sides. `sameDocument` compares physical path, front-matter fingerprint, and
 - reformatting an unauthorized Document in a way that normalizes away is **not** a violation, since the body fingerprint
   is computed on the normalized body
 
-The first offending id, sorted, is reported as `CANDIDATE_SCOPE_VIOLATION` with its path, and the outcome is
+Out-of-scope mutation is reported as `CANDIDATE_SCOPE_VIOLATION`, and the outcome is
 `candidate_edit_required` — repairable in place.
 
 ## Prune coverage
@@ -83,43 +84,29 @@ merge, split, or rewrite knowledge, but it may not quietly stop covering a file 
 half of the accountability rule stated in `packages/context/src/commands/prune.md`; the semantic half — that every removed
 fact has a named survival location — is prose only.
 
-## The `refreshedDocumentIds` rule
+## Confirmation targets
 
-`deriveMeta` needs a ledger entry for every Document in the candidate. It has two sources: freshly computed entries from
-the candidate expansion, and the live Meta's existing entries. The choice is made by `refreshedDocumentIds`, which returns
-Documents that are authorized by scope **and** either actually rewritten in the candidate (not `sameDocument`) **or**
-listed in the run's `reaffirmedDocumentIds`.
+refreshedDocumentIds selects authorized surviving Documents that are new, whose canonical front matter/body changed,
+or whose ID is explicitly listed in confirmedDocumentIds. deriveRecords constructs their complete current tuples from
+fully readable source facts. A legal physical move alone does not change a key or trigger a new confirmation. ID changes
+create a new identity and must be authorized together with removal of the old Document.
 
-Everything else keeps its live entry verbatim.
+Every original confirmation remains immutable, including records for deleted Documents. A source-changed but unedited,
+unlisted Document receives no new record merely because it shares the scope. Its mismatch remains visible when selected
+again. The caller's explicit confirmation list is a claim of review; Runtime cannot prove that the review occurred.
+Unknown or out-of-scope confirmation IDs are rejected at begin before taking the lock.
 
-This is deliberate and easy to get wrong. Consider an authorized Document whose declared source files changed but whose
-prose was not touched. If the transaction refreshed its ledger anyway, the new ledger would record the current source
-fingerprint — and the Document would then look synchronized when in fact nobody had reconciled the prose with the new
-source. The pending impact would vanish from the next `delta.compute`, silently.
+assertManagedCandidate protects original record bytes and permissions and rejects role-authored metadata or unowned
+records. Derived file identities are registered in the run manifest before writing. Revalidation can remove obsolete
+records generated by that run, but cannot remove historical evidence. Final validation rechecks scope, sources, expected
+records and metadata. Commit/resume revalidate the approved inputs.
 
-By refreshing only Documents that were rewritten or explicitly reaffirmed, an authorized-but-unchanged sibling keeps its
-stale ledger entry, and the next delta still reports it as impacted. Staleness is preserved rather than laundered. The
-Runtime never infers a reaffirmation: `reaffirmedDocumentIds` is the caller saying it checked, and the Runtime cannot
-verify that — see `package-context.enforcement-boundary`.
+## Baselines and migration
 
-The same rule gates the repository baseline. `deriveMeta` advances it only when no Document is left pending review —
-every ledger's `sourceFingerprint` equals its current one and no `reviewRequired` flag remains — so an untouched stale sibling pins the baseline in place:
-advancing claims every Document was proven against the source at the new revision, and this one was not. See
-`package-context.meta-ledger` for the full set of conditions.
+Update never advances repository or convergence baselines, even with repository scope and all inputs matched. Init and
+Prune establish convergence under their own rules; the repository baseline is preserved historical data.
 
-If a required ledger entry cannot be found from either source, `deriveMeta` raises `CANDIDATE_LEDGER_INCOMPLETE` — it
-refuses rather than inventing an entry. This is a **defensive guard, not a reachable outcome** on the obvious route: the
-scope check runs before `deriveMeta`, so a scoped update that introduces a Document outside its authorized set surfaces as
-`CANDIDATE_SCOPE_VIOLATION` first. No test reaches the ledger fault.
-
-Validation then re-checks the derived result: for every refreshed id, the Meta entry written into the candidate must match
-the freshly recomputed source fingerprint, or the outcome is `candidate_edit_required` with `CANDIDATE_SOURCE_STALE`.
-A reaffirmed id outside the authorized set is never refreshed, so listing one settles nothing.
-
-## Restricted Repair scope
-
-Repair additionally requires existing, explicit Document IDs and rejects any mismatch left outside the grant. It does
-not use edited/reaffirmed source-ledger refresh: it preserves sourceFingerprint, repository baseline, convergence and
-all other records, recalculates necessary content fingerprints and sets reviewRequired. It also compares raw Markdown
-bytes and permissions, so even a normalized-away format change is forbidden. Update alone can settle that content review
-obligation by an actually reviewed edit or explicit reaffirmation.
+Migrate requires Deep repository scope and an explicit import-trusted or reconfirm strategy. It preserves every Markdown
+byte, path and permission and both baselines; only the metadata layout and historical record representation change.
+Missing current sources do not prevent that conversion. The migration approval does not certify current source semantics,
+and confirmedDocumentIds is not a Migrate input.

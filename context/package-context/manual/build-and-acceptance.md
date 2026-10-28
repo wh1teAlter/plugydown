@@ -107,5 +107,11 @@ and send `repository.inspect` from business cwd. Exercise the native Agent or in
 explicitly run Init through candidate, validation, review, approval, and commit. Restart the host to check the Hook
 hint, including OpenCode deduplication and Pi's lack of an unsolicited new turn.
 
-Real sessions for these hosts are still recorded as unexecuted. Do not mark installation, discovery, native delegation,
-inline workflow execution, or Hook behavior passed from schema, bundle, or simulated-callback checks.
+For the current confirmation model, exercise explicit legacy migration, source-unavailable recovery in a candidate,
+confirmation.check with full pagination, and an Update that confirms accurate prose without editing it. Rebase should
+preserve exact input matches and leave a third content combination unmatched. Test discovery for current, legacy and
+incomplete Context directories. A business CI adapter must explicitly select its confirmation policy and validate the
+new envelope; a plugin upgrade alone does not update that adapter.
+
+The source host-validation checklist records the full real-host matrix as unexecuted. Record only scenarios actually
+performed; schema checks, direct Node execution and simulated callbacks do not establish every host lifecycle behavior.

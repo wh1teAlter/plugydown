@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: package-context.determinism
-description: Canonical serialization and content fingerprints, query-bound cursors, Runtime UUID exception and the separate treatment of file permissions by Repair.
+description: "Canonical JSON, normalized document/source fingerprints, stable confirmation identities and the separate boundaries of tree and permission checks."
 kind: architecture
 domain: package-context
 relations:
@@ -15,6 +15,8 @@ code:
     - AGENTS.md
     - packages/context/scripts/verify-delivery.ts
     - packages/context/src/runtime/document.ts
+    - packages/context/src/runtime/confirmation.ts
+    - packages/context/src/runtime/repository.ts
     - packages/context/src/runtime/stable-json.ts
     - packages/context/src/runtime/transaction.ts
     - packages/context/tests/delivery/platforms.test.ts
@@ -33,8 +35,8 @@ transaction plane starts reporting spurious staleness.
 
 - `stableValue` recursively sorts object keys and preserves array order. Array order is meaningful everywhere it appears,
   so it is never re-sorted here; ordering of *lists* is imposed by the producer instead.
-- `stableJson` emits 2-space indentation and exactly one trailing LF. Used for stdout, for `meta.json`, and for the
-  manifest.
+- `stableJson` emits 2-space indentation and exactly one trailing LF. Used for stdout, for metadata/confirmation files, and for the
+  transaction manifest.
 - `compactJson` emits no whitespace. Used for hashes and cursors, so a formatting change can never alter a hash.
 - `compareCodeUnits` compares by UTF-16 code unit (`left < right`), never by locale. Every sort in the Runtime routes
   through it. Locale-aware comparison would make output depend on the machine.
@@ -84,9 +86,21 @@ Runtime's own.
 **One deliberate exception:** `randomUUID()` generates `runId` in `transaction.ts`. A run identity must be unique across
 processes, which is irreconcilable with determinism, so it is accepted and isolated to that one value.
 
-**One known gap:** `readTree` reads file mode (`info.mode & 0o777`) into `TreeFile`, but `fingerprintTree` hashes only
-path and content. A `chmod` inside `context/` therefore does not change the context fingerprint. General tree fingerprints therefore do not bind permissions. Repair separately compares exact Markdown bytes, paths
-and modes in `assertRepairCandidate`; that stricter guard does not change the general fingerprint algorithm.
+**Permission boundary:** readTree includes each file's mode, but fingerprintTree hashes path and content only. chmod
+alone does not change a Context tree fingerprint. assertManagedCandidate separately preserves original confirmation
+bytes and modes; Migrate additionally preserves every Markdown byte, path and mode. These extra guards do not change the
+general fingerprint algorithm or make ordinary Markdown permissions part of a content confirmation.
+
+## Confirmation identity
+
+confirmationKey hashes compactJson({format, record}) with full SHA-256. The record contains documentId and all three
+fingerprints. Canonical record files contain exactly those four fields; format comes from the unique metadata entry.
+Plugin release versions, Git revisions, branch names, timestamps and machine paths never enter that identity. A legal
+Document path move preserves its key; an ID change changes identity. Identical confirmation inputs create the same file.
+
+Normalization applies to Markdown projections, not arbitrary source bytes. A source path, declaration or raw-byte
+change changes the source basis. A third combined body cannot be declared confirmed by selecting hashes from different
+records. Hash calculation is a mechanical identity test, not evidence of semantic review.
 
 ## Stability of the build
 

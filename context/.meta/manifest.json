@@ -1,0 +1,60 @@
+{
+  "convergence": {
+    "bodyBytes": 113341,
+    "documentCount": 25,
+    "estimatedTokens": 40787,
+    "frontMatterBytes": 9018,
+    "perDomain": {
+      "authority-workflow": {
+        "bodyBytes": 17842,
+        "documentCount": 4,
+        "estimatedTokens": 6470,
+        "frontMatterBytes": 1567
+      },
+      "delivery": {
+        "bodyBytes": 19949,
+        "documentCount": 4,
+        "estimatedTokens": 7130,
+        "frontMatterBytes": 1441
+      },
+      "knowledge-model": {
+        "bodyBytes": 13037,
+        "documentCount": 3,
+        "estimatedTokens": 4724,
+        "frontMatterBytes": 1135
+      },
+      "read-plane": {
+        "bodyBytes": 12321,
+        "documentCount": 3,
+        "estimatedTokens": 4459,
+        "frontMatterBytes": 1056
+      },
+      "repository-access": {
+        "bodyBytes": 12272,
+        "documentCount": 3,
+        "estimatedTokens": 4419,
+        "frontMatterBytes": 984
+      },
+      "runtime-protocol": {
+        "bodyBytes": 16553,
+        "documentCount": 4,
+        "estimatedTokens": 5965,
+        "frontMatterBytes": 1342
+      },
+      "write-plane": {
+        "bodyBytes": 21367,
+        "documentCount": 4,
+        "estimatedTokens": 7620,
+        "frontMatterBytes": 1493
+      }
+    },
+    "source": "init"
+  },
+  "format": 1,
+  "repository": {
+    "baseline": {
+      "revision": "3f4bbc4354d0164d5c3944d3343710c3db0f9c33",
+      "sourceFingerprint": "c0c9d4c332f7bdc1c2c320c12aaba363786f1a909b4be9cf807212696867c38b"
+    }
+  }
+}

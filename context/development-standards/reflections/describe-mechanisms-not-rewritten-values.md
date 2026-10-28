@@ -33,13 +33,13 @@ Either of these means the pattern is present:
 
 - A Document's `code.paths` include a file that releases rewrite, such as a `package.json`, and its body quotes a value
   taken from that file.
-- A reaffirm review finds that the only drift in a stale Document is that quoted value.
+- A confirmation review finds that the only drift in a stale Document is that quoted value.
 
 ## The common failure
 
-"Repairing" the Document by updating the value to the new one. This forces an edit where a reaffirm would have settled
-the ledger, and it sets up the same failure at the next rewrite, because the new value is exactly as perishable as the
-old. Between the rewrite and the repair the Document also asserts something false.
+"Repairing" the Document by updating the value to the new one. This forces another edit at the next rewrite, because
+the new value is exactly as perishable as the old. Describing the mechanism would instead let a targeted review confirm
+the still-accurate inputs without a prose edit. Between the rewrite and the repair the Document also asserts something false.
 
 ## Correction
 
@@ -48,11 +48,11 @@ state which fields a build configuration forwards from `package.json`, which of 
 exist only in the configuration because npm has no equivalent, then tell the reader to read `package.json` for current
 values. That states everything the reader needs and stays true across every release.
 
-## Ledger nuance
+## Confirmation nuance
 
 `code.paths` hashes file content, so a Document that cites a release-rewritten file still goes stale at each release.
 What changes is the outcome: the Document is still true, a review finds it accurate, and it is settled through
-`reaffirmedDocumentIds` without an edit. Drop the path from `code.paths` only if nothing else in the Document depends on
+`confirmedDocumentIds` without an edit. Drop the path from `code.paths` only if nothing else in the Document depends on
 that file; otherwise the Document loses the signal that would catch a real change to the mechanism.
 
 ## Boundary test
@@ -66,7 +66,7 @@ The pattern does not apply when the value is the knowledge:
 - A `reference` that lists capability names, required fields, or error codes quotes them exactly, because the reader needs
   the literal. A renamed protocol field making such a Document stale is the correct signal, since the claim itself
   changed.
-- A count the build enforces, and a constant that is bumped deliberately, such as `fingerprintVersion`, are knowledge.
+- A count the build enforces, and a constant that is bumped deliberately, such as the shared compatibility `format`, are knowledge.
   Changing either is a decision someone made, not a side effect of routine work.
 
 ## Evidence

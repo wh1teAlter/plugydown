@@ -17,7 +17,7 @@ code:
     - packages/context/src/commands/update.md
     - packages/context/src/skills/context/SKILL.md
     - packages/context/src/skills/context/references/runtime.md
-    - packages/context/src/commands/repair.md
+    - packages/context/src/commands/migrate.md
     - packages/context/src/commands/prune.md
     - packages/context/src/commands/init.md
 ---
@@ -25,7 +25,7 @@ code:
 # Roles and Briefs
 
 The operating Skill coordinates the reading ladder, authorization, scratch lifecycle and reporting. Its Runtime
-reference owns invocation syntax; command documents own Init, Update, Prune and Repair sequencing. The three internal
+reference owns invocation syntax; command documents own Init, Update, Prune and Migrate sequencing. The three internal
 roles supply semantic authorship and review while Runtime enforces the mechanical transaction.
 
 ## The closed role set
@@ -45,7 +45,7 @@ The boundaries are stated negatively in each role file, and the negations are th
 
 - Investigator does not edit source, formal `context/`, or a candidate. It reviews candidates but **does not approve
   them**.
-- Recorder does not edit source, live `context/`, or anything outside its candidate. It does not review or approve its own
+- Recorder does not edit source, live `context/`, candidate `.meta/`, or anything outside its allowed candidate Markdown. It does not review or approve its own
   work, and any post-validation edit requires validation and independent review again.
 - Reflector does not edit source, formal knowledge, or candidates. It does not assign maturity, score, or automatic
   promotion.
@@ -89,7 +89,7 @@ supports a durable statement at all. It is instructed to record invariants, caus
 procedures, and easy-to-misuse boundaries — and explicitly *not* source listings, task narration, per-change history, raw
 Feedback, or generic explanation.
 
-Three further Recorder rules keep the ledger honest:
+Three further Recorder rules keep confirmation evidence honest:
 
 - `code.paths` is declared as the sources a Document's statements rest on, not as coverage, and source directories
   (`packages/foo/src/**`) are preferred to package roots: generated output is usually Git-ignored and exists only where
@@ -99,8 +99,8 @@ Three further Recorder rules keep the ledger honest:
   Document describes the mechanism and names where the current value lives. A `reference` whose purpose is exact current
   facts, such as capability names, required fields, or error codes, still quotes them exactly. See
   `development-standards.describe-mechanisms-not-rewritten-values`.
-- A Document is never edited only to refresh its ledger. A reviewed, still-accurate Document is settled through
-  `reaffirmedDocumentIds`; an edit made for the bookkeeping is the per-change history excluded above.
+- A Document is never edited only to refresh its confirmation. A reviewed, still-accurate Document is settled through
+  `confirmedDocumentIds`; an edit made for the bookkeeping is the per-change history excluded above.
 
 For `converge`, every affected fact must be accounted for: origin, survival location, uniqueness, relation changes, source
 coverage, verification. The rule against hiding growth by moving knowledge outside the retrieval path is why convergence
@@ -113,7 +113,7 @@ cannot be satisfied by relocating prose into files the reading ladder never reac
 | The Main Assistant owns authorization scope and final semantic approval | prose |
 | Recorder cannot review itself | prose |
 | Reflector cannot approve a formal Reflection | prose |
-| Init, Deep Update, Prune, Repair, and Feedback promotion require Investigator candidate review | prose |
+| Init, Deep Update, Prune, Migrate, and Feedback promotion require Investigator candidate review | prose |
 | Light Update may be reviewed directly by the Main Assistant unless uncertainty appears | prose |
 | Approval must be bound to `candidateFingerprint` and `sourceEvidenceFingerprint` | **Runtime** |
 | Any post-validation change invalidates the approval | **Runtime** |
@@ -125,28 +125,26 @@ review.
 
 ## Per-command sequencing
 
-- **Init** is always Deep, requires absent formal Context, and uses complementary Investigators to probe capability
-  boundaries, runtime and data flow, integrations, build/test/release, and cross-cutting contracts. Insufficient
-  repository-wide evidence is reported as `incomplete`, never as a partial initialization.
-- **Update** chooses Light or Deep from the `delta.compute` blockers plus whether intent, mapping, impact closure, Domain
-  shape, cross-Domain contracts, and scope are all known. Before `begin`, every `directImpact` Document gets exactly one
-  verdict with evidence — from complementary Investigators in Deep, from the Main Assistant in Light: `accurate` or
-  `needs edit`. `accurate` requires re-reading the Document's cited sources as they are now; a reviewer who could not
-  check says so rather than guessing, because the verdict settles the ledger as reviewed. Only the `accurate` ids are
-  passed as `reaffirmedDocumentIds`, never `directImpact` wholesale, and the Recorder's `synchronize` Brief names the
-  `needs edit` Documents. Feedback promotion happens only here, only for ids the user authorized in this Update.
-- **Repair** is always Deep and requires explicit Document IDs. Runtime alone derives content fingerprint and review-obligation changes; no Recorder edits the candidate. Investigator reviews faithful preservation and honest pending status, and Main Assistant approves the current fingerprints. Follow with authorized Update for source semantics.
-- **Prune** is always Deep, treats `growth.measure` results only as review candidates, and requires an explicit survival
-  location for every merge, move, rewrite, split, or deletion. It must not create an archive, remove content by age, or
-  promote Feedback. Explicit content review obligations must be settled through Update first.
-
-The Light/Deep distinction for Update is convention only — the Runtime accepts either mode and behaves identically. See
-`package-context.enforcement-boundary`.
+- **Init** is Deep, requires absent formal Context and repository scope, and uses Investigator evidence about boundaries,
+  data flow, integrations and engineering contracts. Insufficient repository-wide evidence is incomplete, not partial Init.
+- **Update** uses confirmation.check and optional Delta facts to identify the authorized review set. The host chooses
+  Light for a small understood change; otherwise use Deep. Before begin, distinguish accurate, needs edit and not verified.
+  Only actually reviewed accurate IDs enter confirmedDocumentIds. One Recorder edits the needs-edit candidate Markdown;
+  Runtime owns metadata and new records. Feedback promotion remains limited to specifically authorized IDs.
+- **Migrate** is Deep with repository scope and an explicit trust strategy. Runtime converts historical records while
+  preserving Markdown and baselines; no Recorder edits the candidate. Investigator reviews conversion fidelity, and Main
+  Assistant approves the returned pair. This review is not a fresh semantic confirmation of current sources.
+- **Prune** is Deep and requires readable sources. Growth results are suggestions, and every merge/move/rewrite/split/
+  deletion needs a survival location for unique knowledge. No archive, age-based removal or Feedback promotion is implied.
+  Historical confirmations are retained; unmatched inputs do not become matched merely by sharing the prune scope.
 
 ## Shared write sequence
 
-Resolve authorization and collect Git evidence, then begin a complete candidate. Update reviews impacted Documents
-before begin and passes only verified accurate IDs as reaffirmedDocumentIds. Recorder authors semantic changes; Repair
-uses Runtime derivation instead. Validate, perform the required candidate review, bind Main Assistant approval to both
-fingerprints, commit and clean only workflow-owned terminal artifacts. The Runtime is role-blind: it cannot prove who
-reviewed the candidate or whether the review was independent.
+Resolve authorization, collect fixed Git evidence, review inputs, then begin the complete candidate. Perform the workflow's
+allowed authorship and validate. Switch to Investigator review for Deep workflows, then Main Assistant binds approval to
+candidateFingerprint and sourceEvidenceFingerprint and commits. Any changed candidate or input requires fresh validation
+and review. Only workflow-owned terminal artifacts are cleaned.
+
+Codex, Antigravity CLI and Pi execute their private role Briefs inline as directed by the installed index. Explicitly
+separate Recorder authorship from Investigator review; do not describe that as an independent Agent run. Runtime is
+role-blind and cannot establish reviewer identity, independence or semantic correctness.

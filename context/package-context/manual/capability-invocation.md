@@ -31,7 +31,7 @@ code:
 The Runtime is a private Node ESM executable. One process, one JSON request on stdin, one JSON response on stdout.
 Dispatch is `handleRequest` in `handler.ts`; the process adapter is `cli.ts`. Envelopes and legality-by-construction
 are in `package-context.wire-contract`. Pagination rules are in `package-context.budgets-and-cursors`. Byte-stability
-is in `package-context.determinism`. Transaction outcomes are in `package-context.transaction-lifecycle`.
+is in `package-context.determinism`. Transaction outcomes are in `package-context.outcomes-and-recovery`.
 
 ## Locate the executable
 
@@ -61,7 +61,7 @@ Brief inline. Inline authorship and review are distinct roles but not independen
 index's model/tool guidance and the Brief's write scope; native tool configuration does not enforce candidate-only
 filesystem access or general network isolation. The Main Assistant retains final approval.
 
-Every request carries `protocol: 'plugydown.context.runtime/v1'`, a `capability`, and `input`. Confirm both exit status
+Every request carries `protocol: 'plugydown.context.runtime'`, `format: 1`, a `capability`, and `input`. Confirm both exit status
 and stdout shape. Shipped `runtime.schema.json` describes the wire shape, and the test suite holds every Runtime response
 and every accepted request to it; the code remains the final contract.
 
@@ -72,8 +72,8 @@ failure.
 
 | Kind | Shape | Exit |
 |---|---|---|
-| Runtime response | `{protocol, capability, status, data?, cursor?, diagnostics?}` | 0 |
-| Transport failure | `{transport:'plugydown.context.runtime.transport/v1', status:'failed', diagnostics}` | 1 |
+| Runtime response | `{protocol, format, capability, status, data?, cursor?, diagnostics?}` | 0 |
+| Transport failure | `{transport:'plugydown.context.runtime.transport', format:1, status:'failed', diagnostics}` | 1 |
 
 Only two codes reach the transport envelope: `REQUEST_SIZE_EXCEEDED` (stdin over 1 MiB) and `TRANSPORT_INVALID` (stdin
 is not strict UTF-8, JSON that never parsed, or an unexpected non-`RuntimeFault` exception while handling the request).
@@ -86,10 +86,11 @@ outcome. Transport failure is **not** a Runtime status.
 
 | Capability | Input |
 |---|---|
-| `repository.inspect` | optional `selectedDocumentIds`, `repair: true` |
+| `repository.inspect` | optional `selectedDocumentIds` OR `migration: true` |
 | `frontier.query` | required `depth` `1\|2\|3`; optional `selectors`, `requiresClosure` |
 | `graph.validate` | `{}` — no `budget`, no `cursor` |
-| `delta.compute` | `gitEvidencePath`, `scope`, `taskEvidence` (four booleans) |
+| `confirmation.check` | optional `scope` (repository default), `explain` (false default) |
+| `delta.compute` | `gitEvidencePath`, `scope` |
 | `growth.measure` | `{}` |
 | `feedback.match` | `context`, `observedBehavior`, `outcomeOrCorrection`, `reuseBoundary` |
 | `transaction` | required `action` `begin\|validate\|commit\|resume` |
@@ -99,7 +100,7 @@ forbidden for everything else.
 
 ## Paging
 
-`repository.inspect`, `frontier.query`, `delta.compute`, `growth.measure`, and `feedback.match` accept `budget` and
+`repository.inspect`, `frontier.query`, `confirmation.check`, `delta.compute`, `growth.measure`, and `feedback.match` accept `budget` and
 `cursor`. `graph.validate` and `transaction` reject them. Defaults: 100 items / 262144 bytes / 32000 estimated tokens.
 Maxima: 1000 / 1048576 / 128000.
 
@@ -116,47 +117,43 @@ Exactly one of:
 
 ## Git evidence leaf
 
-The host collects Git bytes. The Runtime does not run Git.
+Runtime never executes Git. Collect fixed HEAD and porcelain bytes in a uniquely owned `.scratch/evidence/<id>/` leaf:
 
-```
-.scratch/evidence/<id>/head.txt, mid-operation.json, status.bin, diff.bin?
-```
-
-From the business repository root:
-
-```sh
-git rev-parse HEAD > "$evidence_dir/head.txt"
-git status --porcelain=v2 --branch -z --untracked-files=all > "$evidence_dir/status.bin"
-git diff --name-status -z "$baseline"...HEAD > "$evidence_dir/diff.bin"
+```text
+head.txt, mid-operation.json, status.bin, diff.bin?, comparison.json?
 ```
 
-`--untracked-files=all` is required. Git's default collapses a new untracked directory to a `? dir/` record, hiding which
-files are new, and the Runtime refuses it with `GIT_STATUS_UNTRACKED_COLLAPSED`.
+Use git rev-parse HEAD and git status --porcelain=v2 --branch -z --untracked-files=all. The untracked flag prevents a
+collapsed `? dir/` result, which Runtime rejects. Check the actual Git operation state, writing exactly {"active":false}
+or {"active":true,"kind":"merge|rebase|cherry-pick|revert|bisect"}, with one valid kind rather than the displayed alternatives.
 
-`mid-operation.json` is exactly `{"active":false}` or
-`{"active":true,"kind":"merge|rebase|cherry-pick|revert|bisect"}`. Supply `diff.bin` only when the ledger baseline
-differs from HEAD **and** `git cat-file -e "$baseline^{commit}"` succeeds; a baseline commit orphaned by a squash merge
-may never have been fetched into this clone. Otherwise omit it: `delta.compute` then reports
-`changedPathsComplete: false` (changed and unreferenced paths cover only the working tree) while `directImpact` stays
-complete, and the missing history blocks neither Light nor the baseline. The two `.bin` files are NUL-delimited and must
-not be decoded, line-split, trimmed, or rewritten.
+Historical comparison is optional. Fix full base/head IDs, then collect git diff --name-status -z <base> <head>. Pair the
+raw diff.bin with comparison.json containing exactly kind: two-tree, base and head; head must equal head.txt. Resolve
+merge-base explicitly if it is the desired base. Recheck HEAD and operation state after collection; recollect if moved.
+
+The two .bin files must not be line-split, trimmed or rewritten. Without diff/comparison, Delta reports
+historyCoverage: not_provided, not "no changes". Confirmation matching needs no historical baseline or Git object access.
 
 ## Transaction actions
 
 | Action | Input |
 |---|---|
-| `begin` | `command`, `mode`, `dryRun`, `scope`, `gitEvidencePath`, `evidencePaths`; may add `reaffirmedDocumentIds` |
+| `begin` | `command`, `mode`, `dryRun`, `scope`, `gitEvidencePath`, `evidencePaths`; may add `confirmedDocumentIds` or command-required `migrationStrategy` |
 | `validate` | `runId` |
 | `resume` | `runId`; may add `disposition: continue\|abandon` |
 | `commit` | `runId` plus `approval: {approved:true, candidateFingerprint, sourceEvidenceFingerprint, summary}` |
 
-Pass `reaffirmedDocumentIds` when a declared source moved but you re-read the Document and it is still correct. Without
-it there is no way to settle that ledger: no Markdown edit means no refresh, so with nothing else edited `validate`
-answers `no_change` while `graph.validate` keeps succeeding with a `DOCUMENT_REVIEW_PENDING` warning for it. An accurate
-Document you do not pass stays pending: it remains in later `directImpact` results and holds the repository baseline
-where it is. Pass only Documents you actually reviewed. `update` only, and every id must exist and sit inside the
-authorized scope. Listing a Document does not commit you to leaving it alone — edit it if review says so, and it
-refreshes anyway.
+Pass confirmedDocumentIds only for existing authorized Documents actually reviewed and still accurate. Update can
+create their new confirmations without changing Markdown. Unlisted, unedited Documents receive no automatic new record;
+being in scope is not semantic approval. A listed Document may still be edited if review uncovers a mistake.
+
+Init, Prune and Migrate require Deep. Migrate requires repository scope and explicit import-trusted or reconfirm strategy;
+no Recorder edits its candidate. evidencePaths is required but may be empty. Normal validation still reads all candidate
+source declarations; a source-degraded Update can begin and correct those declarations in its candidate.
+
+Validation returns candidateFingerprint and sourceEvidenceFingerprint, with a bounded confirmation summary containing
+documentCount, newRecordCount and planFingerprint. Final semantic approval binds both fingerprints. Current metadata and
+confirmation files are Runtime-owned, and Update never advances either baseline.
 
 ## Statuses
 
@@ -171,14 +168,14 @@ refreshes anyway.
 | `failed` | stop; if `manualRecoveryRequired`, preserve named leaves and lock |
 
 Outcomes such as `candidate_edit_required`, `candidate_stale`, `approval_mismatch`, `active_run`, `snapshot_stale`,
-`manual_recovery` / `no_trusted_copy` are distinct — see `package-context.transaction-lifecycle`. Never collapse them into a generic retry.
+`manual_recovery` / `no_trusted_copy` are distinct — see `package-context.outcomes-and-recovery`. Never collapse them into a generic retry.
 
-## Repair and evidence vocabulary
+## Confirmation and migration consumers
 
-Transaction commands are init, update, prune and repair. Repair requires Deep mode and explicit Document scope, forbids
-reaffirmedDocumentIds, and uniquely allows empty evidencePaths. A repair_staged response directs the caller to validate
-without editing. See `package-context.content-fingerprint-repair` for the official recovery sequence.
+Use confirmation.check for matched/unmatched/unavailable states and complete-snapshot summary counts. A successful
+computation can still identify unconfirmed or unavailable inputs. Full-repository CI consumes every page and verifies
+format, scope, counts and its explicit policy; graph.validate success alone does not establish confirmation matching.
 
-Keep four meanings of evidence distinct: raw Git bytes collected in a workflow-owned leaf; source declarations in
-code.paths/evidencePaths; caller assertions in taskEvidence; and the prose Evidence section of a Role Brief. A transaction
-candidate is a staged complete directory tree, whereas a growth candidate is only a suggestion returned by analysis.
+Migrate is a one-time conversion, not a step after every rebase. It preserves old Markdown and baselines, imports only
+eligible historical tuples under import-trusted, or imports none under reconfirm. Legacy unfinished reviews do not become
+valid confirmations. Follow `package-context.migration-and-confirmation` and the installed Runtime reference.

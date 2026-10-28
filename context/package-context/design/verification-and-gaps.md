@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: package-context.verification-and-gaps
-description: Context-specific Schema, Runtime, delivery and Repair verification, plus the limits of concurrency tests and unexecuted real-host sessions.
+description: "Schema, immutable confirmation, migration, transaction and real-Git test coverage, six-platform delivery checks and explicit host/concurrency verification limits."
 kind: decision
 domain: package-context
 relations:
@@ -22,7 +22,8 @@ code:
     - packages/context/tests/delivery/platforms.test.ts
     - packages/context/tests/runtime/fixture.ts
     - packages/context/tests/runtime/knowledge.test.ts
-    - packages/context/tests/runtime/repair.test.ts
+    - packages/context/tests/runtime/confirmation.test.ts
+    - packages/context/tests/runtime/migration.test.ts
     - packages/context/tests/runtime/transaction.test.ts
     - packages/context/vitest.config.ts
 ---
@@ -59,11 +60,11 @@ not real host sessions.
 
 ## Public Schemas
 
-One delivery contains document.schema.json, meta.schema.json and runtime.schema.json. The strict Ajv 2020-12 checks in
+One delivery contains document.schema.json, meta.schema.json, confirmation.schema.json and runtime.schema.json. The strict Ajv 2020-12 checks in
 `tests/runtime/fixture.ts` verify every produced Runtime response, every request accepted by Runtime, and committed
-Meta/front matter after a successful commit. Rejected requests may be intentionally malformed. The single Meta Schema
-uses its discriminator to accept v1/v2 while allowing reviewRequired only in v2; knowledge tests verify that distinction
-against Runtime parsing.
+current metadata/front matter/confirmation records after a successful commit. Rejected requests may be intentionally malformed. The metadata Schema accepts the current format entry plus historical v1/v2 ledger shapes for migration. Only legacy
+v2 permits reviewRequired. Current confirmations have four exact fields; Runtime additionally checks canonical bytes,
+filename key and Document-directory identity.
 
 The source path rules appear in both document and Runtime Schemas: .git, .scratch and context are forbidden only as the
 first segment, while node_modules is forbidden at any depth. Changes to those rules must keep parser and public Schemas
@@ -71,10 +72,15 @@ aligned. A shape no test produces remains outside the Schema assertions executed
 
 ## Runtime risk coverage
 
-The Runtime suite includes exact protocol rejection, graph/ledger integrity, path refusal, budget/cursor behavior,
-transaction approval freshness, failure injection and recovery. Repair tests reproduce an actual Git merge of two
-independently transacted branch edits, preserve merged Markdown and source/baseline records, test dry-run and incomplete
-scope, retain reviewRequired with unchanged sources, and clear only authorized reviewed obligations through Update.
+The Runtime suite covers protocol/format rejection, graph and record integrity, safe paths, source availability,
+budget/cursor behavior and approval freshness. Confirmation tests exercise complete-tuple identity, source-only drift,
+third-body mismatch, missing sources and refusal to combine fields from different historical records.
+
+Real Git fixtures cover independent branch changes without a driver, same-paragraph conflicts, delete/modify, multiple
+rebased commits, repeated rebase, baseline conflicts, worktree isolation and partial staging without index changes.
+Migration fixtures cover both explicit strategies, original-byte/mode/baseline preservation, unfinished legacy review
+exclusion, current missing sources and subsequent Update in the same checkout. Transaction fixtures cover protected
+records, new-record ownership, revalidation, interrupted derived writes and Document move/delete/ID behavior.
 
 Concurrency includes rival-lock fixtures and simultaneous begin calls in one process. This is not multiprocess or
 network-filesystem stress testing. Recovery tests exercise candidate completion, original restoration, conflicting
@@ -92,6 +98,6 @@ per-test timeout. `packages/context/host-validation.md` records actual sessions 
 checks, Node subprocesses and simulated callbacks cannot establish installation, workflow discovery, model-visible
 paths, native delegation or inline roles inside those hosts. Antigravity support is the CLI contract, not App/IDE.
 
-Real acceptance follows the package README and host procedure. Current command sources also include Repair; validate
-its discovery and merge/rebase workflow when extending actual host acceptance. Do not mark any such session passed
+Real acceptance follows the package README and host procedure. Include Migrate discovery, legacy conversion, confirmation.check and no-edit confirmation Update when extending
+actual host acceptance. Ordinary Git changes must not require a local driver or revive a Repair dependency. Do not mark any such session passed
 because this automated suite is green.

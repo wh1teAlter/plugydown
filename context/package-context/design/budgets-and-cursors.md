@@ -66,7 +66,7 @@ is either a run of metadata or exactly one body chunk. That keeps the two mechan
 A cursor is base64url of a compact JSON payload containing:
 
 ```
-protocolVersion, capability, inputFingerprint, contextFingerprint, stateFingerprint, itemOffset, bodyByteOffset?, integrityHash
+format, capability, inputFingerprint, contextFingerprint, stateFingerprint, itemOffset, bodyByteOffset?, integrityHash
 ```
 
 `integrityHash` is SHA-256 over the same object without the hash. It is an unkeyed integrity check, not a signature or
@@ -77,14 +77,14 @@ authorization mechanism. Decoding enforces, in order:
 2. exact key set (with `bodyByteOffset` present only if it was present), hash shape, and non-negative safe-integer
    offsets
 3. `timingSafeEqual` against the recomputed hash
-4. field-by-field equality of protocol, capability, input, context, and state fingerprints
+4. field-by-field equality of format, capability, input, context, and state fingerprints
 
 Steps 1–2 fail as `CURSOR_INVALID` (malformed or tampered). Steps 3–4 fail as `CURSOR_STALE` (well-formed but no longer
 matching this query or this repository state). These are genuinely different situations: `CURSOR_INVALID` means the
 caller's cursor handling is broken, `CURSOR_STALE` means the world moved and the query must be reissued from the start.
 
 Because `contextFingerprint` and `stateFingerprint` are bound in, a cursor cannot survive an edit to `context/`, a
-change in the active-run state, or a change in the underlying evidence. There is no way to page through a tree that is
+change in the capability-owned state or underlying evidence. There is no way to page through a tree that is
 being modified underneath you and get a coherent result — the second page simply refuses.
 
 `inputFingerprint` is `sha256(compactJson(input))`, so changing any selector invalidates the cursor too. Continuing a

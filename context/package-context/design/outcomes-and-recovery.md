@@ -25,8 +25,8 @@ Outcomes are distinct results, never one generic retry. Each maps to exactly one
 
 | Outcome | Status | nextAction | Meaning | Do this |
 |---|---|---|---|---|
-| `staged` | success | `edit_candidate` | candidate tree exists and is yours | write the complete candidate |
-| `repair_staged` | success | `validate` | Runtime derives the repair ledger | validate without editing the candidate |
+| `staged` | success | `edit_candidate` | candidate tree exists and is yours | edit authorized candidate Markdown |
+| `migration_staged` | success | `validate` | Runtime derives historical conversion | validate without editing the candidate |
 | `ready_for_review` | success | `semantic_review` | candidate validated, fingerprints returned | review, then approve and commit |
 | `validated` | dry_run | — | dry run proved the candidate | report; run is already cleaned, cannot resume |
 | `no_change` | no_change | — | candidate bytes equal live bytes | report; run is already cleaned |
@@ -44,8 +44,8 @@ Outcomes are distinct results, never one generic retry. Each maps to exactly one
 | `mechanical_failure` | failed | — | a filesystem operation failed | inspect diagnostics, retry from the start |
 
 Note that `backup_restored` carries status `failed` even though recovery worked. The *transaction* failed; the repository
-has returned to its original snapshot. For Repair, that snapshot can still contain content fingerprint mismatches;
-REPAIR_ROLLED_BACK makes the outstanding failure explicit. Reporting it as success would hide that no repair landed.
+has returned to its original snapshot. For Migrate, that snapshot is still the old layout; MIGRATION_ROLLED_BACK makes the failed conversion explicit.
+Reporting it as success would hide that no migration landed.
 
 ## Artifacts: preserved versus cleaned
 
@@ -59,7 +59,7 @@ the lock is held but before the run's manifest value exists, only the lock is re
 and releasing it avoids wedging the repository behind an owner whose manifest can never be read. The Runtime does not
 remove the evidence leaf in that case. Once the manifest exists, an expected fault takes the full cleanup above.
 
-**Preserved** on: `staged`, `repair_staged`, `ready_for_review`, `candidate_edit_required`, `candidate_stale`, `approval_mismatch`,
+**Preserved** on: `staged`, `migration_staged`, `ready_for_review`, `candidate_edit_required`, `candidate_stale`, `approval_mismatch`,
 `active_run`, `manual_recovery`, `no_trusted_copy`.
 
 The two that most often surprise people:
@@ -95,8 +95,8 @@ The ordering that makes recovery decidable:
 
 TreeFact valid means a safe, readable directory with a computed fingerprint, not graph.validate success. Snapshot and
 candidate trust require exact fingerprint matches. If no readable directory copy remains, recovery reports
-no_trusted_copy; conflicting readable copies instead require manual recovery. A mismatched-but-original Repair backup
-is still trustworthy for rollback, without becoming structurally ready.
+no_trusted_copy; conflicting readable copies instead require manual recovery. An original legacy Migrate backup is still trustworthy for rollback even if its current-content fingerprints were
+already mismatched. Trust here means exact snapshot recovery, not current source confirmation.
 
 ## Resume
 

@@ -1,7 +1,7 @@
 ---
 schema: plugydown.context.document/v1
 id: package-context
-description: The packages/context product — knowledge grammar, private Runtime, queries, transactions and Repair, role workflows, and six-host delivery. Start here for Context implementation work.
+description: "Context product boundaries and routing for Markdown knowledge, immutable confirmations, scoped queries, migration, transactions, roles and six-host delivery."
 kind: domain
 domain: package-context
 relations:
@@ -25,54 +25,49 @@ code:
 
 # Context package
 
-This Domain owns the knowledge about `packages/context`, the `@plugydown/context` product. Runtime protocol, knowledge
-grammar, filesystem access, read/write planes and role workflows are topics inside this package, rather than independent
-repository-wide Domains. A future package receives its own `package-<directory-name>` Domain.
+This Domain owns knowledge about `packages/context`, the `@plugydown/context` product. Runtime protocol, knowledge grammar,
+filesystem access, read/write planes and role workflows are package topics, not a reusable repository-wide framework.
+A future product receives its own `package-<directory-name>` Domain.
 
 Repository infrastructure belongs to `engineering`; cross-package coding and validation requirements belong to
-`development-standards`. Link to those rules instead of making Context's implementation a rule for every product.
+`development-standards`. Link to shared rules rather than making this product's implementation mandatory everywhere.
 
 ## Product boundary
 
-Context stores formal repository knowledge as Markdown plus a Runtime-managed ledger under the business repository's
-`context/`. The installed plugin uses the business repository cwd and its `.scratch/` collections, not a workspace in
-the plugin installation. It is delivered through AAPlugin to Claude Code, Codex, Cursor, Antigravity CLI, OpenCode and Pi.
+Current knowledge lives in Markdown/front matter under the business repository's `context/`. `.meta/manifest.json` is
+the single format entry; `.meta/confirmations/` holds immutable complete-input confirmations. Current matching is derived
+on read. There is no mutable current-content ledger, persistent reviewRequired flag or daily Repair workflow.
 
-The product combines mechanical Runtime checks with a prose authority workflow. Runtime authorizes document scope and
-binds approval to bytes; the host assistant is responsible for actual semantic review and role separation. Model/tool
-preferences are not a Runtime-enforced sandbox. On hosts with private role resources, inline role execution is not an
-independently executed Agent.
+The installed plugin operates in business cwd and its `.scratch/` collections. AAPlugin delivers the same product to
+Claude Code, Codex, Cursor, Antigravity CLI, OpenCode and Pi. Runtime computes facts, checks scope and binds approvals to
+bytes. The host owns actual semantic review. Private inline roles are not independently executed Agents or sandboxes.
 
 ## Choose the relevant topic
 
 | Work | Documents |
 |---|---|
-| Markdown grammar, layout and graph relations | `package-context.document-grammar` |
-| Content/source fingerprints, Meta versions and readiness | `package-context.meta-ledger` |
-| Requests, statuses and the meaning of evidence | `package-context.wire-contract`, `package-context.capability-invocation` |
-| Output budgets, cursors and deterministic bytes | `package-context.budgets-and-cursors`, `package-context.determinism` |
-| Paths, globs and host-collected Git facts | `package-context.path-and-glob-safety`, `package-context.git-evidence` |
-| Read projections, pending review and impact analysis | `package-context.capabilities`, `package-context.delta-and-light` |
-| Transaction phases, scope, commit and recovery | `package-context.transaction-lifecycle`, `package-context.scope-authorization`, `package-context.outcomes-and-recovery` |
-| Merge/rebase content fingerprint recovery | `package-context.content-fingerprint-repair` |
-| Investigator/Recorder/Reflector and temporary artifacts | `package-context.roles-and-briefs`, `package-context.scratch-lifecycle`, `package-context.enforcement-boundary` |
-| Package delivery and acceptance | `package-context.packaging`, `package-context.verification-and-gaps`, `package-context.build-and-acceptance` |
+| Markdown grammar, placement and relations | `package-context.document-grammar` |
+| Metadata, complete-input confirmations and baselines | `package-context.meta-ledger` |
+| Requests, statuses, invocation and evidence | `package-context.wire-contract`, `package-context.capability-invocation` |
+| Budgets, cursors and deterministic bytes | `package-context.budgets-and-cursors`, `package-context.determinism` |
+| Paths, globs and collected Git facts | `package-context.path-and-glob-safety`, `package-context.git-evidence` |
+| Read projections, confirmation matching and scoped impact | `package-context.capabilities`, `package-context.delta-and-light` |
+| Transaction phases, write scope and recovery | `package-context.transaction-lifecycle`, `package-context.scope-authorization`, `package-context.outcomes-and-recovery` |
+| Ordinary rebase and explicit old-format conversion | `package-context.migration-and-confirmation` |
+| Roles and temporary resources | `package-context.roles-and-briefs`, `package-context.scratch-lifecycle`, `package-context.enforcement-boundary` |
+| Delivery and acceptance | `package-context.packaging`, `package-context.verification-and-gaps`, `package-context.build-and-acceptance` |
 
-The private Runtime accepts one JSON value on stdin and returns one JSON value on stdout. It has six read capabilities
-and one `transaction` capability with four actions. Init, Update, Prune and Repair are transaction commands, not separate
-executables. There is no HTTP service, daemon or alternate Runtime entry point.
+The private Node Runtime accepts one JSON request on stdin and returns one JSON response on stdout. There are seven read
+capabilities and one transaction capability with four actions. Init, Update, Prune and Migrate are transaction commands,
+not executables. There is no HTTP service, daemon or alternate Runtime entry.
 
-All mutating Runtime filesystem calls live in `transaction.ts`. Reads do not create recovery artifacts. Writes stage a
-complete candidate, validate it, obtain fingerprint-bound approval, switch directories and verify the result. Ordinary
-reads refuse damaged formal knowledge; inspect can diagnose it, and the restricted Repair workflow can reconcile content
-fingerprints without claiming that the merged prose has already been checked against source.
+All mutating Runtime filesystem calls remain in transaction.ts. Writes stage a complete candidate, validate it, obtain
+fingerprint-bound approval, switch directories and verify the result. Read-only checks do not create confirmation files
+or recovery state. Unmatched confirmations permit ordinary reading and Update; damaged structure still needs correction.
 
-## Using a package-sized Domain
+## Bounded use of a package Domain
 
-Use descriptions and explicit Document selectors to read only the relevant topic. Depth 3 returns a body only for IDs
-explicitly named in `selectors.documentIds`; selecting this whole Domain does not request all bodies.
-
-The current impact algorithm expands through Domain siblings. Grouping by package therefore makes `expandedImpact`
-package-wide when a member is affected. `directImpact` remains the precise pending-review queue determined by content
-review obligations and source fingerprints. The `concentrated` growth hint can also fire for this intentionally large
-Domain; neither hint automatically authorizes regrouping or Prune.
+Use descriptions and explicit Document selectors. Depth 3 returns a body only for IDs explicitly named in
+selectors.documentIds; selecting this entire Domain does not request all bodies. Delta reports scoped mismatches and
+requires-only reading prerequisites, not automatic updates to every Domain sibling. The concentrated growth hint can
+still fire for a large package Domain; it does not authorize regrouping or Prune.
