@@ -3,11 +3,21 @@ import type { Diagnostic } from './protocol.js'
 import { createHash } from 'node:crypto'
 import { createReadStream, promises as fs } from 'node:fs'
 import path from 'node:path'
-import { isRecord, RuntimeFault, sha256 } from './protocol.js'
+import { FORMAT, isRecord, RuntimeFault, sha256 } from './protocol.js'
 import { compactJson, compareCodeUnits } from './stable-json.js'
 
 // 业务仓库中的正式知识根目录。
 export const CONTEXT_ROOT = 'context'
+// 统一元数据目录的保留名称；候选目录也使用相同的相对布局。
+export const METADATA_DIRECTORY = '.meta'
+// 当前正式知识的唯一元数据目录。
+export const METADATA_ROOT = `${CONTEXT_ROOT}/${METADATA_DIRECTORY}`
+// 新布局中声明统一兼容代号及低频基线的唯一入口。
+export const METADATA_MANIFEST_PATH = `${METADATA_ROOT}/manifest.json`
+// 按文档及内容身份保存不可变确认记录的目录。
+export const CONFIRMATIONS_ROOT = `${METADATA_ROOT}/confirmations`
+// 仅供旧入口及显式迁移使用的历史账本位置。
+export const LEGACY_META_PATH = `${CONTEXT_ROOT}/meta.json`
 // 业务仓库中的临时工作目录，不能作为正式知识。
 export const SCRATCH_ROOT = '.scratch'
 // 宿主收集的 Git 原始证据所在集合。
@@ -19,7 +29,7 @@ export const RUNS_ROOT = `${SCRATCH_ROOT}/runs`
 // 当前仓库唯一写事务的原子目录锁位置。
 export const LOCK_ROOT = `${SCRATCH_ROOT}/locks/context-write`
 // 持久写锁所有者文件的格式标识。
-export const LOCK_SCHEMA = 'plugydown.context.lock/v1'
+export const LOCK_KIND = 'plugydown.context.lock'
 
 // 单个 Markdown 文件的读取上限，单位为字节。
 export const MAX_MARKDOWN_BYTES = 1024 * 1024
@@ -227,7 +237,7 @@ export async function readLockOwner(root: string): Promise<LockOwner> {
       return { state: 'corrupt' }
     // 从持久文件或未校验输入取得的原始数据。
     const raw = JSON.parse(await readUtf8File(root, `${LOCK_ROOT}/owner.json`, MAX_JSON_TEXT_BYTES)) as unknown
-    if (!isRecord(raw) || Object.keys(raw).length !== 2 || raw.schema !== LOCK_SCHEMA
+    if (!isRecord(raw) || Object.keys(raw).length !== 3 || raw.kind !== LOCK_KIND || raw.format !== FORMAT
       || typeof raw.runId !== 'string' || !RUN_ID.test(raw.runId)) {
       return { state: 'corrupt' }
     }
@@ -344,6 +354,63 @@ export async function lstatRepositoryPath(root: string, candidate: string): Prom
  */
 export async function pathExists(root: string, candidate: string): Promise<boolean> {
   return (await lstatRepositoryPath(root, candidate)) !== undefined
+}
+
+/** 当前 Context 的入口布局；incomplete 不允许被当作可覆盖的新仓库。 */
+export type MetadataLayout = 'absent' | 'legacy' | 'current' | 'incomplete'
+
+/**
+ * 识别唯一元数据入口，拒绝双入口、链接和不完整的新布局。
+ *
+ * @param root - 业务仓库根目录。
+ * @param contextPath - 正式或候选 Context 的仓库相对路径。
+ * @returns 当前布局；不存在 Context 时为 absent，存在但无入口时为 incomplete。
+ * @throws 路径不安全、入口冲突或新元数据目录不合法时抛出 RuntimeFault。
+ * @remarks 调用阶段：新格式读取或迁移资格检查；只读，不创建入口或回退覆盖。
+ */
+export async function inspectMetadataLayout(root: string, contextPath = CONTEXT_ROOT): Promise<MetadataLayout> {
+  // 入口必须处于实际存在的普通 Context 目录内。
+  const context = await lstatRepositoryPath(root, contextPath)
+  if (context === undefined)
+    return 'absent'
+  if (!context.isDirectory())
+    throw new RuntimeFault('CONTEXT_NOT_DIRECTORY', 'The Context root must be a regular directory.', contextPath)
+
+  // 分别检查两种布局，不能因为某种入口损坏而选择另一种。
+  const legacyPath = `${contextPath}/meta.json`
+  // 当前树内的新元数据目录。
+  const metadataPath = `${contextPath}/${METADATA_DIRECTORY}`
+  // 旧入口的存在性和文件类型，不读取其内容。
+  const legacy = await lstatRepositoryPath(root, legacyPath)
+  // 新目录的存在性和类型，父路径安全由公共读取保证。
+  const metadata = await lstatRepositoryPath(root, metadataPath)
+  if (legacy !== undefined && metadata !== undefined)
+    throw new RuntimeFault('METADATA_LAYOUT_CONFLICT', 'Legacy and current metadata entries must not coexist.', contextPath)
+  if (metadata === undefined) {
+    if (legacy === undefined)
+      return 'incomplete'
+    if (!legacy.isFile())
+      throw new RuntimeFault('META_NOT_REGULAR_FILE', 'Legacy metadata must be a regular file.', legacyPath)
+    return 'legacy'
+  }
+  if (!metadata.isDirectory())
+    throw new RuntimeFault('METADATA_NOT_DIRECTORY', 'The metadata root must be a regular directory.', metadataPath)
+
+  // 新入口没有独立的回退优先级，缺失 manifest 就是不完整状态。
+  const entries = await readDirectory(root, metadataPath)
+  // 唯一的格式入口必须存在，空目录不能伪装 absent。
+  const manifest = entries.find(entry => entry.name === 'manifest.json')
+  if (manifest === undefined)
+    throw new RuntimeFault('METADATA_MANIFEST_MISSING', 'The metadata directory requires manifest.json.', `${metadataPath}/manifest.json`)
+  for (const entry of entries) {
+    if (entry.kind === 'symlink')
+      throw new RuntimeFault('PATH_SYMLINK', 'Metadata must not contain symlinks.', `${metadataPath}/${entry.name}`)
+    if ((entry.name !== 'manifest.json' || entry.kind !== 'file')
+      && (entry.name !== 'confirmations' || entry.kind !== 'directory')) {
+      throw new RuntimeFault('METADATA_ENTRY_INVALID', 'Metadata allows only manifest.json and the confirmations directory.', `${metadataPath}/${entry.name}`)
+    }
+  }
+  return 'current'
 }
 
 /**
@@ -1067,13 +1134,15 @@ export async function readGitEvidence(root: string, evidencePath: string): Promi
   // 当前证据目录实际包含的文件名集合。
   const names = entries.map(entry => entry.name)
   // 当前对象或目录允许出现的项目集合。
-  const allowed = new Set(['head.txt', 'mid-operation.json', 'status.bin', 'diff.bin'])
+  const allowed = new Set(['head.txt', 'mid-operation.json', 'status.bin', 'diff.bin', 'comparison.json'])
   if (entries.some(entry => entry.kind !== 'file' || !allowed.has(entry.name)))
     throw new RuntimeFault('GIT_EVIDENCE_UNKNOWN_FILE', 'Git evidence contains an unknown or non-regular entry.', evidencePath)
   for (const required of ['head.txt', 'mid-operation.json', 'status.bin']) {
     if (!names.includes(required))
       throw new RuntimeFault('GIT_EVIDENCE_FILE_MISSING', `Git evidence is missing ${required}.`, evidencePath)
   }
+  if (names.includes('diff.bin') !== names.includes('comparison.json'))
+    throw new RuntimeFault('GIT_COMPARISON_INVALID', 'Historical diff and comparison must be provided together.', evidencePath)
   // 从持久文件或未校验输入取得的原始数据。
   const raw = new Map<string, Buffer>()
   for (const name of names)
@@ -1082,6 +1151,19 @@ export async function readGitEvidence(root: string, evidencePath: string): Promi
   const head = decodeUtf8(raw.get('head.txt') as Buffer, `${evidencePath}/head.txt`)
   if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?\n$/.test(head))
     throw new RuntimeFault('GIT_HEAD_INVALID', 'Git HEAD evidence must contain one full lowercase revision.', `${evidencePath}/head.txt`)
+  // 历史差异必须明确绑定两个固定对象，不能默默使用持久审查基线。
+  if (raw.has('comparison.json')) {
+    let comparison: unknown
+    try {
+      comparison = JSON.parse(decodeUtf8(raw.get('comparison.json') as Buffer, `${evidencePath}/comparison.json`))
+    }
+    catch { throw new RuntimeFault('GIT_COMPARISON_INVALID', 'Git comparison must be valid JSON.', evidencePath) }
+    if (!isRecord(comparison) || Object.keys(comparison).sort().join(',') !== 'base,head,kind'
+      || comparison.kind !== 'two-tree' || comparison.head !== head.trim()
+      || typeof comparison.base !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(comparison.base)) {
+      throw new RuntimeFault('GIT_COMPARISON_INVALID', 'Git comparison must bind the supplied HEAD and a complete base object.', evidencePath)
+    }
+  }
   // 宿主记录的 Git 操作状态 JSON 文本。
   const midText = decodeUtf8(raw.get('mid-operation.json') as Buffer, `${evidencePath}/mid-operation.json`).replace(/^\uFEFF/, '')
   // 尚未校验形状的 Git 操作状态对象。

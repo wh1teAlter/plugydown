@@ -15,7 +15,7 @@ const roleIds = ['investigator', 'recorder', 'reflector']
 // 用于验证真实 Runtime 响应的公开协议 Schema 校验器。
 const conforms = new Ajv2020({ strict: true }).compile(runtimeSchema)
 // 交付验收使用的 Runtime 请求协议标识。
-const protocol = 'plugydown.context.runtime/v1'
+const protocol = 'plugydown.context.runtime'
 
 /**
  * 只读生成交付目录的文件内容与权限快照，拒绝链接和特殊文件。
@@ -81,7 +81,7 @@ function request(file: string, cwd: string): Promise<unknown> {
         reject(error)
       }
     })
-    child.stdin!.end(JSON.stringify({ protocol, capability: 'repository.inspect', input: {} }))
+    child.stdin!.end(JSON.stringify({ protocol, format: 1, capability: 'repository.inspect', input: {} }))
   })
 }
 
@@ -108,7 +108,7 @@ export async function verifyDelivery(packageRoot: string, platform: keyof typeof
   // 必须随 Runtime 保留的第三方许可证原始文本。
   const license = await fs.readFile(path.join(content, 'runtime/context/THIRD_PARTY_LICENSES.txt'), 'utf8')
   assert.match(license, /yaml/)
-  for (const name of ['runtime', 'document', 'meta']) {
+  for (const name of ['runtime', 'document', 'meta', 'confirmation']) {
     assert.deepEqual(await fs.readFile(path.join(unit, `schemas/${name}.schema.json`)), await fs.readFile(path.join(packageRoot, `public/schemas/${name}.schema.json`)))
   }
   // 交付单元公开的 Skill 目录集合。
@@ -170,9 +170,10 @@ export async function verifyDelivery(packageRoot: string, platform: keyof typeof
   const response = await request(main, businessRoot)
   assert.deepEqual(response, {
     protocol,
+    format: 1,
     capability: 'repository.inspect',
     status: 'success',
-    data: { context: { state: 'absent', sourceState: 'unchecked' }, meta: { state: 'absent' } },
+    data: { context: { state: 'absent', sourceState: 'unchecked' }, meta: { state: 'absent', layout: 'absent' } },
   })
   return { main: await fs.readFile(main), license }
 }

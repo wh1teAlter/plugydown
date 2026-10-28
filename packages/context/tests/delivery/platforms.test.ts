@@ -95,11 +95,16 @@ function withoutCursorRoles() {
     }
   })
 
-  it('delivers the real SessionStart hint through OpenCode and Pi host callbacks using business cwd', async () => {
+  it.each(['legacy', 'current', 'incomplete'])('delivers SessionStart discovery for %s Context through actual OpenCode and Pi callbacks', async (layout) => {
     // 专门验证会话启动 Hook 的隔离业务仓库。
-    const startupBusiness = path.join(root, 'startup-business')
+    const startupBusiness = path.join(root, `startup-${layout}`)
     await fs.mkdir(path.join(startupBusiness, 'context'), { recursive: true })
-    await fs.writeFile(path.join(startupBusiness, 'context/meta.json'), '{}')
+    if (layout === 'legacy')
+      await fs.writeFile(path.join(startupBusiness, 'context/meta.json'), '{}')
+    if (layout === 'current') {
+      await fs.mkdir(path.join(startupBusiness, 'context/.meta'))
+      await fs.writeFile(path.join(startupBusiness, 'context/.meta/manifest.json'), '{"format":1}')
+    }
     // 宿主会话应收到的固定知识发现提示。
     const hint = 'Plugydown Context may be available. Load the Context Operating Skill and call repository.inspect before using formal knowledge.'
     // 从构建产物加载的真实 OpenCode Hook 模块。

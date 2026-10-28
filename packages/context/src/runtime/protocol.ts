@@ -4,13 +4,17 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import { compactJson, compareCodeUnits, stableJson } from './stable-json.js'
 
 // 单次 Runtime 请求与响应使用的固定协议标识。
-export const PROTOCOL = 'plugydown.context.runtime/v1'
+export const PROTOCOL = 'plugydown.context.runtime'
+
+// 新元数据、确认身份及后续调用合同共用的兼容代号，不随插件补丁版本变化。
+export const FORMAT = 1
 
 // 协议允许的只读能力白名单。
 export const READ_CAPABILITIES = [
   'repository.inspect',
   'frontier.query',
   'graph.validate',
+  'confirmation.check',
   'delta.compute',
   'growth.measure',
   'feedback.match',
@@ -84,12 +88,12 @@ export type Scope
       readonly paths: readonly string[]
     }
 
-/** 仓库检查参数，可选择文档状态或修复预览。 */
+/** 仓库检查参数，可选择文档状态或迁移预览。 */
 export interface RepositoryInspectInput {
   /** 本次调用显式选择的文档 ID；不自动扩大写入授权。 */
   readonly selectedDocumentIds?: readonly string[]
-  /** 是否请求分页修复预览；不授予写入权限。 */
-  readonly repair?: true
+  /** 是否请求分页迁移预览；不授予写入权限。 */
+  readonly migration?: true
 }
 
 /** 渐进读取选择器，用稳定身份、路径或关系缩小候选范围。 */
@@ -121,23 +125,20 @@ export interface FrontierQueryInput {
   readonly requiresClosure?: boolean
 }
 
-/** 增量分析输入，包含宿主收集的 Git 证据及任务确定性信号。 */
+/** 增量分析输入，包含宿主收集的 Git 证据和明确范围。 */
 export interface DeltaComputeInput {
   /** 本次工作流拥有的 .scratch/evidence/ 直接子目录。 */
   readonly gitEvidencePath: string
   /** 调用方授予的作用范围，在事务开始后固定。 */
   readonly scope: Scope
-  /** 宿主提供的任务确定性信号，Runtime 不替代语义判断。 */
-  readonly taskEvidence: {
-    /** 宿主是否已明确本次维护意图。 */
-    readonly intentKnown: boolean
-    /** 宿主是否已确认授权范围完整。 */
-    readonly scopeComplete: boolean
-    /** 是否怀疑出现尚未建模的新能力。 */
-    readonly newCapabilitySuspected: boolean
-    /** 是否仍存在不明确的跨领域契约。 */
-    readonly crossDomainContractUncertain: boolean
-  }
+}
+
+/** 按授权范围只读计算当前文档的确认匹配。 */
+export interface ConfirmationCheckInput {
+  /** 默认检查整个仓库，也可限制为文档、领域或来源路径。 */
+  readonly scope: Scope
+  /** 是否附带失配解释码；默认 false。 */
+  readonly explain: boolean
 }
 
 /** 用于反馈身份和复用匹配的四个业务字段。 */
@@ -152,8 +153,8 @@ export interface FeedbackMatchInput {
   readonly reuseBoundary: string
 }
 
-/** 事务所属的 Init、Update、Prune 或 Repair 工作流。 */
-export type TransactionCommand = 'init' | 'update' | 'prune' | 'repair'
+/** 事务所属的 Init、Update、Prune 或 Migrate 工作流。 */
+export type TransactionCommand = 'init' | 'update' | 'prune' | 'migrate'
 /** 宿主选择的语义审查深度，不代表 Runtime 调用了模型。 */
 export type TransactionMode = 'light' | 'deep'
 
@@ -172,7 +173,9 @@ export interface TransactionBeginInput {
   /** 宿主显式补充的仓库相对证据声明，事务期间必须保持新鲜。 */
   readonly evidencePaths: readonly string[]
   /** 调用方已对照当前源码复核且确认准确的文档 ID，仅 Update 可用。 */
-  readonly reaffirmedDocumentIds?: readonly string[]
+  readonly confirmedDocumentIds?: readonly string[]
+  /** 迁移必须显式选择如何处理旧依据，不存在隐式导入默认值。 */
+  readonly migrationStrategy?: 'import-trusted' | 'reconfirm'
 }
 
 /** 指定需要重新验证的已暂存事务。 */
@@ -214,6 +217,7 @@ export type CapabilityInput
   = | RepositoryInspectInput
     | FrontierQueryInput
     | DeltaComputeInput
+    | ConfirmationCheckInput
     | FeedbackMatchInput
     | TransactionBeginInput
     | TransactionCommitInput
@@ -225,6 +229,8 @@ export type CapabilityInput
 export interface RuntimeRequest {
   /** 固定 Runtime 协议标识。 */
   readonly protocol: typeof PROTOCOL
+  /** 与持久数据、临时资源共同使用的兼容代号。 */
+  readonly format: typeof FORMAT
   /** 请求分派目标或响应所属能力。 */
   readonly capability: Capability
   /** transaction 能力的生命周期动作，其他能力不得携带。 */
@@ -241,6 +247,8 @@ export interface RuntimeRequest {
 export interface RuntimeResponse {
   /** 固定 Runtime 协议标识。 */
   readonly protocol: typeof PROTOCOL
+  /** 与持久数据、临时资源共同使用的兼容代号。 */
+  readonly format: typeof FORMAT
   /** 请求分派目标或响应所属能力。 */
   readonly capability: Capability | 'unknown'
   /** 产品级执行状态；success 不代表 Context 本身有效。 */
@@ -399,6 +407,7 @@ export function runtimeResponse(
   }
   return {
     protocol: PROTOCOL,
+    format: FORMAT,
     capability,
     status,
     ...(options.data === undefined ? {} : { data: options.data }),
@@ -410,7 +419,7 @@ export function runtimeResponse(
 /** 事务结果判别联合，每种结果仅携带其阶段允许的字段。 */
 export type TransactionOutcome
   = | {
-    readonly outcome: 'repair_staged'
+    readonly outcome: 'migration_staged'
     /** Runtime 生成的事务 UUID，也是运行目录和写锁所有权标识。 */
     readonly runId: string
     /** 当前事务拥有的完整候选 Context 相对目录。 */
@@ -431,11 +440,13 @@ export type TransactionOutcome
     readonly candidateFingerprint: string
     /** 当前候选引用源码与显式证据的整体 SHA-256 指纹。 */
     readonly sourceEvidenceFingerprint: string
-    /** 当前修复的文档数量与计划指纹，仅作为验证摘要。 */
-    readonly repair?: {
-      /** 参与统计或修复的文档数量。 */
+    /** 当前确认的文档数量与计划指纹，仅作为验证摘要。 */
+    readonly confirmation?: {
+      /** 本次派生确认的文档数量。 */
       readonly documentCount: number
-      /** 确定性修复计划的 SHA-256 指纹，用于核对预览与验证。 */
+      /** 本次实际新增的不可变确认数量。 */
+      readonly newRecordCount: number
+      /** 确定性确认计划的 SHA-256 指纹，用于核对预览与验证。 */
       readonly planFingerprint: string
     }
   }
@@ -471,11 +482,13 @@ export type TransactionOutcome
     readonly candidateFingerprint: string
     /** 当前候选引用源码与显式证据的整体 SHA-256 指纹。 */
     readonly sourceEvidenceFingerprint: string
-    /** 当前修复的文档数量与计划指纹，仅作为验证摘要。 */
-    readonly repair?: {
-      /** 参与统计或修复的文档数量。 */
+    /** 当前确认的文档数量与计划指纹，仅作为验证摘要。 */
+    readonly confirmation?: {
+      /** 本次派生确认的文档数量。 */
       readonly documentCount: number
-      /** 确定性修复计划的 SHA-256 指纹，用于核对预览与验证。 */
+      /** 本次实际新增的不可变确认数量。 */
+      readonly newRecordCount: number
+      /** 确定性确认计划的 SHA-256 指纹，用于核对预览与验证。 */
       readonly planFingerprint: string
     }
   }
@@ -519,7 +532,7 @@ export type TransactionOutcome
   }
 // 每个事务结局对应的唯一状态、后续动作和人工恢复标志。
 const TRANSACTION_SHAPES = {
-  repair_staged: { status: 'success', nextAction: 'validate' },
+  migration_staged: { status: 'success', nextAction: 'validate' },
   staged: { status: 'success', nextAction: 'edit_candidate' },
   ready_for_review: { status: 'success', nextAction: 'semantic_review' },
   committed: { status: 'success' },
@@ -559,6 +572,7 @@ export function transactionResponse(
   const sorted = diagnostics === undefined ? undefined : sortDiagnostics(diagnostics)
   return {
     protocol: PROTOCOL,
+    format: FORMAT,
     capability: 'transaction',
     status,
     data: { ...result, ...derived } as JsonObject,
@@ -661,16 +675,18 @@ function emptyInput(value: unknown, capability: string): Record<string, never> {
   return {}
 }
 
-/** 解析仓库检查参数，限制修复开关与文档选择器的形状。 */
+/** 解析仓库检查参数，限制迁移开关与文档选择器的形状。 */
 function parseInspectInput(value: unknown): RepositoryInspectInput {
   if (!isRecord(value))
     throw new RuntimeFault('REQUEST_INPUT_INVALID', 'repository.inspect input must be an object.')
-  assertExactKeys(value, ['selectedDocumentIds', 'repair'], [], 'repository.inspect input')
-  if (value.repair !== undefined && value.repair !== true)
-    throw new RuntimeFault('REQUEST_FIELD_INVALID', 'repository.inspect repair must be true when present.')
+  assertExactKeys(value, ['selectedDocumentIds', 'migration'], [], 'repository.inspect input')
+  if (value.migration !== undefined && value.migration !== true)
+    throw new RuntimeFault('REQUEST_FIELD_INVALID', 'repository.inspect migration must be true when present.')
+  if (value.migration && value.selectedDocumentIds !== undefined)
+    throw new RuntimeFault('REQUEST_FIELD_INVALID', 'Migration preview does not accept a document selection.')
   return {
     ...(value.selectedDocumentIds === undefined ? {} : { selectedDocumentIds: uniqueIds(value.selectedDocumentIds, 'selectedDocumentIds', DOCUMENT_ID, 'Document') }),
-    ...(value.repair === true ? { repair: true } : {}),
+    ...(value.migration === true ? { migration: true } : {}),
   }
 }
 
@@ -755,29 +771,20 @@ function parseScope(value: unknown): Scope {
   throw new RuntimeFault('REQUEST_FIELD_INVALID', 'scope.kind is unknown.')
 }
 
-/** 解析增量分析所需的 Git 证据位置、范围和任务信号。 */
+/** 解析显式 Git 比较和授权范围，不推导全局审查任务。 */
 function parseDeltaInput(value: unknown): DeltaComputeInput {
   if (!isRecord(value))
     throw new RuntimeFault('REQUEST_INPUT_INVALID', 'delta.compute input must be an object.')
-  assertExactKeys(value, ['gitEvidencePath', 'scope', 'taskEvidence'], ['gitEvidencePath', 'scope', 'taskEvidence'], 'delta.compute input')
-  if (!isRecord(value.taskEvidence))
-    throw new RuntimeFault('REQUEST_FIELD_INVALID', 'taskEvidence must be an object.')
-  assertExactKeys(
-    value.taskEvidence,
-    ['intentKnown', 'scopeComplete', 'newCapabilitySuspected', 'crossDomainContractUncertain'],
-    ['intentKnown', 'scopeComplete', 'newCapabilitySuspected', 'crossDomainContractUncertain'],
-    'taskEvidence',
-  )
-  return {
-    gitEvidencePath: text(value.gitEvidencePath, 'gitEvidencePath', 1_024),
-    scope: parseScope(value.scope),
-    taskEvidence: {
-      intentKnown: boolean(value.taskEvidence.intentKnown, 'taskEvidence.intentKnown'),
-      scopeComplete: boolean(value.taskEvidence.scopeComplete, 'taskEvidence.scopeComplete'),
-      newCapabilitySuspected: boolean(value.taskEvidence.newCapabilitySuspected, 'taskEvidence.newCapabilitySuspected'),
-      crossDomainContractUncertain: boolean(value.taskEvidence.crossDomainContractUncertain, 'taskEvidence.crossDomainContractUncertain'),
-    },
-  }
+  assertExactKeys(value, ['gitEvidencePath', 'scope'], ['gitEvidencePath', 'scope'], 'delta.compute input')
+  return { gitEvidencePath: text(value.gitEvidencePath, 'gitEvidencePath', 1_024), scope: parseScope(value.scope) }
+}
+
+/** 解析有界确认检查，省略范围表示完整仓库。 */
+function parseConfirmationInput(value: unknown): ConfirmationCheckInput {
+  if (!isRecord(value))
+    throw new RuntimeFault('REQUEST_INPUT_INVALID', 'confirmation.check input must be an object.')
+  assertExactKeys(value, ['scope', 'explain'], [], 'confirmation.check input')
+  return { scope: value.scope === undefined ? { kind: 'repository' } : parseScope(value.scope), explain: value.explain === undefined ? false : boolean(value.explain, 'explain') }
 }
 
 /** 校验反馈匹配所需的四个非空字段。 */
@@ -816,21 +823,24 @@ function parseTransactionInput(action: TransactionAction, value: unknown): Trans
   if (action === 'begin') {
     // 当前协议对象需要校验的业务字段集合。
     const fields = ['command', 'mode', 'dryRun', 'scope', 'gitEvidencePath', 'evidencePaths'] as const
-    assertExactKeys(value, [...fields, 'reaffirmedDocumentIds'], fields, 'transaction.begin input')
-    if (value.command !== 'init' && value.command !== 'update' && value.command !== 'prune' && value.command !== 'repair')
+    assertExactKeys(value, [...fields, 'confirmedDocumentIds', 'migrationStrategy'], fields, 'transaction.begin input')
+    if (value.command !== 'init' && value.command !== 'update' && value.command !== 'prune' && value.command !== 'migrate')
       throw new RuntimeFault('REQUEST_FIELD_INVALID', 'transaction.begin command is unknown.')
     if (value.mode !== 'light' && value.mode !== 'deep')
       throw new RuntimeFault('REQUEST_FIELD_INVALID', 'transaction.begin mode must be light or deep.')
+    if (value.command === 'migrate' ? !['import-trusted', 'reconfirm'].includes(String(value.migrationStrategy)) : value.migrationStrategy !== undefined)
+      throw new RuntimeFault('REQUEST_FIELD_INVALID', 'Only migrate requires an explicit migrationStrategy.')
     return {
       command: value.command,
+      ...(value.command === 'migrate' ? { migrationStrategy: value.migrationStrategy as 'import-trusted' | 'reconfirm' } : {}),
       mode: value.mode,
       dryRun: boolean(value.dryRun, 'dryRun'),
       scope: parseScope(value.scope),
       gitEvidencePath: text(value.gitEvidencePath, 'gitEvidencePath', 1_024),
-      evidencePaths: uniqueStrings(value.evidencePaths, 'evidencePaths', { nonEmpty: value.command !== 'repair' }),
-      ...(value.reaffirmedDocumentIds === undefined
+      evidencePaths: uniqueStrings(value.evidencePaths, 'evidencePaths', {}),
+      ...(value.confirmedDocumentIds === undefined
         ? {}
-        : { reaffirmedDocumentIds: uniqueIds(value.reaffirmedDocumentIds, 'reaffirmedDocumentIds', DOCUMENT_ID, 'Document', true) }),
+        : { confirmedDocumentIds: uniqueIds(value.confirmedDocumentIds, 'confirmedDocumentIds', DOCUMENT_ID, 'Document', true) }),
     }
   }
   if (action === 'validate') {
@@ -891,7 +901,7 @@ function parseBudget(value: unknown): Budget | undefined {
 }
 
 // 允许携带预算和续读游标的能力白名单。
-const PAGED = new Set<Capability>(['repository.inspect', 'frontier.query', 'delta.compute', 'growth.measure', 'feedback.match'])
+const PAGED = new Set<Capability>(['repository.inspect', 'frontier.query', 'confirmation.check', 'delta.compute', 'growth.measure', 'feedback.match'])
 
 /**
  * 严格解析协议封套与能力输入，不接受未知能力或跨能力参数。
@@ -904,9 +914,11 @@ const PAGED = new Set<Capability>(['repository.inspect', 'frontier.query', 'delt
 export function parseRequest(raw: unknown): RuntimeRequest {
   if (!isRecord(raw))
     throw new RuntimeFault('REQUEST_INVALID', 'A Runtime request must be an object.')
-  assertExactKeys(raw, ['protocol', 'capability', 'action', 'input', 'budget', 'cursor'], ['protocol', 'capability', 'input'], 'request')
+  assertExactKeys(raw, ['protocol', 'format', 'capability', 'action', 'input', 'budget', 'cursor'], ['protocol', 'format', 'capability', 'input'], 'request')
   if (raw.protocol !== PROTOCOL)
     throw new RuntimeFault('PROTOCOL_UNSUPPORTED', `The request protocol must be ${PROTOCOL}.`)
+  if (raw.format !== FORMAT)
+    throw new RuntimeFault('FORMAT_UNSUPPORTED', 'The requested compatibility format is unsupported.')
   if (typeof raw.capability !== 'string' || (!(READ_CAPABILITIES as readonly string[]).includes(raw.capability) && raw.capability !== 'transaction'))
     throw new RuntimeFault('CAPABILITY_UNKNOWN', 'The request capability is unknown.')
   // 从请求中识别的能力名，用于分派或安全标注失败响应。
@@ -932,6 +944,9 @@ export function parseRequest(raw: unknown): RuntimeRequest {
     case 'graph.validate':
       input = emptyInput(raw.input, capability)
       break
+    case 'confirmation.check':
+      input = parseConfirmationInput(raw.input)
+      break
     case 'delta.compute':
       input = parseDeltaInput(raw.input)
       break
@@ -947,6 +962,7 @@ export function parseRequest(raw: unknown): RuntimeRequest {
   }
   return {
     protocol: PROTOCOL,
+    format: FORMAT,
     capability,
     ...(capability === 'transaction' ? { action: raw.action as TransactionAction } : {}),
     input,
@@ -1004,7 +1020,7 @@ export interface CursorPosition extends JsonObject {
 /** 绑定协议、查询、知识快照与续读位置的游标核心数据。 */
 interface CursorCore extends JsonObject {
   /** 生成游标时使用的 Runtime 协议标识。 */
-  protocolVersion: string
+  format: number
   /** 请求分派目标或响应所属能力。 */
   capability: string
   /** 请求参数的确定性指纹，用于拒绝跨查询复用游标。 */
@@ -1034,7 +1050,7 @@ function cursorCore(
   position: CursorPosition,
 ): CursorCore {
   return {
-    protocolVersion: PROTOCOL,
+    format: FORMAT,
     capability,
     inputFingerprint: sha256(compactJson(input as JsonValue)),
     contextFingerprint,
@@ -1116,7 +1132,7 @@ export function decodeCursor(
     'inputFingerprint',
     'integrityHash',
     'itemOffset',
-    'protocolVersion',
+    'format',
     'stateFingerprint',
     ...(parsed.bodyByteOffset === undefined ? [] : ['bodyByteOffset']),
   ].sort(compareCodeUnits)
@@ -1142,7 +1158,7 @@ export function decodeCursor(
   const actual = Buffer.from(parsed.integrityHash, 'hex')
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
     throw new RuntimeFault('CURSOR_STALE', 'The continuation cursor does not match this query or Context tree.')
-  if (parsed.protocolVersion !== core.protocolVersion
+  if (parsed.format !== core.format
     || parsed.capability !== core.capability
     || parsed.inputFingerprint !== core.inputFingerprint
     || parsed.contextFingerprint !== core.contextFingerprint

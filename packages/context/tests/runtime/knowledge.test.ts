@@ -4,6 +4,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import metaSchema from '../../public/schemas/meta.schema.json' with { type: 'json' }
 import { parseMeta } from '../../src/runtime/document.js'
+import { stableJson } from '../../src/runtime/stable-json.js'
 import { call, CLIENT_DOMAIN, createRepository, documentSource, removeRepository, SERVICE_DOMAIN, SERVICE_GUIDE, writeMeta } from './fixture.js'
 
 // 当前测试文件拥有的临时仓库集合，由 afterEach 统一清理。
@@ -48,7 +49,7 @@ describe('document, Meta, graph, and fingerprints', () => {
         },
       }
       expect(validate(ledger), JSON.stringify(ledger)).toBe(valid)
-      expect(parseMeta('context/meta.json', ledger).ok).toBe(valid)
+      expect(parseMeta('context/.meta/manifest.json', ledger).ok).toBe(valid)
     }
   })
 
@@ -166,25 +167,22 @@ describe('document, Meta, graph, and fingerprints', () => {
     const after = await call(root, 'repository.inspect', { selectedDocumentIds: ['service.retry'] })
 
     expect(before.data?.context).not.toEqual(after.data?.context)
-    expect(before.data?.selected).toEqual(after.data?.selected)
+    expect((before.data?.selected as any[])[0].currentKey).toEqual((after.data?.selected as any[])[0].currentKey)
     expect((await call(root, 'graph.validate', {})).status).toBe('success')
   })
 
-  it('detects front matter/body semantic changes and exact Meta Document set mismatch', async () => {
+  it('derives content mismatch without structural damage or a current ledger', async () => {
     // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await repository()
     // 当前受检文件的实际路径，仅用于内部读写操作。
     const file = path.join(root, 'context/service/manual/retry.md')
     await fs.writeFile(file, (await fs.readFile(file, 'utf8')).replace('Retry behavior', 'Changed retry behavior'))
-    expect((await call(root, 'graph.validate', {})).diagnostics?.some(item => item.code === 'META_DOCUMENT_FINGERPRINT_MISMATCH')).toBe(true)
+    expect((await call(root, 'confirmation.check', {})).data?.summary).toMatchObject({ unmatched: 1 })
 
     await fs.writeFile(file, documentSource(SERVICE_GUIDE))
-    // 当前测试拥有的正式 meta.json 路径。
-    const metaPath = path.join(root, 'context/meta.json')
-    const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'))
-    delete meta.documents['service.retry']
-    await fs.writeFile(metaPath, JSON.stringify(meta))
-    expect((await call(root, 'graph.validate', {})).diagnostics?.some(item => item.code === 'META_DOCUMENT_SET_MISMATCH')).toBe(true)
+    await fs.rm(path.join(root, 'context/.meta/confirmations/service.retry'), { recursive: true })
+    expect((await call(root, 'graph.validate', {})).status).toBe('success')
+    expect((await call(root, 'confirmation.check', {})).data?.summary).toMatchObject({ unmatched: 1 })
   })
 
   it('changes source fingerprints when the declaration, file set, relative path, or raw bytes changes', async () => {
@@ -211,7 +209,7 @@ describe('document, Meta, graph, and fingerprints', () => {
     // 使用精确源码路径声明的文档夹具。
     const exact = { ...SERVICE_DOMAIN, codePaths: ['src/client.ts'] }
     await fs.writeFile(path.join(root, 'context/service/domain.md'), documentSource(exact))
-    expect((await call(root, 'graph.validate', {})).diagnostics?.some(item => item.code === 'META_DOCUMENT_FINGERPRINT_MISMATCH')).toBe(true)
+    expect((await call(root, 'confirmation.check', {})).data?.summary).toMatchObject({ unmatched: 1 })
   })
 
   it('reports source staleness as pending review without failing graph validation', async () => {
@@ -222,12 +220,11 @@ describe('document, Meta, graph, and fingerprints', () => {
     const inspect = await call(root, 'repository.inspect', { selectedDocumentIds: ['service'] })
     expect(inspect).toMatchObject({
       status: 'success',
-      data: { context: { state: 'ready', sourceState: 'ready' }, selected: [{ id: 'service', state: 'stale' }] },
+      data: { context: { state: 'ready', sourceState: 'ready' }, selected: [{ documentId: 'service', confirmationState: 'unmatched' }] },
     })
     expect(await call(root, 'graph.validate', {})).toMatchObject({
       status: 'success',
       data: { documentCount: 1 },
-      diagnostics: [{ code: 'DOCUMENT_REVIEW_PENDING', severity: 'warning', path: 'context/service/domain.md', message: expect.stringContaining('"service"') }],
     })
   })
 
@@ -235,16 +232,15 @@ describe('document, Meta, graph, and fingerprints', () => {
     // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await repository([SERVICE_DOMAIN])
     // 当前测试拥有的正式 meta.json 路径。
-    const metaPath = path.join(root, 'context/meta.json')
+    const metaPath = path.join(root, 'context/.meta/manifest.json')
     const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'))
-    meta.documents.service.status = 'fresh'
+    meta.status = 'fresh'
     meta.session = {}
-    await fs.writeFile(metaPath, JSON.stringify(meta))
+    await fs.writeFile(metaPath, stableJson(meta))
     const response = await call(root, 'graph.validate', {})
 
     expect(response.status).toBe('failed')
-    expect(response.diagnostics?.some(item => item.code === 'META_FIELD_UNKNOWN')).toBe(true)
-    expect(response.diagnostics?.some(item => item.code === 'META_DOCUMENT_INVALID')).toBe(true)
+    expect(response.diagnostics?.some(item => item.code === 'METADATA_INVALID')).toBe(true)
   })
 
   it('rejects whitespace-only descriptions and non-canonical repository revisions', async () => {
@@ -258,10 +254,10 @@ describe('document, Meta, graph, and fingerprints', () => {
     // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const revisionRoot = await repository([SERVICE_DOMAIN])
     // 当前测试拥有的正式 meta.json 路径。
-    const metaPath = path.join(revisionRoot, 'context/meta.json')
+    const metaPath = path.join(revisionRoot, 'context/.meta/manifest.json')
     const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'))
     meta.repository = { baseline: { revision: 'A'.repeat(40), sourceFingerprint: '0'.repeat(64) } }
-    await fs.writeFile(metaPath, JSON.stringify(meta))
+    await fs.writeFile(metaPath, stableJson(meta))
     expect((await call(revisionRoot, 'graph.validate', {})).diagnostics?.some(item => item.code === 'META_REPOSITORY_INVALID')).toBe(true)
   })
 
@@ -289,8 +285,8 @@ describe('document, Meta, graph, and fingerprints', () => {
 
     // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const metaRoot = await repository([SERVICE_DOMAIN])
-    await fs.rename(path.join(metaRoot, 'context/meta.json'), path.join(metaRoot, 'meta-real.json'))
-    await fs.symlink('../meta-real.json', path.join(metaRoot, 'context/meta.json'))
+    await fs.rename(path.join(metaRoot, 'context/.meta/manifest.json'), path.join(metaRoot, 'meta-real.json'))
+    await fs.symlink('../../meta-real.json', path.join(metaRoot, 'context/.meta/manifest.json'))
     const metaResult = await call(metaRoot, 'graph.validate', {})
     expect(metaResult.status).toBe('failed')
     expect(metaResult.diagnostics?.some(item => item.code === 'PATH_SYMLINK')).toBe(true)

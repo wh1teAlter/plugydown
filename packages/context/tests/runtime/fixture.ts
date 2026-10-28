@@ -7,13 +7,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import { parse as parseYaml } from 'yaml'
+import confirmationSchema from '../../public/schemas/confirmation.schema.json' with { type: 'json' }
 import documentSchema from '../../public/schemas/document.schema.json' with { type: 'json' }
 import metaSchema from '../../public/schemas/meta.schema.json' with { type: 'json' }
 import runtimeSchema from '../../public/schemas/runtime.schema.json' with { type: 'json' }
 import { handleRequest } from '../../src/runtime/handler.js'
 
 // 单次 Runtime 请求与响应使用的固定协议标识。
-export const PROTOCOL = 'plugydown.context.runtime/v1'
+export const PROTOCOL = 'plugydown.context.runtime'
 // 测试使用的固定初始 Git 对象 ID。
 export const REVISION_A = 'a'.repeat(40)
 // 测试使用的固定后续 Git 对象 ID。
@@ -239,6 +240,8 @@ export async function writeMeta(
   options: {
     /** 夹具中固定的全仓 Git 基线对象 ID。 */
     readonly baselineRevision?: string
+    /** 仅历史迁移测试显式选择旧布局。 */
+    readonly legacy?: boolean
     /** 由 Init/Prune 建立的规模基线，Update/Repair 应保留。 */
     readonly convergence?: boolean
   } = {},
@@ -296,7 +299,7 @@ export async function writeMeta(
   const meta = {
     $schema: 'plugydown.context.meta/v1',
     toolVersion: '0.1.0',
-    runtimeProtocol: PROTOCOL,
+    runtimeProtocol: 'plugydown.context.runtime/v1',
     fingerprintVersion: '1',
     documents: ledger,
     ...(options.baselineRevision === undefined
@@ -317,13 +320,28 @@ export async function writeMeta(
           },
         }),
   }
-  await fs.writeFile(path.join(root, 'context/meta.json'), `${JSON.stringify(sortValue(meta), null, 2)}\n`)
+  if (options.legacy === true) {
+    await fs.writeFile(path.join(root, 'context/meta.json'), `${JSON.stringify(sortValue(meta), null, 2)}\n`)
+    return
+  }
+  await fs.mkdir(path.join(root, 'context/.meta'), { recursive: true })
+  const manifest = { format: 1, ...(meta.repository === undefined ? {} : { repository: meta.repository }), ...(meta.convergence === undefined ? {} : { convergence: meta.convergence }) }
+  await fs.writeFile(path.join(root, 'context/.meta/manifest.json'), `${JSON.stringify(sortValue(manifest), null, 2)}\n`)
+  for (const [documentId, tuple] of Object.entries(ledger)) {
+    const record = { documentId, ...tuple as object }
+    const key = hash(compact({ format: 1, record }))
+    const directory = path.join(root, 'context/.meta/confirmations', documentId)
+    await fs.mkdir(directory, { recursive: true })
+    await fs.writeFile(path.join(directory, `${key}.json`), `${JSON.stringify(sortValue(record), null, 2)}\n`)
+  }
 }
 
 /** 创建完整正式知识夹具并写入对应账本。 */
 export async function writeContext(root: string, documents: readonly FixtureDocument[], options: {
   /** 夹具中固定的全仓 Git 基线对象 ID。 */
   readonly baselineRevision?: string
+  /** 仅历史迁移测试显式选择旧布局。 */
+  readonly legacy?: boolean
   /** 由 Init/Prune 建立的规模基线，Update/Repair 应保留。 */
   readonly convergence?: boolean
 } = {}): Promise<void> {
@@ -347,6 +365,8 @@ export async function createRepository(options: {
   readonly git?: boolean
   /** 夹具中固定的全仓 Git 基线对象 ID。 */
   readonly baselineRevision?: string
+  /** 仅历史迁移测试显式选择旧布局。 */
+  readonly legacy?: boolean
 } = {}): Promise<string> {
   // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'plugydown-context-'))
@@ -365,7 +385,7 @@ export async function createRepository(options: {
   if (options.git !== false)
     await fs.mkdir(path.join(root, '.git'))
   if (options.documents !== undefined)
-    await writeContext(root, options.documents, options.baselineRevision === undefined ? {} : { baselineRevision: options.baselineRevision })
+    await writeContext(root, options.documents, { ...(options.legacy === undefined ? {} : { legacy: options.legacy }), ...(options.baselineRevision === undefined ? {} : { baselineRevision: options.baselineRevision }) })
   return root
 }
 
@@ -399,8 +419,10 @@ export async function writeGitEvidence(root: string, options: {
     ? { active: false }
     : { active: true, kind: options.midOperation }))
   await fs.writeFile(path.join(directory, 'status.bin'), `# branch.oid ${revision}\0# branch.head main\0${String(options.status ?? '')}`)
-  if (options.diff !== undefined)
+  if (options.diff !== undefined) {
     await fs.writeFile(path.join(directory, 'diff.bin'), options.diff)
+    await fs.writeFile(path.join(directory, 'comparison.json'), JSON.stringify({ kind: 'two-tree', base: REVISION_A, head: revision }))
+  }
   return relative
 }
 
@@ -460,7 +482,7 @@ export function runtimeRequest(capability: string, input: unknown, options: {
   /** 绑定查询与快照的续读令牌，不是写入授权。 */
   readonly cursor?: string
 } = {}): Record<string, unknown> {
-  return { protocol: PROTOCOL, capability, input, ...options }
+  return { protocol: PROTOCOL, format: 1, capability, input, ...options }
 }
 
 // 所有测试响应均校验公开 Runtime Schema，提交后的账本和 front matter 也校验对应 Schema，使实现与交付契约的偏差直接失败。
@@ -472,6 +494,8 @@ const conformsToRuntime = ajv.getSchema('runtime') as ValidateFunction
 const conformsToMeta = ajv.compile(metaSchema)
 // 校验正式文档 front matter 的公开 Schema。
 const conformsToDocument = ajv.compile(documentSchema)
+// 已提交的不可变凭据也必须符合公开合同。
+const conformsToConfirmation = ajv.compile(confirmationSchema)
 
 /** 用公开 JSON Schema 校验夹具或响应，失败时报告具体契约错误。 */
 function conform(validate: ValidateFunction, value: unknown, subject: string): void {
@@ -552,8 +576,10 @@ export async function handle(root: string, request: unknown): Promise<RuntimeRes
 
 /** 检查已提交账本与各文档 front matter 是否符合公开 Schema。 */
 async function conformCommittedContext(root: string): Promise<void> {
-  const meta = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
-  conform(conformsToMeta, meta, 'Committed meta.json')
+  const meta = JSON.parse(await fs.readFile(path.join(root, 'context/.meta/manifest.json'), 'utf8'))
+  conform(conformsToMeta, meta, 'Committed manifest.json')
+  for (const file of (await allFiles(root, 'context/.meta/confirmations')).filter(item => item.endsWith('.json')))
+    conform(conformsToConfirmation, JSON.parse(await fs.readFile(path.join(root, file), 'utf8')), 'Committed confirmation')
   for (const file of (await allFiles(root, 'context')).filter(item => item.endsWith('.md'))) {
     const frontMatter = /^---\n([\s\S]*?)\n---\n/.exec((await fs.readFile(path.join(root, file), 'utf8')).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n'))
     conform(conformsToDocument, parseYaml(frontMatter?.[1] ?? '') as unknown, `Committed ${file} front matter`)
@@ -572,7 +598,7 @@ export async function call(root: string, capability: string, input: unknown, opt
 
 /** 执行事务测试请求，并在提交成功后校验真实正式文件。 */
 export async function transactionCall(root: string, action: TransactionAction, input: unknown): Promise<RuntimeResponse> {
-  const response = await handle(root, { protocol: PROTOCOL, capability: 'transaction', action, input })
+  const response = await handle(root, { protocol: PROTOCOL, format: 1, capability: 'transaction', action, input })
   if (action === 'commit' && response.status === 'success')
     await conformCommittedContext(root)
   return response

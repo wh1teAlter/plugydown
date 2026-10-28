@@ -1,20 +1,22 @@
-import type { ContextDocument, ConvergenceBaseline, DocumentLedger, Meta } from './document.js'
+import type { ConfirmationRecord } from './confirmation.js'
+import type { ContextDocument, ConvergenceBaseline, DocumentLedger, MetadataManifest } from './document.js'
 import type { KnowledgeGraph } from './graph.js'
 import type { Diagnostic, RuntimeRequest, RuntimeResponse, Scope, TransactionApproval, TransactionBeginInput, TransactionCommand, TransactionCommitInput, TransactionMode, TransactionResumeInput, TransactionValidateInput } from './protocol.js'
-import type { GitEvidence, SourceExpansionResult, SourceFile } from './repository.js'
+import type { GitEvidence, SourceExpansionResult } from './repository.js'
 import type { JsonValue } from './stable-json.js'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { bodyFingerprint, FINGERPRINT_VERSION, frontMatterFingerprint, META_SCHEMA, serializeMeta, sourceFingerprint, TOOL_VERSION } from './document.js'
+import { confirmationKey, parseConfirmation, readConfirmationStore } from './confirmation.js'
+import { bodyFingerprint, frontMatterFingerprint, serializeMetadataManifest, sourceFingerprint } from './document.js'
 import { graphMetrics, loadKnowledge } from './graph.js'
-import { diagnostic, isRecord, PROTOCOL, RuntimeFault, transactionResponse } from './protocol.js'
-import { repairEligible, repairMeta, repairPlan } from './repair.js'
-import { aggregateSourceFingerprint, assertGitEvidencePath, assertSourcePattern, CONTEXT_ROOT, declarationMatches, expandSourcePatternSets, filesystemOperation, fingerprintTree, LOCK_ROOT, LOCK_SCHEMA, lstatRepositoryPath, MAX_JSON_TEXT_BYTES, readGitEvidence, readLockOwner, readTree, readUtf8File, resolveRepositoryPath, resolveRepositoryRoot, RUNS_ROOT, SCRATCH_ROOT, throwFilesystemFault } from './repository.js'
+import { planLegacyMigration } from './migration.js'
+import { diagnostic, FORMAT, isRecord, RuntimeFault, sha256, transactionResponse } from './protocol.js'
+import { assertGitEvidencePath, assertSourcePattern, CONTEXT_ROOT, declarationMatches, expandSourcePatternSets, filesystemOperation, fingerprintTree, LOCK_KIND, LOCK_ROOT, lstatRepositoryPath, MAX_JSON_TEXT_BYTES, readGitEvidence, readLockOwner, readTree, readUtf8File, resolveRepositoryPath, resolveRepositoryRoot, RUNS_ROOT, SCRATCH_ROOT, throwFilesystemFault } from './repository.js'
 import { compareCodeUnits, stableJson } from './stable-json.js'
 
 // 事务清单的持久格式标识。
-const TRANSACTION_SCHEMA = 'plugydown.context.transaction/v1'
+const TRANSACTION_KIND = 'plugydown.context.transaction'
 // Runtime 事务 UUID v4 的格式校验规则。
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
 // 持久事务指纹的 64 位小写十六进制格式。
@@ -39,7 +41,15 @@ export type TransactionPhase
 /** 事务建立时冻结的身份、授权和快照，所有后续阶段共享这些事实。 */
 interface ManifestBase {
   /** 持久事务清单格式标识。 */
-  readonly schema: typeof TRANSACTION_SCHEMA
+  readonly kind: typeof TRANSACTION_KIND
+  /** 与公开协议共用的兼容代号。 */
+  readonly format: typeof FORMAT
+  /** 本 run 曾生成的记录身份，崩溃与重验证时只允许清理这些新增文件。 */
+  readonly derivedConfirmationKeys: readonly string[]
+  /** 本 run 曾生成的入口字节摘要，避免把人工篡改视为 Runtime 所有物。 */
+  readonly derivedMetadataFingerprints: readonly string[]
+  /** 仅 migrate 使用，begin 后不可修改。 */
+  readonly migrationStrategy?: 'import-trusted' | 'reconfirm'
   /** Runtime 生成的事务 UUID，也是运行目录和写锁所有权标识。 */
   readonly runId: string
   /** 事务所属工作流，在 begin 时固定。 */
@@ -55,7 +65,7 @@ interface ManifestBase {
   /** 宿主显式补充的仓库相对证据声明，事务期间必须保持新鲜。 */
   readonly evidencePaths: readonly string[]
   /** 调用方已对照当前源码复核且确认准确的文档 ID，仅 Update 可用。 */
-  readonly reaffirmedDocumentIds?: readonly string[]
+  readonly confirmedDocumentIds?: readonly string[]
   /** begin 阶段冻结的正式知识、Git 和显式证据快照。 */
   readonly snapshot: {
     /** begin 时正式 Context 是否存在，用于区分 Init 与更新流程。 */
@@ -147,7 +157,11 @@ function validatedPair(manifest: ValidatedManifest): ValidatedPair {
 /** 去除阶段性验证、批准与恢复事实，仅保留事务建立时冻结的基础事实。 */
 function baseFacts(manifest: TransactionManifest): ManifestBase {
   return {
-    schema: manifest.schema,
+    kind: manifest.kind,
+    format: manifest.format,
+    derivedConfirmationKeys: manifest.derivedConfirmationKeys,
+    derivedMetadataFingerprints: manifest.derivedMetadataFingerprints,
+    ...(manifest.migrationStrategy === undefined ? {} : { migrationStrategy: manifest.migrationStrategy }),
     runId: manifest.runId,
     command: manifest.command,
     mode: manifest.mode,
@@ -155,7 +169,7 @@ function baseFacts(manifest: TransactionManifest): ManifestBase {
     scope: manifest.scope,
     gitEvidencePath: manifest.gitEvidencePath,
     evidencePaths: manifest.evidencePaths,
-    ...(manifest.reaffirmedDocumentIds === undefined ? {} : { reaffirmedDocumentIds: manifest.reaffirmedDocumentIds }),
+    ...(manifest.confirmedDocumentIds === undefined ? {} : { confirmedDocumentIds: manifest.confirmedDocumentIds }),
     snapshot: manifest.snapshot,
   }
 }
@@ -283,22 +297,23 @@ function parseRecovery(value: unknown): { readonly intent: 'restore_backup' } | 
 function parseManifest(value: unknown): TransactionManifest {
   if (!isRecord(value) || !exactKeys(
     value,
-    ['schema', 'runId', 'command', 'mode', 'dryRun', 'scope', 'phase', 'gitEvidencePath', 'evidencePaths', 'snapshot'],
-    ['reaffirmedDocumentIds', 'candidateFingerprint', 'sourceEvidenceFingerprint', 'approval', 'recovery'],
+    ['kind', 'format', 'derivedConfirmationKeys', 'derivedMetadataFingerprints', 'runId', 'command', 'mode', 'dryRun', 'scope', 'phase', 'gitEvidencePath', 'evidencePaths', 'snapshot'],
+    ['migrationStrategy', 'confirmedDocumentIds', 'candidateFingerprint', 'sourceEvidenceFingerprint', 'approval', 'recovery'],
   )
-  || value.schema !== TRANSACTION_SCHEMA
+  || value.kind !== TRANSACTION_KIND || value.format !== FORMAT
+  || !validHashes(value.derivedConfirmationKeys) || !validHashes(value.derivedMetadataFingerprints)
   || typeof value.runId !== 'string' || !UUID.test(value.runId)
-  || (value.command !== 'init' && value.command !== 'update' && value.command !== 'prune' && value.command !== 'repair')
+  || (value.command !== 'init' && value.command !== 'update' && value.command !== 'prune' && value.command !== 'migrate')
   || (value.mode !== 'light' && value.mode !== 'deep')
   || typeof value.dryRun !== 'boolean'
   || !validScope(value.scope)
   || !['staged', 'validated', 'committing', 'committed', 'restored', 'recovery_required', 'failed'].includes(String(value.phase))
   || typeof value.gitEvidencePath !== 'string'
-  || !Array.isArray(value.evidencePaths) || (value.command !== 'repair' && value.evidencePaths.length === 0) || value.evidencePaths.some(item => typeof item !== 'string')
-  || (value.reaffirmedDocumentIds !== undefined && (!Array.isArray(value.reaffirmedDocumentIds)
-    || value.reaffirmedDocumentIds.length === 0
-    || value.reaffirmedDocumentIds.some(item => typeof item !== 'string' || !DOCUMENT_ID.test(item))
-    || new Set(value.reaffirmedDocumentIds as string[]).size !== value.reaffirmedDocumentIds.length))
+  || !Array.isArray(value.evidencePaths) || value.evidencePaths.some(item => typeof item !== 'string')
+  || (value.confirmedDocumentIds !== undefined && (!Array.isArray(value.confirmedDocumentIds)
+    || value.confirmedDocumentIds.length === 0
+    || value.confirmedDocumentIds.some(item => typeof item !== 'string' || !DOCUMENT_ID.test(item))
+    || new Set(value.confirmedDocumentIds as string[]).size !== value.confirmedDocumentIds.length))
   || !isRecord(value.snapshot)
   || !exactKeys(value.snapshot, ['contextState', 'declaredEvidenceFingerprint', 'gitEvidenceFingerprint', 'gitRevision'], ['contextFingerprint'])
   || (value.snapshot.contextState !== 'absent' && value.snapshot.contextState !== 'present')
@@ -312,10 +327,15 @@ function parseManifest(value: unknown): TransactionManifest {
   }
   if ((value.snapshot.contextState === 'present') !== (value.snapshot.contextFingerprint !== undefined))
     throw new RuntimeFault('TRANSACTION_MANIFEST_INVALID', 'The Context snapshot state and fingerprint do not agree.')
-  if (value.command === 'repair' && (value.mode !== 'deep' || value.scope.kind !== 'documents'
-    || value.reaffirmedDocumentIds !== undefined || value.snapshot.contextState !== 'present')) {
-    throw new RuntimeFault('TRANSACTION_MANIFEST_INVALID', 'Repair requires a present snapshot, deep mode and Document scope without reaffirmation.')
+  if (value.command === 'migrate'
+    ? (value.mode !== 'deep' || value.scope.kind !== 'repository'
+      || value.confirmedDocumentIds !== undefined || value.snapshot.contextState !== 'present'
+      || !['import-trusted', 'reconfirm'].includes(String(value.migrationStrategy)))
+    : value.migrationStrategy !== undefined) {
+    throw new RuntimeFault('TRANSACTION_MANIFEST_INVALID', 'Migration requires explicit strategy, deep mode and repository scope.')
   }
+  if (value.confirmedDocumentIds !== undefined && value.command !== 'update')
+    throw new RuntimeFault('TRANSACTION_MANIFEST_INVALID', 'Only Update can confirm existing Documents.')
   if (new Set(value.evidencePaths as string[]).size !== value.evidencePaths.length)
     throw new RuntimeFault('TRANSACTION_MANIFEST_INVALID', 'Transaction evidence paths must be unique.')
   try {
@@ -342,7 +362,11 @@ function parseManifest(value: unknown): TransactionManifest {
 
   // 已通过交叉校验的事务基础事实。
   const base: ManifestBase = {
-    schema: TRANSACTION_SCHEMA,
+    kind: TRANSACTION_KIND,
+    format: FORMAT,
+    derivedConfirmationKeys: value.derivedConfirmationKeys as string[],
+    derivedMetadataFingerprints: value.derivedMetadataFingerprints as string[],
+    ...(value.migrationStrategy === undefined ? {} : { migrationStrategy: value.migrationStrategy as 'import-trusted' | 'reconfirm' }),
     runId: value.runId,
     command: value.command,
     mode: value.mode,
@@ -350,7 +374,7 @@ function parseManifest(value: unknown): TransactionManifest {
     scope: value.scope,
     gitEvidencePath: value.gitEvidencePath,
     evidencePaths: value.evidencePaths as string[],
-    ...(value.reaffirmedDocumentIds === undefined ? {} : { reaffirmedDocumentIds: value.reaffirmedDocumentIds as string[] }),
+    ...(value.confirmedDocumentIds === undefined ? {} : { confirmedDocumentIds: value.confirmedDocumentIds as string[] }),
     snapshot: {
       contextState: value.snapshot.contextState,
       ...(value.snapshot.contextFingerprint === undefined ? {} : { contextFingerprint: value.snapshot.contextFingerprint as string }),
@@ -417,7 +441,7 @@ async function ensureDirectory(root: string, relative: string): Promise<void> {
 }
 
 /** 通过同目录临时文件和重命名替换 JSON，失败时清理本次临时叶子。 */
-async function atomicWriteJson(root: string, relative: string, value: JsonValue): Promise<void> {
+async function atomicWriteJson(root: string, relative: string, value: JsonValue, mode = 0o600): Promise<void> {
   // 通过仓库边界检查的绝对路径，仅用于内部文件操作。
   const absolute = await resolveRepositoryPath(root, relative, true)
   await filesystemOperation(() => fs.mkdir(path.dirname(absolute), { recursive: true }).then(() => undefined), relative)
@@ -434,7 +458,8 @@ async function atomicWriteJson(root: string, relative: string, value: JsonValue)
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
       throwFilesystemFault(error, relative)
   }
-  await filesystemOperation(() => fs.writeFile(temporary, stableJson(value), { flag: 'wx', mode: 0o600 }).then(() => undefined), relative)
+  await filesystemOperation(() => fs.writeFile(temporary, stableJson(value), { flag: 'wx', mode }).then(() => undefined), relative)
+  await filesystemOperation(() => fs.chmod(temporary, mode), relative)
   await filesystemOperation(() => fs.rename(temporary, absolute), relative)
 }
 
@@ -497,7 +522,7 @@ async function createLock(root: string, runId: string): Promise<LockFact> {
       return classifyLock(root)
     throwFilesystemFault(error, LOCK_ROOT)
   }
-  await atomicWriteJson(root, `${LOCK_ROOT}/owner.json`, { schema: LOCK_SCHEMA, runId })
+  await atomicWriteJson(root, `${LOCK_ROOT}/owner.json`, { kind: LOCK_KIND, format: FORMAT, runId })
   return { state: 'valid', runId }
 }
 
@@ -540,8 +565,6 @@ interface TransactionSourceFacts {
   readonly pathsByDocument: ReadonlyMap<string, ReadonlySet<string>>
   /** 当前候选引用源码与显式证据的整体 SHA-256 指纹。 */
   readonly sourceEvidenceFingerprint: string
-  /** 所有文档引用源码去重后的全仓聚合指纹。 */
-  readonly repositorySourceFingerprint: string
 }
 
 /** 为文档源码声明生成不会与显式证据混淆的所有者键。 */
@@ -591,48 +614,23 @@ async function transactionSourceFacts(root: string, graph: KnowledgeGraph, decla
       })
     }
   }
-  // 全体文档引用源码去重后的文件集合。
-  const repositoryFiles = new Map<string, SourceFile>()
-  for (const [owner, files] of expansion.filesByOwner) {
-    if (!owner.startsWith('document:'))
-      continue
-    files.forEach(file => repositoryFiles.set(file.path, file))
-  }
-  // 全体文档源码声明及文件的聚合指纹。
-  const repositorySourceFingerprint = aggregateSourceFingerprint(
-    [...graph.documents.values()].flatMap(document => document.codePaths),
-    [...repositoryFiles.values()],
-  )
   return {
     expansion,
     ledgers,
     pathsByDocument,
     sourceEvidenceFingerprint: expansion.fingerprint,
-    repositorySourceFingerprint,
   }
 }
 
 /** 校验工作流前置状态和冻结授权，Repair 仅放行受限内容失配。 */
 async function validateBeginInput(input: TransactionBeginInput, live: KnowledgeGraph, git: GitEvidence): Promise<void> {
-  if (input.command === 'repair') {
-    if (input.mode !== 'deep')
-      throw new RuntimeFault('TRANSACTION_MODE_INVALID', 'Repair must use deep mode.')
-    if (input.scope.kind !== 'documents')
-      throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'Repair requires explicit Document IDs.')
-    if (!repairEligible(live))
-      throw new RuntimeFault('REPAIR_NOT_ELIGIBLE', 'Repair requires valid Meta and Documents with only content fingerprint mismatches and no conflict markers.', 'context')
+  if (input.command === 'migrate') {
+    if (input.mode !== 'deep' || input.scope.kind !== 'repository' || input.migrationStrategy === undefined)
+      throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'Migration requires deep repository scope and an explicit strategy.')
+    if (live.meta === undefined || live.contextFingerprint === undefined || live.issues.some(item => item.code !== 'META_DOCUMENT_FINGERPRINT_MISMATCH'))
+      throw new RuntimeFault('MIGRATION_NOT_ELIGIBLE', 'Only structurally valid legacy Context can migrate.')
     if (git.midOperation || git.hasUnmergedPaths)
-      throw new RuntimeFault('REPAIR_GIT_OPERATION_ACTIVE', 'Complete the Git operation before repairing Context.')
-    for (const id of input.scope.ids) {
-      if (!live.documents.has(id))
-        throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', `Repair Document "${id}" does not exist.`)
-    }
-    // Runtime 推导的完整内容修复计划。
-    const plan = repairPlan(live, input.scope.ids)
-    // 未落入授权范围但仍需要修复的首个文档。
-    const outside = plan.items.find(item => !item.selected)
-    if (outside !== undefined)
-      throw new RuntimeFault('REPAIR_SCOPE_INCOMPLETE', `Repair scope excludes ${plan.remainingDocumentCount} mismatched Documents, including "${outside.documentId}". Inspect the complete repair plan before expanding scope.`)
+      throw new RuntimeFault('MIGRATION_GIT_OPERATION_ACTIVE', 'Finish the Git operation before migration.')
   }
   else if (input.command === 'init') {
     if (input.mode !== 'deep')
@@ -649,20 +647,18 @@ async function validateBeginInput(input: TransactionBeginInput, live: KnowledgeG
       throw new RuntimeFault('TRANSACTION_MODE_INVALID', 'Prune must use deep mode.')
     if (input.command === 'prune' && live.sourceState !== 'ready')
       throw new RuntimeFault('TRANSACTION_PRECONDITION_FAILED', 'Prune requires complete current source evidence.')
-    if (input.command === 'prune' && Object.values(live.meta?.documents ?? {}).some(ledger => ledger.reviewRequired === true))
-      throw new RuntimeFault('DOCUMENT_REVIEW_REQUIRED', 'Review repaired Documents through Update before Prune.')
   }
-  if (input.reaffirmedDocumentIds !== undefined) {
+  if (input.confirmedDocumentIds !== undefined) {
     // Init 没有旧审查记录可结清，Prune 也不接受重新确认输入。
     if (input.command !== 'update')
-      throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'Only update may reaffirm Documents.')
+      throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'Only update may confirm Documents.')
     // 未知或范围外的重新确认 ID 必须在获取锁前失败，不能静默跳过或越权结清账本。
     const authorized = authorizedDocumentIds(input.scope, live, live, new Map(), git)
-    for (const id of input.reaffirmedDocumentIds) {
+    for (const id of input.confirmedDocumentIds) {
       if (!live.documents.has(id))
-        throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'A reaffirmed Document does not exist.')
+        throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'A confirmed Document does not exist.')
       if (!authorized.has(id))
-        throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'A reaffirmed Document lies outside the authorized scope.')
+        throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'A confirmed Document lies outside the authorized scope.')
     }
   }
 }
@@ -714,14 +710,18 @@ async function transactionBegin(root: string, input: TransactionBeginInput): Pro
     return lockIncomplete(currentLock.state === 'orphan' ? currentLock.runId : undefined, true)
 
   // 当前正式 Context 快照，用于授权和并发检查。
-  const live = await loadKnowledge(root, undefined, { sourcePolicy: input.command === 'init'
-    ? 'formal-only'
-    : input.command === 'prune'
-      ? 'all-strict'
-      : 'all-tolerant' })
+  const live = input.command === 'migrate'
+    ? (await planLegacyMigration(root, input.migrationStrategy)).graph
+    : await loadKnowledge(root, undefined, { sourcePolicy: input.command === 'init'
+        ? 'formal-only'
+        : input.command === 'prune'
+          ? 'all-strict'
+          : 'all-tolerant' })
   // 严格读取的宿主 Git 证据快照。
   const git = await readGitEvidence(root, input.gitEvidencePath)
   await validateBeginInput(input, live, git)
+  if (live.formalState === 'ready' && input.command !== 'migrate')
+    await readConfirmationStore(root, FORMAT)
   // 事务开始时显式证据的指纹，后续必须保持一致。
   const evidenceFingerprint = await declaredEvidenceFingerprint(root, input.evidencePaths)
   // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
@@ -752,7 +752,11 @@ async function transactionBegin(root: string, input: TransactionBeginInput): Pro
     const directory = await resolveRepositoryPath(root, runPath(runId), true)
     await filesystemOperation(() => fs.mkdir(directory), runPath(runId))
     manifest = {
-      schema: TRANSACTION_SCHEMA,
+      kind: TRANSACTION_KIND,
+      format: FORMAT,
+      derivedConfirmationKeys: [],
+      derivedMetadataFingerprints: [],
+      ...(input.migrationStrategy === undefined ? {} : { migrationStrategy: input.migrationStrategy }),
       runId,
       command: input.command,
       mode: input.mode,
@@ -761,9 +765,9 @@ async function transactionBegin(root: string, input: TransactionBeginInput): Pro
       phase: 'staged',
       gitEvidencePath: input.gitEvidencePath,
       evidencePaths: [...input.evidencePaths].sort(compareCodeUnits),
-      ...(input.reaffirmedDocumentIds === undefined
+      ...(input.confirmedDocumentIds === undefined
         ? {}
-        : { reaffirmedDocumentIds: [...input.reaffirmedDocumentIds].sort(compareCodeUnits) }),
+        : { confirmedDocumentIds: [...input.confirmedDocumentIds].sort(compareCodeUnits) }),
       snapshot: {
         contextState: live.formalState === 'absent' ? 'absent' : 'present',
         ...(live.contextFingerprint === undefined ? {} : { contextFingerprint: live.contextFingerprint }),
@@ -774,7 +778,7 @@ async function transactionBegin(root: string, input: TransactionBeginInput): Pro
     }
     await writeManifest(root, manifest)
     await stageCandidate(root, runId, input.command)
-    return transactionResponse({ outcome: input.command === 'repair' ? 'repair_staged' : 'staged', runId, candidatePath: candidatePath(runId) })
+    return transactionResponse({ outcome: input.command === 'migrate' ? 'migration_staged' : 'staged', runId, candidatePath: candidatePath(runId) })
   }
   catch (error) {
     // 清单写入前不存在可恢复事务，必须释放孤立锁；清单暂存后只有已知安全故障才允许清理现场。
@@ -838,6 +842,7 @@ function authorizedDocumentIds(
     const declarations = [...(live.documents.get(id)?.codePaths ?? []), ...(candidate.documents.get(id)?.codePaths ?? [])]
     // 当前源码及 Git 变更共同证明的具体文件路径。
     const actualPaths = new Set([
+      ...declarations.filter(pattern => !pattern.includes('*')),
       ...(live.sources.get(id) ?? []).map(file => file.path),
       ...(candidatePaths.get(id) ?? []),
       ...gitPaths.filter(changed => declarations.some(declaration => declarationMatches(declaration, changed))),
@@ -870,60 +875,44 @@ function refreshedDocumentIds(
   graph: KnowledgeGraph,
   live: KnowledgeGraph,
   authorized: ReadonlySet<string>,
-  reaffirmed: readonly string[] = [],
+  confirmed: readonly string[] = [],
 ): ReadonlySet<string> {
-  // 调用方明确确认已复核、允许刷新账本的文档 ID。
-  const permitted = new Set(reaffirmed)
+  // 调用方明确确认已复核、允许派生新确认的文档 ID。
+  const permitted = new Set(confirmed)
   return new Set([...graph.documents.keys()].filter(id => authorized.has(id)
-    && (permitted.has(id) || !sameDocument(live.documents.get(id), graph.documents.get(id)))))
+    && (permitted.has(id) || live.documents.get(id) === undefined
+      || frontMatterFingerprint(live.documents.get(id)!) !== frontMatterFingerprint(graph.documents.get(id)!)
+      || bodyFingerprint(live.documents.get(id)!) !== bodyFingerprint(graph.documents.get(id)!))))
 }
 
-/** 推导普通写事务的候选账本，仅在全仓条件满足时推进源码基线。 */
-function deriveMeta(
-  manifest: TransactionManifest,
-  graph: KnowledgeGraph,
-  candidateSources: TransactionSourceFacts,
-  live: KnowledgeGraph,
-  git: GitEvidence,
-  authorized: ReadonlySet<string>,
-): Meta {
-  // 本次已编辑或明确重新确认、需要刷新审查账本的文档集合。
-  const refreshed = refreshedDocumentIds(graph, live, authorized, manifest.reaffirmedDocumentIds)
-  // 仅对获准刷新文档替换记录的候选账本映射。
-  const documents: Record<string, DocumentLedger> = {}
-  for (const id of [...graph.documents.keys()].sort(compareCodeUnits)) {
-    // 当前文档应保留或新推导的持久记录。
-    const ledger = refreshed.has(id) ? candidateSources.ledgers.get(id) : live.meta?.documents[id]
-    if (ledger === undefined)
-      throw new RuntimeFault('CANDIDATE_LEDGER_INCOMPLETE', `Candidate ledger for "${id}" cannot be derived within scope.`)
-    documents[id] = ledger
-  }
-  // 推进基线代表全体文档已核对当前源码；未编辑且未明确重新确认的待审记录会固定基线。未引用路径不影响已有审查，基线提交历史丢失也不妨碍按指纹结清。
-  const settled = [...graph.documents.keys()].every(id =>
-    documents[id]?.reviewRequired !== true && documents[id]?.sourceFingerprint === candidateSources.ledgers.get(id)?.sourceFingerprint)
-  // 全仓授权、Git 非进行中且全部审查结清时才允许推进基线。
-  const scopeCanAdvance = manifest.scope.kind === 'repository'
-    && !git.midOperation
-    && settled
-  // 允许保留或推进的全仓源码审查基线。
-  const repository = manifest.command === 'init' || (manifest.command === 'update' && scopeCanAdvance)
-    ? { baseline: { revision: git.currentRevision, sourceFingerprint: candidateSources.repositorySourceFingerprint } }
-    : live.meta?.repository
-  // Init/Prune 建立的规模基线，其他流程应保持不变。
+/** 推导唯一入口；Update 永不推进任何基线。 */
+function deriveMetadata(manifest: TransactionManifest, graph: KnowledgeGraph, live: KnowledgeGraph): MetadataManifest {
+  // 仅 Init/Prune 可建立的规模基线，Update 原样保留。
   const convergence = manifest.command === 'init'
     ? convergenceBaseline(graph, 'init')
-    : manifest.command === 'prune'
-      ? convergenceBaseline(graph, 'prune')
-      : live.meta?.convergence
-  return {
-    schema: live.meta?.schema ?? META_SCHEMA,
-    toolVersion: TOOL_VERSION,
-    runtimeProtocol: PROTOCOL,
-    fingerprintVersion: FINGERPRINT_VERSION,
-    documents,
-    ...(repository === undefined ? {} : { repository }),
-    ...(convergence === undefined ? {} : { convergence }),
+    : manifest.command === 'prune' ? convergenceBaseline(graph, 'prune') : live.metadata?.convergence
+  return { format: FORMAT, ...(live.metadata?.repository === undefined ? {} : { repository: live.metadata.repository }), ...(convergence === undefined ? {} : { convergence }) }
+}
+
+/** 校验清单中的累计所有权集合，拒绝重复或伪造形状。 */
+function validHashes(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(key => typeof key === 'string' && HASH.test(key)) && new Set(value).size === value.length
+}
+
+/** 由本轮完整来源事实推导获准文档的不可变记录。 */
+function deriveRecords(manifest: TransactionManifest, graph: KnowledgeGraph, live: KnowledgeGraph, sources: TransactionSourceFacts, authorized: ReadonlySet<string>): ReadonlyMap<string, ConfirmationRecord> {
+  // 由完整四字段元组组成的确认集合，无 latest 指针。
+  const records = new Map<string, ConfirmationRecord>()
+  for (const documentId of refreshedDocumentIds(graph, live, authorized, manifest.confirmedDocumentIds)) {
+    // 本轮完整来源事实生成的摘要，不能复用旧账本冒充当前证据。
+    const ledger = sources.ledgers.get(documentId)
+    if (ledger === undefined)
+      throw new RuntimeFault('CANDIDATE_SOURCE_INVALID', 'A confirmed Document requires complete current sources.')
+    // 当前获准文档的完整确认元组。
+    const record = { documentId, ...ledger }
+    records.set(confirmationKey(FORMAT, record), record)
   }
+  return records
 }
 
 /** 确认正式 Context 仍与事务建立时的快照一致。 */
@@ -1071,41 +1060,137 @@ async function preSwitchFailure(root: string, manifest: TransactionManifest, err
   throw error
 }
 
-/** 验证 Repair 保留每个 Markdown 字节、路径和权限，且账本只能是 Runtime 的受限推导。 */
-async function assertRepairCandidate(root: string, manifest: TransactionManifest, derived: Meta): Promise<void> {
-  // 当前事务或资源要写入的安全目标路径。
+/** 检查候选元数据所有权；旧记录按字节和权限保护，新文件必须属于本 run。 */
+async function assertManagedCandidate(root: string, manifest: TransactionManifest, finalRecords?: ReadonlyMap<string, ConfirmationRecord>): Promise<void> {
+  // 本 run 独占的候选 Context 目录。
   const destination = candidatePath(manifest.runId)
-  const [before, after] = await Promise.all([readTree(root, CONTEXT_ROOT), readTree(root, destination)])
-  // 正式目录中除账本外的全部文档文件，用于逐字节保护。
-  const documentsBefore = before.filter(file => file.path !== `${CONTEXT_ROOT}/meta.json`)
-  // 候选目录中除账本外的全部文档文件，用于逐字节对比。
-  const documentsAfter = after.filter(file => file.path !== `${destination}/meta.json`)
-  if (documentsBefore.length !== documentsAfter.length || documentsBefore.some((file, index) => {
-    // 与当前正式文档对应的候选文件，或候选账本文件。
-    const candidate = documentsAfter[index]!
-    return file.path.slice(CONTEXT_ROOT.length) !== candidate.path.slice(destination.length)
-      || file.mode !== candidate.mode || !file.bytes.equals(candidate.bytes)
-  })) {
-    throw new RuntimeFault('REPAIR_DOCUMENT_CHANGED', 'Repair must preserve all Document bytes, paths and permissions. Use Update after repair for content changes.')
+  // 原始正式快照中的文件字节与权限。
+  const before = manifest.snapshot.contextState === 'absent' ? [] : await readTree(root, CONTEXT_ROOT)
+  // 候选文件的实际字节与权限。
+  const after = await readTree(root, destination)
+  // 用于保护既有证据的正式文件集合。
+  const original = new Map(before.map(file => [file.path.slice(CONTEXT_ROOT.length + 1), file]))
+  // 候选当前状态，不能自动吸收外部修改。
+  const candidate = new Map(after.map(file => [file.path.slice(destination.length + 1), file]))
+  // 是否执行历史转换；迁移不确认当前源码。
+  const migration = manifest.command === 'migrate'
+  if (migration && !candidate.has('meta.json') && manifest.derivedMetadataFingerprints.length === 0)
+    throw new RuntimeFault('MIGRATION_CANDIDATE_CHANGED', 'Only Runtime may remove the original entry during conversion.')
+  if (!migration && original.has('.meta/manifest.json') && !candidate.has('.meta/manifest.json'))
+    throw new RuntimeFault('METADATA_MUTATION_FORBIDDEN', 'An existing metadata entry cannot be removed.')
+  for (const [relative, file] of original) {
+    if (migration && relative === 'meta.json')
+      continue
+    if (!migration && !relative.startsWith('.meta/'))
+      continue
+    if (!migration && relative === '.meta/manifest.json')
+      continue
+    // 候选中与原始文件对应的条目。
+    const next = candidate.get(relative)
+    if (next === undefined || next.mode !== file.mode || !next.bytes.equals(file.bytes))
+      throw new RuntimeFault('CONFIRMATION_MUTATION_FORBIDDEN', 'Existing confirmations, or migrating Markdown, must remain byte-exact with permissions.', `context/${relative}`)
   }
-  // 修改前应保留的原始对象或字节快照。
-  const original = before.find(file => file.path === `${CONTEXT_ROOT}/meta.json`)!
-  // 与当前正式文档对应的候选文件，或候选账本文件。
-  const candidate = after.find(file => file.path === `${destination}/meta.json`)
-  if (candidate === undefined || (!candidate.bytes.equals(original.bytes) && candidate.bytes.toString('utf8') !== serializeMeta(derived)))
-    throw new RuntimeFault('REPAIR_META_CHANGED', 'Only the Runtime may derive the restricted repair ledger.')
+  for (const [relative, file] of candidate) {
+    if (relative === 'meta.json') {
+      // 同路径原始文件，用于区分历史记录与本 run 新增内容。
+      const prior = original.get(relative)
+      if (!migration || prior === undefined || !file.bytes.equals(prior.bytes) || file.mode !== prior.mode || finalRecords !== undefined)
+        throw new RuntimeFault('MIGRATION_CANDIDATE_CHANGED', 'Only Runtime may remove the original legacy entry.')
+      continue
+    }
+    if (!relative.startsWith('.meta/')) {
+      if (migration && !original.has(relative))
+        throw new RuntimeFault('MIGRATION_DOCUMENT_CHANGED', 'Migration cannot add or change Markdown.')
+      continue
+    }
+    // 同路径原始文件，用于区分历史记录与本 run 新增内容。
+    const prior = original.get(relative)
+    if (prior !== undefined && file.mode === prior.mode && file.bytes.equals(prior.bytes))
+      continue
+    if (relative === '.meta/manifest.json') {
+      if (!manifest.derivedMetadataFingerprints.includes(sha256(file.bytes)) || file.mode !== 0o644)
+        throw new RuntimeFault('METADATA_MUTATION_FORBIDDEN', 'Only Runtime may derive metadata.')
+      continue
+    }
+    // 受控记录路径解析结果，必须匹配已登记的内容身份。
+    const match = /^\.meta\/confirmations\/([^/]+)\/([a-f0-9]{64})\.json$/.exec(relative)
+    if (match === null || !manifest.derivedConfirmationKeys.includes(match[2]!) || file.mode !== 0o644)
+      throw new RuntimeFault('CONFIRMATION_MUTATION_FORBIDDEN', 'Only Runtime may derive new confirmations.', `context/${relative}`)
+    parseConfirmation(FORMAT, match[1]!, match[2]!, file.bytes.toString('utf8'))
+    if (finalRecords !== undefined && !finalRecords.has(match[2]!))
+      throw new RuntimeFault('CONFIRMATION_MUTATION_FORBIDDEN', 'Obsolete derived confirmation remains in candidate.')
+  }
+  if (finalRecords !== undefined) {
+    for (const [key, record] of finalRecords) {
+      if (candidate.get(`.meta/confirmations/${record.documentId}/${key}.json`)?.bytes.toString('utf8') !== stableJson(record as unknown as JsonValue))
+        throw new RuntimeFault('CANDIDATE_SOURCE_STALE', 'Expected confirmation does not match the candidate.')
+    }
+  }
 }
 
-/** 为 Repair 提取有界计划摘要，不返回整份文档正文。 */
-function repairSummary(manifest: TransactionManifest, live: KnowledgeGraph) {
-  if (manifest.command !== 'repair' || manifest.scope.kind !== 'documents')
-    return {}
-  // Runtime 推导的完整内容修复计划。
-  const plan = repairPlan(live, manifest.scope.ids)
-  return { repair: { documentCount: plan.selectedDocumentCount, planFingerprint: plan.planFingerprint } }
+/** 在写文件前持久化累计所有权，重试只清理本 run 的过期派生记录。 */
+async function writeDerivedMetadata(root: string, manifest: TransactionManifest, metadata: MetadataManifest, records: ReadonlyMap<string, ConfirmationRecord>): Promise<TransactionManifest> {
+  await assertManagedCandidate(root, manifest)
+  // 本 run 独占的候选 Context 目录。
+  const destination = candidatePath(manifest.runId)
+  // 用于保护既有证据的正式文件集合。
+  const original = manifest.snapshot.contextState === 'absent' ? [] : await readTree(root, CONTEXT_ROOT)
+  // 既有正式文件路径，清理派生内容时必须保留。
+  const originalPaths = new Set(original.map(file => file.path.slice(CONTEXT_ROOT.length + 1)))
+  // 在文件写入之前登记的本 run 所有权事实。
+  const owned: TransactionManifest = { ...baseFacts(manifest), phase: 'staged', derivedConfirmationKeys: [...new Set([...manifest.derivedConfirmationKeys, ...records.keys()])].sort(compareCodeUnits), derivedMetadataFingerprints: [...new Set([...manifest.derivedMetadataFingerprints, sha256(serializeMetadataManifest(metadata))])].sort(compareCodeUnits) }
+  await writeManifest(root, owned)
+  for (const file of await readTree(root, destination)) {
+    // 相对候选根目录的受控路径。
+    const relative = file.path.slice(destination.length + 1)
+    // 受控记录路径解析结果，必须匹配已登记的内容身份。
+    const match = /^\.meta\/confirmations\/[^/]+\/([a-f0-9]{64})\.json$/.exec(relative)
+    if (match !== null && !originalPaths.has(relative) && !records.has(match[1]!))
+      await filesystemOperation(() => fs.rm(path.join(root, file.path)), file.path)
+  }
+  // 正式元数据文件与记录使用固定权限；重复写入保留原有字节和权限。
+  await ensureDirectory(root, `${destination}/.meta`)
+  // 唯一格式入口的候选路径。
+  const metadataPath = `${destination}/.meta/manifest.json`
+  // 本次实际观察到的资源状态。
+  const current = await lstatRepositoryPath(root, metadataPath)
+  if (current === undefined || await readUtf8File(root, metadataPath, MAX_JSON_TEXT_BYTES) !== serializeMetadataManifest(metadata))
+    await atomicWriteJson(root, metadataPath, metadata as unknown as JsonValue, 0o644)
+  for (const [key, record] of records) {
+    // 相对候选根目录的受控路径。
+    const relative = `${destination}/.meta/confirmations/${record.documentId}/${key}.json`
+    if (await lstatRepositoryPath(root, relative) === undefined) {
+      await ensureDirectory(root, `${destination}/.meta/confirmations/${record.documentId}`)
+      await atomicWriteJson(root, relative, record as unknown as JsonValue, 0o644)
+    }
+  }
+  if (manifest.command === 'migrate' && await lstatRepositoryPath(root, `${destination}/meta.json`) !== undefined)
+    await filesystemOperation(() => fs.rm(path.join(root, destination, 'meta.json')), `${destination}/meta.json`)
+  return owned
 }
 
-/** 校验候选与授权、推导账本并绑定源码证据；dry-run 在此安全结束。 */
+/** 回收已登记派生目标的临时叶子；部分写入也不应阻止安全重试。 */
+async function recoverDerivedTemps(root: string, manifest: TransactionManifest): Promise<void> {
+  // 本 run 独占的候选 Context 目录。
+  const destination = candidatePath(manifest.runId)
+  for (const file of await readTree(root, destination)) {
+    // 相对候选根目录的受控路径。
+    const relative = file.path.slice(destination.length + 1)
+    if (!relative.endsWith('.tmp'))
+      continue
+    // 受控记录路径解析结果，必须匹配已登记的内容身份。
+    const match = /^\.meta\/confirmations\/[a-z0-9.-]+\/([a-f0-9]{64})\.json\.tmp$/.exec(relative)
+    // 在文件写入之前登记的本 run 所有权事实。
+    const owned = relative === '.meta/manifest.json.tmp'
+      ? manifest.derivedMetadataFingerprints.length > 0
+      : match !== null && manifest.derivedConfirmationKeys.includes(match[1]!)
+    if (!owned)
+      throw new RuntimeFault('TRANSACTION_TEMP_INVALID', 'An unowned candidate temporary file must not be removed.')
+    await filesystemOperation(() => fs.rm(path.join(root, file.path)), file.path)
+  }
+}
+
+/** 校验候选与授权、推导确认并绑定源码证据；dry-run 在此安全结束。 */
 async function transactionValidate(root: string, input: TransactionValidateInput): Promise<RuntimeResponse> {
   // 已解析的事务阶段、冻结输入和恢复事实。
   let manifest = await loadManifest(root, input.runId)
@@ -1125,99 +1210,72 @@ async function transactionValidate(root: string, input: TransactionValidateInput
   }
 
   try {
-    // 当前正式 Context 快照，用于授权和并发检查。
-    const live = await loadKnowledge(root, undefined, { sourcePolicy: 'all-tolerant' })
-    if ((manifest.snapshot.contextState === 'absent' && live.formalState !== 'absent')
-      || (manifest.snapshot.contextState === 'present' && (manifest.command === 'repair' ? !repairEligible(live) : live.formalState !== 'ready'))) {
-      await assertSnapshotFresh(root, manifest)
-      throw new RuntimeFault('FORMAL_CONTEXT_CONFLICT', 'Formal Context changed after transaction begin.')
-    }
-    if (manifest.command === 'repair')
+    await recoverDerivedTemps(root, manifest)
+    // 是否执行历史转换；迁移不确认当前源码。
+    const migration = manifest.command === 'migrate' ? await planLegacyMigration(root, manifest.migrationStrategy) : undefined
+    // 正式 Context 快照；只读，不由候选编写者修改。
+    const live = migration?.graph ?? await loadKnowledge(root, undefined, { sourcePolicy: 'all-tolerant' })
+    if (manifest.command === 'migrate')
       await validateBeginInput(manifest, live, git)
-    // 本次正在校验或推导的候选值。
-    const candidate = await loadKnowledge(root, candidatePath(manifest.runId), {
-      ignoreMeta: true,
-      requireMeta: false,
-      sourcePolicy: 'formal-only',
-    })
-    if (candidate.formalState !== 'ready')
-      return candidateEditRequired(manifest, candidateDiagnostics(candidate))
-    // Repair 专属的受限账本推导结果，不刷新源码审查依据。
-    const repaired = manifest.command === 'repair' && manifest.scope.kind === 'documents'
-      ? repairMeta(live, manifest.scope.ids)
-      : undefined
-    if (repaired !== undefined)
-      await assertRepairCandidate(root, manifest, repaired)
-    // 按文档或来源组织的当前证据集合。
-    const sources = await transactionSourceFacts(root, candidate, manifest.evidencePaths)
-    if (sources.expansion.issues.length > 0) {
-      try {
-        await assertPreSwitchSnapshotFresh(root, manifest)
-      }
-      catch (error) {
-        return preSwitchFailure(root, manifest, error)
-      }
-      return candidateEditRequired(manifest, candidateDiagnostics(candidate, sources))
+    // 由完整四字段元组组成的确认集合，无 latest 指针。
+    let records: ReadonlyMap<string, ConfirmationRecord>
+    // 本次批准绑定的完整实际来源证据摘要。
+    let sourceEvidenceFingerprint: string
+    // 按工作流规则推导的格式入口与保留基线。
+    let metadata: MetadataManifest
+    if (migration !== undefined) {
+      records = migration.records
+      metadata = migration.metadata
+      sourceEvidenceFingerprint = await declaredEvidenceFingerprint(root, manifest.evidencePaths)
     }
-    // 由冻结范围推导出的可写文档 ID 集合。
-    const authorized = authorizedDocumentIds(manifest.scope, live, candidate, sources.pathsByDocument, git)
-    // 候选中发生修改但没有获得授权的文档 ID。
-    const outsideScope = scopeMutationIssues(live, candidate, authorized)
-    if (outsideScope.length > 0) {
-      return candidateEditRequired(manifest, [diagnostic(
-        'CANDIDATE_SCOPE_VIOLATION',
-        'Candidate modifies a Document outside the authorized scope.',
-        'error',
-        candidate.documents.get(outsideScope[0] as string)?.path ?? live.documents.get(outsideScope[0] as string)?.path,
-      )])
+    else {
+      // 候选当前状态，不能自动吸收外部修改。
+      const candidate = await loadKnowledge(root, candidatePath(manifest.runId), { ignoreMeta: true, requireMeta: false, sourcePolicy: 'formal-only' })
+      if (candidate.formalState !== 'ready')
+        return candidateEditRequired(manifest, candidateDiagnostics(candidate))
+      // 候选声明和显式证据的去重读取事实。
+      const sources = await transactionSourceFacts(root, candidate, manifest.evidencePaths)
+      if (sources.expansion.issues.length > 0)
+        return candidateEditRequired(manifest, candidateDiagnostics(candidate, sources))
+      // 从 begin 固定范围推导出的可写文档集合。
+      const authorized = authorizedDocumentIds(manifest.scope, live, candidate, sources.pathsByDocument, git)
+      if (scopeMutationIssues(live, candidate, authorized).length > 0)
+        return candidateEditRequired(manifest, [diagnostic('CANDIDATE_SCOPE_VIOLATION', 'Candidate modifies a Document outside authorized scope.')])
+      if (manifest.command === 'prune' && (live.sourceState !== 'ready' || pruneCoverageIssues(live, sources).length > 0))
+        return candidateEditRequired(manifest, [diagnostic('PRUNE_COVERAGE_LOST', 'Prune requires complete existing source coverage.')])
+      records = deriveRecords(manifest, candidate, live, sources, authorized)
+      metadata = deriveMetadata(manifest, candidate, live)
+      sourceEvidenceFingerprint = sources.sourceEvidenceFingerprint
     }
-    if (manifest.command === 'prune') {
-      if (live.sourceState !== 'ready')
-        return candidateEditRequired(manifest, [diagnostic('PRUNE_SOURCE_DEGRADED', 'Prune requires complete live source coverage.')])
-      // Prune 候选丢失的原有源码覆盖路径。
-      const lost = pruneCoverageIssues(live, sources)
-      if (lost.length > 0)
-        return candidateEditRequired(manifest, [diagnostic('PRUNE_COVERAGE_LOST', 'Prune candidate loses existing source coverage.', 'error', lost[0])])
-    }
-    // 当前事务按规则推导出的最终候选账本。
-    const derived = repaired ?? deriveMeta(manifest, candidate, sources, live, git, authorized)
-    // 本次修复的数量、迁移标志和计划指纹摘要。
-    const summary = repairSummary(manifest, live)
-    if (summary.repair?.documentCount !== 0)
-      await atomicWriteJson(root, `${candidatePath(manifest.runId)}/meta.json`, JSON.parse(serializeMeta(derived)) as JsonValue)
-    // 候选写入账本后重新读取的严格校验结果。
+    manifest = await writeDerivedMetadata(root, manifest, metadata, records)
+    // 写入机器文件后重新读取的候选结构。
     const validated = await loadKnowledge(root, candidatePath(manifest.runId), { sourcePolicy: 'formal-only' })
     if (validated.formalState !== 'ready' || validated.contextFingerprint === undefined)
       return candidateEditRequired(manifest, candidateDiagnostics(validated))
-    // 候选最终复验时取得的源码事实，用于检测验证过程中的变化。
-    const finalSources = await transactionSourceFacts(root, validated, manifest.evidencePaths)
-    if (finalSources.expansion.issues.length > 0 || finalSources.sourceEvidenceFingerprint !== sources.sourceEvidenceFingerprint) {
-      try {
-        await assertPreSwitchSnapshotFresh(root, manifest)
-      }
-      catch (error) {
-        return preSwitchFailure(root, manifest, error)
-      }
-      return candidateEditRequired(manifest, candidateDiagnostics(validated, finalSources))
+    await readConfirmationStore(root, FORMAT, candidatePath(manifest.runId))
+    await assertManagedCandidate(root, manifest, records)
+    // 最终来源采样，用于拒绝验证过程中的输入变化。
+    const finalSources = migration === undefined ? await transactionSourceFacts(root, validated, manifest.evidencePaths) : undefined
+    if (finalSources !== undefined) {
+      if (finalSources.expansion.issues.length > 0 || finalSources.sourceEvidenceFingerprint !== sourceEvidenceFingerprint)
+        return candidateEditRequired(manifest, [diagnostic('CANDIDATE_SOURCE_STALE', 'Sources changed during validation.'), ...candidateDiagnostics(validated, finalSources)])
+      // 从 begin 固定范围推导出的可写文档集合。
+      const authorized = authorizedDocumentIds(manifest.scope, live, validated, finalSources.pathsByDocument, git)
+      if (scopeMutationIssues(live, validated, authorized).length > 0)
+        return candidateEditRequired(manifest, [diagnostic('CANDIDATE_SCOPE_VIOLATION', 'Candidate changed outside scope during validation.')])
+      await assertManagedCandidate(root, manifest, deriveRecords(manifest, validated, live, finalSources, authorized))
     }
-    for (const id of manifest.command === 'repair' ? [] : refreshedDocumentIds(validated, live, authorized, manifest.reaffirmedDocumentIds)) {
-      // 持久账本保存的上次审查或内容一致性记录。
-      const recorded = validated.meta?.documents[id]
-      // 本轮处理的节点或重新读取的状态。
-      const current = finalSources.ledgers.get(id)
-      if (recorded === undefined || current === undefined || recorded.sourceFingerprint !== current.sourceFingerprint)
-        return candidateEditRequired(manifest, [diagnostic('CANDIDATE_SOURCE_STALE', 'Candidate source evidence changed during validation.')])
+    if (serializeMetadataManifest(validated.metadata!) !== serializeMetadataManifest(metadata)
+      || await fingerprintTree(root, candidatePath(manifest.runId)) !== validated.contextFingerprint) {
+      return candidateEditRequired(manifest, [diagnostic('CANDIDATE_CHANGED', 'Candidate changed during final validation.')])
     }
-    // 最终候选目录的精确 SHA-256 指纹。
-    const candidateFingerprint = validated.contextFingerprint as string
-    // 最终源码与显式证据集合的整体 SHA-256 指纹。
-    const sourceEvidenceFingerprint = finalSources.sourceEvidenceFingerprint
-    try {
-      await assertPreSwitchSnapshotFresh(root, manifest)
-    }
-    catch (error) {
-      return preSwitchFailure(root, manifest, error)
-    }
+    // 即将获得批准的完整候选树摘要。
+    const candidateFingerprint = validated.contextFingerprint
+    // 既有正式确认身份，用于统计真正新增的记录。
+    const originalKeys = live.metadata === undefined ? new Set<string>() : new Set([...(await readConfirmationStore(root, FORMAT)).records.values()].flatMap(records => [...records.keys()]))
+    // 有界确认摘要，完整记录仍在候选中接受审查。
+    const summary = { confirmation: { documentCount: records.size, newRecordCount: [...records.keys()].filter(key => !originalKeys.has(key)).length, planFingerprint: migration?.planFingerprint ?? sha256(stableJson([...records.keys()].sort(compareCodeUnits))) } }
+    await assertPreSwitchSnapshotFresh(root, manifest)
     // 重新验证总是丢弃旧批准和恢复事实，只保留冻结输入及本次重新计算的两个指纹。
     manifest = { ...baseFacts(manifest), phase: 'validated', candidateFingerprint, sourceEvidenceFingerprint }
     if (manifest.snapshot.contextState === 'present' && candidateFingerprint === manifest.snapshot.contextFingerprint) {
@@ -1238,7 +1296,7 @@ async function transactionValidate(root: string, input: TransactionValidateInput
   catch (error) {
     if (!(error instanceof RuntimeFault))
       throw error
-    if (error.code === 'REPOSITORY_IO_FAILED')
+    if (error.code === 'REPOSITORY_IO_FAILED' || SNAPSHOT_CONFLICTS.has(error.code))
       return preSwitchFailure(root, manifest, error)
     return candidateEditRequired(manifest, error.diagnostics)
   }
@@ -1257,21 +1315,34 @@ async function validatedFacts(root: string, manifest: TransactionManifest): Prom
   const graph = await loadKnowledge(root, candidatePath(manifest.runId), { sourcePolicy: 'formal-only' })
   if (graph.formalState !== 'ready' || graph.contextFingerprint === undefined)
     throw new RuntimeFault('CANDIDATE_INVALID', 'The transaction candidate is not a complete valid Context tree.')
-  if (manifest.command === 'repair' && manifest.scope.kind === 'documents') {
-    // 当前正式 Context 快照，用于授权和并发检查。
-    const live = await loadKnowledge(root, undefined, { sourcePolicy: 'formal-only' })
-    if (!repairEligible(live))
-      throw new RuntimeFault('CANDIDATE_INVALID', 'The original Context is no longer eligible for repair.')
-    await assertRepairCandidate(root, manifest, repairMeta(live, manifest.scope.ids))
-  }
-  // 按文档或来源组织的当前证据集合。
-  const sources = await transactionSourceFacts(root, graph, manifest.evidencePaths)
-  if (sources.expansion.issues.length > 0)
+  await readConfirmationStore(root, FORMAT, candidatePath(manifest.runId))
+  // 是否执行历史转换；迁移不确认当前源码。
+  const migration = manifest.command === 'migrate' ? await planLegacyMigration(root, manifest.migrationStrategy) : undefined
+  // 正式 Context 快照；只读，不由候选编写者修改。
+  const live = migration?.graph ?? await loadKnowledge(root, undefined, { sourcePolicy: 'all-tolerant' })
+  // 候选声明和显式证据的去重读取事实。
+  const sources = migration === undefined ? await transactionSourceFacts(root, graph, manifest.evidencePaths) : undefined
+  if (sources !== undefined && sources.expansion.issues.length > 0)
     throw new RuntimeFault('CANDIDATE_SOURCE_INVALID', 'The transaction candidate source evidence is incomplete.')
+  // 由完整四字段元组组成的确认集合，无 latest 指针。
+  const records = migration?.records ?? deriveRecords(manifest, graph, live, sources!, authorizedDocumentIds(manifest.scope, live, graph, sources!.pathsByDocument, await readGitEvidence(root, manifest.gitEvidencePath)))
+  await assertManagedCandidate(root, manifest, records)
+  // 依据固定工作流规则重新推导的入口，用于拒绝过期或改写状态。
+  const expectedMetadata = migration?.metadata ?? deriveMetadata(manifest, graph, live)
+  if (serializeMetadataManifest(graph.metadata!) !== serializeMetadataManifest(expectedMetadata))
+    throw new RuntimeFault('CANDIDATE_INVALID', 'Candidate metadata differs from the derived entry.')
+  // 重新采样候选和来源，避免在多个 await 间接受混合快照。
+  const sourceEvidenceFingerprint = sources?.sourceEvidenceFingerprint ?? await declaredEvidenceFingerprint(root, manifest.evidencePaths)
+  // 最终来源采样，用于拒绝验证过程中的输入变化。
+  const finalSources = migration === undefined ? await transactionSourceFacts(root, graph, manifest.evidencePaths) : undefined
+  if ((finalSources !== undefined && (finalSources.expansion.issues.length > 0 || finalSources.sourceEvidenceFingerprint !== sourceEvidenceFingerprint))
+    || await fingerprintTree(root, candidatePath(manifest.runId)) !== graph.contextFingerprint) {
+    throw new RuntimeFault('CANDIDATE_SOURCE_INVALID', 'Candidate or sources changed during revalidation.')
+  }
   return {
     graph,
     candidateFingerprint: graph.contextFingerprint,
-    sourceEvidenceFingerprint: sources.sourceEvidenceFingerprint,
+    sourceEvidenceFingerprint,
   }
 }
 
@@ -1356,6 +1427,7 @@ async function finalizeCommitted(
   const graph = await loadKnowledge(root, undefined, { sourcePolicy: 'formal-only' })
   if (graph.formalState !== 'ready' || graph.contextFingerprint !== manifest.candidateFingerprint)
     throw new RuntimeFault('FINAL_VERIFICATION_FAILED', 'Committed Context failed final schema or graph verification.')
+  await readConfirmationStore(root, FORMAT)
   // 已通过最终复验、即将持久保存的提交完成清单。
   const committed: TransactionManifest = {
     ...baseFacts(manifest),
@@ -1411,7 +1483,7 @@ async function noTrustedCopy(root: string, manifest: ApprovedManifest): Promise<
   return transactionResponse({ outcome: 'no_trusted_copy', runId: manifest.runId })
 }
 
-/** 记录回退完成后清理现场；Repair 回退仍报告原有失配未修复。 */
+/** 记录回退完成后清理现场；Migrate 回退明确报告旧布局尚未转换。 */
 async function backupRestored(root: string, manifest: ApprovedManifest): Promise<RuntimeResponse> {
   // 记录原始快照已经恢复的事务终态清单。
   const restored: TransactionManifest = { ...manifest, phase: 'restored', recovery: { outcome: 'backup_restored' } }
@@ -1421,8 +1493,8 @@ async function backupRestored(root: string, manifest: ApprovedManifest): Promise
     outcome: 'backup_restored',
     runId: manifest.runId,
     contextFingerprint: manifest.snapshot.contextFingerprint as string,
-  }, manifest.command === 'repair'
-    ? [diagnostic('REPAIR_ROLLED_BACK', 'The original snapshot was restored. Its content fingerprint mismatches remain; repair did not complete.', 'warning', CONTEXT_ROOT)]
+  }, manifest.command === 'migrate'
+    ? [diagnostic('MIGRATION_ROLLED_BACK', 'The original snapshot was restored. Migration did not complete.', 'warning', CONTEXT_ROOT)]
     : undefined)
   await cleanupTerminalArtifacts(root, restored)
   return response
@@ -1508,7 +1580,7 @@ async function recoverCommitting(root: string, manifest: ApprovedManifest): Prom
 
 /** 复核快照、候选和批准后切换目录，已知切换故障进入恢复决策。 */
 async function transactionCommit(root: string, input: TransactionCommitInput): Promise<RuntimeResponse> {
-  // 候选写入账本后重新读取的严格校验结果。
+  // 候选写入确认后重新读取的严格校验结果。
   const validated = await loadManifest(root, input.runId)
   if (validated.phase !== 'validated')
     throw new RuntimeFault('TRANSACTION_PHASE_INVALID', 'transaction.commit requires a validated run.')
@@ -1620,7 +1692,7 @@ async function resumeStaged(root: string, manifest: TransactionManifest): Promis
       return preSwitchFailure(root, manifest, error)
     }
   }
-  return transactionResponse({ outcome: manifest.command === 'repair' ? 'repair_staged' : 'staged', runId: manifest.runId, candidatePath: candidatePath(manifest.runId) })
+  return transactionResponse({ outcome: manifest.command === 'migrate' ? 'migration_staged' : 'staged', runId: manifest.runId, candidatePath: candidatePath(manifest.runId) })
 }
 
 /** 复核已验证事务，返回待审结果或撤销过期验证。 */
@@ -1639,7 +1711,7 @@ async function resumeValidated(root: string, manifest: ValidatedManifest): Promi
   catch (error) {
     if (!(error instanceof RuntimeFault))
       throw error
-    if (error.code === 'REPOSITORY_IO_FAILED')
+    if (error.code === 'REPOSITORY_IO_FAILED' || SNAPSHOT_CONFLICTS.has(error.code))
       return preSwitchFailure(root, manifest, error)
     if (error.code === 'CANDIDATE_INVALID')
       return candidateEditRequired(manifest, error.diagnostics)
@@ -1650,17 +1722,13 @@ async function resumeValidated(root: string, manifest: ValidatedManifest): Promi
     return candidateStale(root, manifest)
   }
   const { candidateFingerprint, sourceEvidenceFingerprint } = facts
-  // 本次修复的数量、迁移标志和计划指纹摘要。
-  const summary = manifest.command === 'repair'
-    ? repairSummary(manifest, await loadKnowledge(root, undefined, { sourcePolicy: 'formal-only' }))
-    : {}
   if (manifest.dryRun) {
     // 当前能力按协议构造的结果响应。
-    const response = transactionResponse({ outcome: 'validated', runId: manifest.runId, candidateFingerprint, sourceEvidenceFingerprint, ...summary })
+    const response = transactionResponse({ outcome: 'validated', runId: manifest.runId, candidateFingerprint, sourceEvidenceFingerprint })
     await cleanupTerminalArtifacts(root, manifest)
     return response
   }
-  return transactionResponse({ outcome: 'ready_for_review', runId: manifest.runId, candidateFingerprint, sourceEvidenceFingerprint, ...summary })
+  return transactionResponse({ outcome: 'ready_for_review', runId: manifest.runId, candidateFingerprint, sourceEvidenceFingerprint })
 }
 
 /** 重新证明清单记录的终态与当前副本一致后才清理现场。 */
@@ -1722,7 +1790,7 @@ async function transactionResume(root: string, input: TransactionResumeInput): P
  * @param request - 当前能力的请求；除入口解析函数外应已通过协议校验。
  * @returns 当前动作的事务响应，具体 outcome 指明继续、清理或人工恢复要求。
  * @throws 可预期错误按阶段转换为响应；未知异常继续抛出并保留需要恢复的现场。
- * @remarks 调用阶段：显式授权后的事务 begin、validate、commit 或 resume；按阶段写入自有候选、账本及恢复现场。
+ * @remarks 调用阶段：显式授权后的事务 begin、validate、commit 或 resume；按阶段写入自有候选、确认及恢复现场。
  */
 export async function transaction(root: string, request: RuntimeRequest): Promise<RuntimeResponse> {
   switch (request.action) {

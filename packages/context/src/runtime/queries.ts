@@ -1,6 +1,7 @@
 import type { ContextDocument, Metrics } from './document.js'
 import type { KnowledgeGraph } from './graph.js'
 import type {
+  ConfirmationCheckInput,
   CursorPosition,
   Diagnostic,
   FeedbackMatchInput,
@@ -11,25 +12,28 @@ import type {
 } from './protocol.js'
 import type { JsonObject, JsonValue } from './stable-json.js'
 import { Buffer } from 'node:buffer'
+import { checkConfirmations, readConfirmationStore, selectDocumentIds } from './confirmation.js'
 import { bodyFingerprint } from './document.js'
-import { documentMetadata, graphMetrics, loadKnowledge, requiresClosure, reviewPendingIds } from './graph.js'
+import { documentMetadata, graphMetrics, loadKnowledge, requiresClosure } from './graph.js'
+import { planLegacyMigration } from './migration.js'
 import {
   decodeCursor,
   diagnostic,
   encodeCursor,
   fitBodyChunk,
+  FORMAT,
   paginate,
   resolvedBudget,
   RuntimeFault,
   runtimeResponse,
   sha256,
 } from './protocol.js'
-import { repairEligible, repairPlan } from './repair.js'
 import {
   assertSourcePattern,
   declarationMatches,
   decodeUtf8,
   FEEDBACK_ROOT,
+  inspectMetadataLayout,
   LOCK_ROOT,
   MAX_JSON_TEXT_BYTES,
   pathExists,
@@ -42,7 +46,7 @@ import {
 import { compactJson, compareCodeUnits } from './stable-json.js'
 
 // 检查活动事务时认可的工作流命令集合。
-const TRANSACTION_COMMANDS = new Set(['init', 'update', 'prune', 'repair'])
+const TRANSACTION_COMMANDS = new Set(['init', 'update', 'prune', 'migrate'])
 // 检查活动事务时认可的持久阶段集合。
 const TRANSACTION_PHASES = new Set(['staged', 'validated', 'committing', 'committed', 'restored', 'recovery_required', 'failed'])
 
@@ -89,7 +93,7 @@ async function activeRun(root: string): Promise<{
       return { diagnostics: [diagnostic('ACTIVE_RUN_INVALID', 'The active transaction manifest is invalid.', 'warning', manifestPath)] }
     // 从当前对象取得、尚待类型与内容校验的字段值。
     const value = manifest as Record<string, unknown>
-    if (value.runId !== lock.runId || typeof value.command !== 'string' || !TRANSACTION_COMMANDS.has(value.command)
+    if (value.kind !== 'plugydown.context.transaction' || value.format !== FORMAT || value.runId !== lock.runId || typeof value.command !== 'string' || !TRANSACTION_COMMANDS.has(value.command)
       || typeof value.phase !== 'string' || !TRANSACTION_PHASES.has(value.phase)) {
       return { diagnostics: [diagnostic('ACTIVE_RUN_INVALID', 'The active transaction manifest identity is invalid.', 'warning', manifestPath)] }
     }
@@ -112,93 +116,113 @@ async function activeRun(root: string): Promise<{
  * @remarks 调用阶段：知识检查、渐进读取、增量分析或候选验证；本函数不写入正式知识。
  */
 export async function repositoryInspect(root: string, request: RuntimeRequest): Promise<RuntimeResponse> {
-  // 当前能力已解析的业务参数。
+  // 当前能力经过解析的输入，不在 await 后重新读取宿主对象。
   const input = request.input as RepositoryInspectInput
-  // 本次显式选择并排序的文档 ID。
-  const selectedIds = [...(input.selectedDocumentIds ?? [])].sort(compareCodeUnits)
-  // 本次调用读取的知识快照，后续判断都以它为依据。
-  const graph = await loadKnowledge(root, undefined, selectedIds.length === 0 || input.repair === true
-    ? { sourcePolicy: 'formal-only' }
-    : { sourcePolicy: 'selected', selectedDocumentIds: selectedIds })
-  // 当前仓库活动事务与其检查诊断。
+  // 独立于源码可用性的持久元数据布局状态。
+  let layout: 'absent' | 'legacy' | 'current' | 'incomplete' | 'invalid'
+  try {
+    layout = await inspectMetadataLayout(root)
+  }
+  catch (error) {
+    if (!(error instanceof RuntimeFault))
+      throw error
+    layout = 'invalid'
+  }
+  if (layout === 'legacy' && input.selectedDocumentIds !== undefined)
+    throw new RuntimeFault('MIGRATION_REQUIRED', 'Migrate legacy Context before checking current confirmations.')
+  // 显式请求时生成的只读历史迁移计划。
+  const plan = input.migration === true ? await planLegacyMigration(root) : undefined
+  // 本次读取的知识快照，后续判断以该快照为准。
+  const graph = plan?.graph ?? await loadKnowledge(root, undefined, { ...(layout === 'legacy' ? { legacy: true as const } : {}), sourcePolicy: 'formal-only' })
+  // 当前工作树的事务锁和活动运行提示。
   const active = await activeRun(root)
-  // 当前 Context 文件树的精确指纹，用于快照和游标绑定。
+  // 显式选择的文档确认结果，缺省不读取来源。
+  const checked = input.selectedDocumentIds !== undefined && layout === 'current'
+    ? await checkConfirmations(root, input.selectedDocumentIds)
+    : undefined
+  // 已校验 canonical 字节、路径与身份的历史记录集合。
+  const store = layout === 'current' && graph.formalState === 'ready' ? await readConfirmationStore(root, FORMAT) : undefined
+  // 包括确认文件在内的 Context 整树摘要。
   const contextFingerprint = graph.contextFingerprint ?? 'formal:absent'
-  // 当前无法读取源码证据的文档 ID 集合。
-  const unavailable = new Set(graph.sourceIssues.map(item => item.documentId))
-  // Runtime 推导的完整内容修复计划。
-  const plan = input.repair === true ? repairPlan(graph, input.selectedDocumentIds) : undefined
-  // 账本中显式标记内容待复核的文档数量。
-  const contentReviewRequiredCount = Object.values(graph.meta?.documents ?? {}).filter(ledger => ledger.reviewRequired === true).length
-  // 按请求文档 ID 构造的状态结果，供分页返回。
-  const selected = selectedIds.map((id): JsonObject => {
-    // 当前通过 ID 找到的文档，作为本次判断的依据。
-    const document = graph.documents.get(id)
-    if (document === undefined)
-      return { id, state: 'missing' }
-    // 当前成功展开源码后得到的文档指纹。
-    const current = graph.ledgers.get(id)
-    // 持久账本保存的上次审查或内容一致性记录。
-    const recorded = graph.meta?.documents[id]
-    // 当前文档需要公开的显式待复核标记。
-    const review = recorded?.reviewRequired === true ? { reviewRequired: true } : {}
-    if (current === undefined || unavailable.has(id))
-      return { id, state: 'source_unavailable', ...review }
-    return {
-      id,
-      state: recorded !== undefined
-        && compactJson(current as unknown as JsonValue) === compactJson(recorded as unknown as JsonValue)
-        ? 'fresh'
-        : 'stale',
-      sourceFingerprint: current.sourceFingerprint,
-      ...review,
-    }
-  })
-  // 当前查询额外依赖的来源状态指纹。
-  const stateFingerprint = sha256(compactJson({
-    selected,
-    activeRun: active.value ?? null,
-    activeDiagnostics: active.diagnostics.map(item => item.code),
-  }))
-  // 校验后的续读位置，首次调用从零开始。
+  // 绑定当前能力附加状态的游标摘要。
+  const stateFingerprint = sha256(compactJson({ snapshot: checked?.snapshotFingerprint ?? null, active: active.value ?? null, plan: plan?.planFingerprint ?? null }))
+  // 与本次输入和快照匹配的续读位置。
   const position = decodeCursor(request.cursor, request.capability, request.input, contextFingerprint, stateFingerprint)
-  /** 将本次查询快照与下一读取位置绑定为续读游标。 */
-  const cursorFor = (next: CursorPosition): string => encodeCursor(
-    request.capability,
-    request.input,
-    contextFingerprint,
-    stateFingerprint,
-    next,
-  )
-  /** 构造当前结果页的完整响应，供预算计算与最终返回共用。 */
-  const response = (items: readonly JsonObject[], cursor?: string): RuntimeResponse => runtimeResponse(
-    'repository.inspect',
-    cursor === undefined ? 'success' : 'incomplete',
-    {
-      data: {
-        context: {
-          state: graph.formalState,
-          sourceState: graph.sourceState,
-          ...(graph.contextFingerprint === undefined ? {} : { fingerprint: graph.contextFingerprint }),
-          ...(graph.formalState === 'invalid' && repairEligible(graph) ? { repairable: true } : {}),
-          ...(contentReviewRequiredCount > 0 ? { contentReviewRequiredCount } : {}),
-        },
-        ...(graph.formalState === 'absent' ? {} : { counts: { ...graph.counts } }),
-        meta: { state: graph.metaState },
-        ...(active.value === undefined ? {} : { activeRun: active.value }),
-        ...(plan === undefined
-          ? input.selectedDocumentIds === undefined ? {} : { selected: [...items] }
-          : { repair: { ...plan, items: [...items] } }),
-      },
-      ...(cursor === undefined ? {} : { cursor }),
-      diagnostics: [...issueDiagnostics(graph), ...active.diagnostics],
+  // 将下一位置绑定到同一完整快照的续读令牌。
+  const cursorFor = (next: CursorPosition): string => encodeCursor(request.capability, request.input, contextFingerprint, stateFingerprint, next)
+  // 构造同一合同的完整响应，亦供分页预算计算。
+  const response = (items: readonly JsonObject[], cursor?: string): RuntimeResponse => runtimeResponse('repository.inspect', cursor === undefined ? 'success' : 'incomplete', {
+    data: {
+      context: { state: layout === 'legacy' ? 'legacy' : graph.formalState, sourceState: checked?.graph.sourceState ?? graph.sourceState, ...(graph.contextFingerprint === undefined ? {} : { fingerprint: graph.contextFingerprint }) },
+      meta: { state: graph.metaState, layout },
+      ...(graph.formalState === 'absent' ? {} : { counts: { ...graph.counts } }),
+      ...(store === undefined ? {} : { confirmationCount: store.count }),
+      ...(active.value === undefined ? {} : { activeRun: active.value }),
+      ...(plan === undefined
+        ? input.selectedDocumentIds === undefined ? {} : { selected: [...items] }
+        : { migration: { eligible: plan.eligible, strategy: plan.strategy, documentCount: plan.items.length, importCount: plan.records.size, planFingerprint: plan.planFingerprint, items: [...items] } }),
     },
-  )
-  // 应用响应预算后选出的当前结果页。
-  const page = paginate(plan?.items ?? selected, position, resolvedBudget(request), { response, cursor: cursorFor })
-  // 下一页的续读令牌；缺省表示当前结果已读完。
-  const cursor = page.nextPosition === undefined ? undefined : cursorFor(page.nextPosition)
-  return response(page.items, cursor)
+    ...(cursor === undefined ? {} : { cursor }),
+    diagnostics: [...issueDiagnostics(graph), ...active.diagnostics, ...(layout === 'legacy' ? [diagnostic('MIGRATION_REQUIRED', 'Use explicit migration before current-format maintenance.', 'warning', 'context/meta.json')] : [])],
+  })
+  // 按稳定顺序排列的完整分页条目集合。
+  const stream = plan?.items ?? checked?.items.map(item => ({ ...item, reasons: [...item.reasons] })) ?? []
+  // 在响应预算内可公开的当前结果页。
+  const page = paginate(stream, position, resolvedBudget(request), { response, cursor: cursorFor })
+  return response(page.items, page.nextPosition === undefined ? undefined : cursorFor(page.nextPosition))
+}
+
+/**
+ * 检查请求范围的确认匹配，并返回有界分页事实。
+ * @param root - 业务仓库根目录。
+ * @param request - 经过协议解析的只读请求。
+ * @returns 匹配统计及条目；失配不等于调用失败。
+ * @throws 结构、记录损坏或快照变化时抛出 RuntimeFault。
+ * @remarks 只读；调用方自行执行明确的 CI 政策，不自动写入确认。
+ */
+export async function confirmationCheck(root: string, request: RuntimeRequest): Promise<RuntimeResponse> {
+  // 当前能力经过解析的输入，不在 await 后重新读取宿主对象。
+  const input = request.input as ConfirmationCheckInput
+  if (input.scope.kind === 'paths')
+    input.scope.paths.forEach(assertSourcePattern)
+  // 选择文档前的结构与必要路径来源快照。
+  const initial = await loadKnowledge(root, undefined, { sourcePolicy: input.scope.kind === 'paths' ? 'all-tolerant' : 'formal-only' })
+  requireFormalReady(initial)
+  // 本次检查的固定文档身份集合。
+  const ids = selectDocumentIds(initial, input.scope)
+  // 经过两轮读取核对的确认与来源事实。
+  const snapshot = await checkConfirmations(root, ids)
+  // 再次核对路径展开，拒绝选定期间出现或消失的文件。
+  const selectionCheck = input.scope.kind === 'paths' ? await loadKnowledge(root, undefined, { sourcePolicy: 'all-tolerant' }) : undefined
+  if (selectionCheck !== undefined && (selectionCheck.contextFingerprint !== initial.contextFingerprint || selectionCheck.sourceFingerprint !== initial.sourceFingerprint))
+    throw new RuntimeFault('CHECK_SNAPSHOT_CHANGED', 'Sources changed while resolving the path selection.')
+  if (snapshot.graph.contextFingerprint !== initial.contextFingerprint)
+    throw new RuntimeFault('CHECK_SNAPSHOT_CHANGED', 'Context changed while selecting Documents.')
+  // 规范请求摘要，不无界回显调用方范围列表。
+  const requestFingerprint = sha256(compactJson(request.input as unknown as JsonValue))
+  // 绑定请求、内容和所读来源的确定性快照身份。
+  const fingerprint = sha256(compactJson({ snapshot: snapshot.snapshotFingerprint, requestFingerprint }))
+  // 与本次输入和快照匹配的续读位置。
+  const position = decodeCursor(request.cursor, request.capability, request.input, snapshot.graph.contextFingerprint!, fingerprint)
+  // 将下一位置绑定到同一完整快照的续读令牌。
+  const cursorFor = (next: CursorPosition): string => encodeCursor(request.capability, request.input, snapshot.graph.contextFingerprint!, fingerprint, next)
+  // 完整仓库与请求范围的覆盖计数，不是当前页条数。
+  const counts = { documents: initial.documents.size, checked: ids.length, matched: 0, unmatched: 0, unavailable: 0, unchecked: initial.documents.size - ids.length }
+  for (const item of snapshot.items) {
+    if (item.confirmationState !== 'unchecked')
+      counts[item.confirmationState] += 1
+  }
+  // 构造同一合同的完整响应，亦供分页预算计算。
+  const response = (items: readonly JsonObject[], cursor?: string): RuntimeResponse => runtimeResponse('confirmation.check', cursor === undefined ? 'success' : 'incomplete', {
+    data: { scope: { kind: input.scope.kind, requestFingerprint }, structureState: 'valid', recordStore: { state: 'valid', coverage: 'repository' }, sourceState: ids.length === 0 ? 'unchecked' : counts.unavailable > 0 ? 'degraded' : 'ready', snapshotFingerprint: fingerprint, summary: counts, items: [...items] },
+    ...(cursor === undefined ? {} : { cursor }),
+    diagnostics: issueDiagnostics(snapshot.graph, true),
+  })
+  // 按稳定顺序排列的完整分页条目集合。
+  const stream = snapshot.items.map(item => ({ ...item, reasons: input.explain ? [...item.reasons] : [] }))
+  // 在响应预算内可公开的当前结果页。
+  const page = paginate(stream, position, resolvedBudget(request), { response, cursor: cursorFor })
+  return response(page.items, page.nextPosition === undefined ? undefined : cursorFor(page.nextPosition))
 }
 
 /** 近似判断源码声明与路径选择器是否相交。 */
@@ -410,28 +434,24 @@ export async function frontierQuery(root: string, request: RuntimeRequest): Prom
 }
 
 /**
- * 严格验证正式结构与源码可读性，将审查滞后单独报告为警告。
+ * 严格验证正式结构、记录存储和源码可读性；确认匹配由独立能力报告。
  *
  * @param root - 业务仓库根目录。
- * @returns 验证响应；审查滞后使用 warning，结构或证据损坏使用 failed。
+ * @returns 验证响应；结构、记录或证据损坏使用 failed，成功不代表确认匹配。
  * @throws 结构或证据问题通过 failed 响应返回；未分类读取异常继续传播。
  * @remarks 调用阶段：知识检查、渐进读取、增量分析或候选验证；本函数不写入正式知识。
  */
 export async function graphValidate(root: string): Promise<RuntimeResponse> {
   // 本次调用读取的知识快照，后续判断都以它为依据。
   const graph = await loadKnowledge(root, undefined, { sourcePolicy: 'all-strict' })
-  // 源码变化仅产生待复核警告，不破坏正式知识结构；结构损坏或证据不可读仍会使严格验证失败。
-  const pendingReview = reviewPendingIds(graph).map(id =>
-    diagnostic('DOCUMENT_REVIEW_PENDING', graph.meta?.documents[id]?.reviewRequired === true
-      ? `Document "${id}" requires semantic review after content fingerprint repair.`
-      : `Document "${id}" cites changed or unavailable sources since its last review.`, 'warning', graph.documents.get(id)?.path ?? 'context/meta.json'))
   if (graph.formalState !== 'ready' || graph.sourceState !== 'ready') {
     // 即将公开的安全诊断集合。
-    const diagnostics = [...issueDiagnostics(graph, true), ...pendingReview]
+    const diagnostics = [...issueDiagnostics(graph, true)]
     return runtimeResponse('graph.validate', 'failed', { diagnostics: diagnostics.length === 0
       ? [diagnostic('CONTEXT_NOT_READY', 'Formal Context is absent or invalid.', 'error', 'context')]
       : diagnostics })
   }
+  await readConfirmationStore(root, FORMAT)
   return runtimeResponse('graph.validate', 'success', {
     data: {
       contextFingerprint: graph.contextFingerprint as string,
@@ -440,7 +460,6 @@ export async function graphValidate(root: string): Promise<RuntimeResponse> {
       relationCount: graph.relationCount,
       sourceDeclarationCount: graph.sourceDeclarationCount,
     },
-    ...(pendingReview.length === 0 ? {} : { diagnostics: pendingReview }),
   })
 }
 
@@ -507,7 +526,7 @@ export async function growthMeasure(root: string, request: RuntimeRequest): Prom
   // 当前知识集合的规模统计。
   const metrics = graphMetrics(graph)
   // 账本保存的对应源码或规模基线。
-  const baseline = graph.meta?.convergence
+  const baseline = graph.metadata?.convergence
   // 按固定分区和业务顺序组织的分页结果流。
   const stream: JsonObject[] = []
   for (const [id, current] of Object.entries(metrics.perDomain).sort(([left], [right]) => compareCodeUnits(left, right))) {

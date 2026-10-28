@@ -163,7 +163,7 @@ describe('transaction lifecycle', () => {
       gitEvidencePath: '.scratch/evidence/request',
       evidencePaths: ['src/service.ts'],
     })
-    const inspected = await handle(root, { protocol: PROTOCOL, capability: 'repository.inspect', input: {} })
+    const inspected = await handle(root, { protocol: PROTOCOL, format: 1, capability: 'repository.inspect', input: {} })
 
     expect(second.status).toBe('incomplete')
     expect(second.data).toMatchObject({ runId: first.runId, outcome: 'active_run', nextAction: 'resume' })
@@ -270,14 +270,12 @@ describe('transaction lifecycle', () => {
     const run = await prepareChanged(root)
     // 已解析的事务阶段、冻结输入和恢复事实。
     const manifest = await readManifest(root, run.runId)
-    const candidateMeta = JSON.parse(await fs.readFile(path.join(root, run.candidatePath, 'meta.json'), 'utf8')) as Record<string, unknown>
+    const candidateMeta = JSON.parse(await fs.readFile(path.join(root, run.candidatePath, '.meta/manifest.json'), 'utf8')) as Record<string, unknown>
     const committed = await transactionCall(root, 'commit', { runId: run.runId, approval: run.approval })
 
     expect(manifest.phase).toBe('validated')
     expect(candidateMeta).toMatchObject({
-      $schema: 'plugydown.context.meta/v1',
-      runtimeProtocol: PROTOCOL,
-      fingerprintVersion: '1',
+      format: 1,
     })
     expect(committed.status).toBe('success')
     expect(committed.data).toMatchObject({
@@ -300,14 +298,14 @@ describe('transaction lifecycle', () => {
   it('terminates byte-equivalent candidates as no_change without a directory switch', async () => {
     // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
-    const before = await fs.readFile(path.join(root, 'context/meta.json'))
+    const before = await fs.readFile(path.join(root, 'context/.meta/manifest.json'))
     // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await beginUpdate(root)
     const result = await transactionCall(root, 'validate', { runId: run.runId })
 
     expect(result.status).toBe('no_change')
     expect(result.data?.outcome).toBe('no_change')
-    expect(await fs.readFile(path.join(root, 'context/meta.json'))).toEqual(before)
+    expect(await fs.readFile(path.join(root, 'context/.meta/manifest.json'))).toEqual(before)
     expect(await exists(root, `.scratch/runs/${run.runId}`)).toBe(false)
     expect(await exists(root, run.gitEvidencePath)).toBe(false)
     expect(await exists(root, '.scratch/locks/context-write')).toBe(false)
@@ -614,7 +612,7 @@ describe('transaction validation and concurrency', () => {
     expect(approvalResult.diagnostics?.[0]?.code).toBe('APPROVAL_MISMATCH')
   })
 
-  it('advances a settled repository baseline without prior-to-HEAD diff evidence, as after a squash merge', async () => {
+  it('preserves repository baseline across history rewrites and updates', async () => {
     // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
     const gitEvidencePath = await writeGitEvidence(root, { id: 'baseline-gap', revision: REVISION_C })
@@ -633,7 +631,7 @@ describe('transaction validation and concurrency', () => {
     await fs.writeFile(path.join(root, candidatePath, SERVICE_DOMAIN.relativePath), documentSource(changedService))
 
     const validated = await transactionCall(root, 'validate', { runId })
-    const meta = JSON.parse(await fs.readFile(path.join(root, candidatePath, 'meta.json'), 'utf8')) as {
+    const meta = JSON.parse(await fs.readFile(path.join(root, candidatePath, '.meta/manifest.json'), 'utf8')) as {
       /** 上次可证明全仓审查完成时记录的源码基线。 */
       repository?: {
         /** 特定用途的持久基线，不能因局部修复自动推进。 */
@@ -645,7 +643,7 @@ describe('transaction validation and concurrency', () => {
     }
 
     expect(validated.status).toBe('success')
-    expect(meta.repository?.baseline?.revision).toBe(REVISION_C)
+    expect(meta.repository?.baseline?.revision).toBe(REVISION_A)
   })
 
   it.each(['candidateFingerprint', 'sourceEvidenceFingerprint'] as const)('rejects an approval whose %s does not bind current bytes', async (field) => {
@@ -731,7 +729,8 @@ describe('transaction validation and concurrency', () => {
       `${JSON.stringify({ ...(await readManifest(root, run.runId)), runId: otherRunId }, null, 2)}\n`,
     )
     await fs.writeFile(path.join(root, '.scratch/locks/context-write/owner.json'), JSON.stringify({
-      schema: 'plugydown.context.lock/v1',
+      kind: 'plugydown.context.lock',
+      format: 1,
       runId: otherRunId,
     }))
 
@@ -824,7 +823,8 @@ describe('transaction validation and concurrency', () => {
     // 当前测试建立并拥有的事务、候选路径与批准信息。
     const run = await beginUpdate(ownerRoot)
     await fs.writeFile(path.join(ownerRoot, '.scratch/locks/context-write/owner.json'), JSON.stringify({
-      schema: 'plugydown.context.lock/v1',
+      kind: 'plugydown.context.lock',
+      format: 1,
       runId: '11111111-1111-4111-8111-111111111111',
     }))
     const blocked = await transactionCall(ownerRoot, 'resume', { runId: run.runId })
@@ -839,10 +839,10 @@ describe('transaction validation and concurrency', () => {
   it('settles a reaffirmed Document whose sources moved without inventing an edit', async () => {
     // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
-    const original = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
+    const original = JSON.parse(await fs.readFile(path.join(root, 'context/.meta/manifest.json'), 'utf8'))
     // SERVICE_GUIDE 引用 src/retry.ts，因此该文件变化使其记录的源码指纹过期。
     await fs.writeFile(path.join(root, 'src/retry.ts'), 'retry C\n')
-    expect((await call(root, 'graph.validate', {})).diagnostics?.map(item => item.code)).toEqual(['DOCUMENT_REVIEW_PENDING'])
+    expect((await call(root, 'confirmation.check', {})).data?.summary).toMatchObject({ unmatched: 1 })
 
     const gitEvidencePath = await writeGitEvidence(root, { status: porcelainModified('src/retry.ts') })
     const began = await transactionCall(root, 'begin', {
@@ -852,7 +852,7 @@ describe('transaction validation and concurrency', () => {
       scope: { kind: 'documents', ids: ['service.retry'] },
       gitEvidencePath,
       evidencePaths: ['src/retry.ts'],
-      reaffirmedDocumentIds: ['service.retry'],
+      confirmedDocumentIds: ['service.retry'],
     })
     expect(began.status).toBe('success')
     // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
@@ -865,13 +865,13 @@ describe('transaction validation and concurrency', () => {
     const validated = await transactionCall(root, 'validate', { runId })
     expect(validated.status).toBe('success')
     expect(validated.data).toMatchObject({ outcome: 'ready_for_review' })
-    expect((await readManifest(root, runId)).reaffirmedDocumentIds).toEqual(['service.retry'])
+    expect((await readManifest(root, runId)).confirmedDocumentIds).toEqual(['service.retry'])
     const committed = await transactionCall(root, 'commit', { runId, approval: approval(validated) })
     expect(committed.status).toBe('success')
 
-    const after = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
-    expect(after.documents['service.retry'].sourceFingerprint).not.toBe(original.documents['service.retry'].sourceFingerprint)
-    expect(after.documents.service).toEqual(original.documents.service)
+    const after = JSON.parse(await fs.readFile(path.join(root, 'context/.meta/manifest.json'), 'utf8'))
+    expect(after).toEqual(original)
+    expect((await call(root, 'confirmation.check', {})).data?.summary).toMatchObject({ matched: 3, unmatched: 0 })
     expect(await call(root, 'graph.validate', {})).toMatchObject({ status: 'success' })
     expect((await call(root, 'graph.validate', {})).diagnostics).toBeUndefined()
   })
@@ -891,12 +891,12 @@ describe('transaction validation and concurrency', () => {
       ...patch,
     })
 
-    expect((await begin({ reaffirmedDocumentIds: ['service.absent'] })).diagnostics?.map(item => item.code))
+    expect((await begin({ confirmedDocumentIds: ['service.absent'] })).diagnostics?.map(item => item.code))
       .toContain('TRANSACTION_SCOPE_INVALID')
     // client 虽然存在，但不在授权范围内，不能结清其记录。
-    expect((await begin({ reaffirmedDocumentIds: ['client'] })).diagnostics?.map(item => item.code))
+    expect((await begin({ confirmedDocumentIds: ['client'] })).diagnostics?.map(item => item.code))
       .toContain('TRANSACTION_SCOPE_INVALID')
-    expect((await begin({ command: 'prune', scope: { kind: 'repository' }, reaffirmedDocumentIds: ['service.retry'] })).diagnostics?.map(item => item.code))
+    expect((await begin({ command: 'prune', scope: { kind: 'repository' }, confirmedDocumentIds: ['service.retry'] })).diagnostics?.map(item => item.code))
       .toContain('TRANSACTION_SCOPE_INVALID')
 
     // begin 被拒绝后不能留下写锁。
@@ -906,7 +906,7 @@ describe('transaction validation and concurrency', () => {
   it('still withholds a fresh ledger from an in-scope Document that was neither edited nor reaffirmed', async () => {
     // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await readyRoot()
-    const original = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
+    const original = JSON.parse(await fs.readFile(path.join(root, 'context/.meta/manifest.json'), 'utf8'))
     await fs.writeFile(path.join(root, 'src/retry.ts'), 'retry C\n')
     await fs.writeFile(path.join(root, 'src/service.ts'), 'service C\n')
 
@@ -920,17 +920,16 @@ describe('transaction validation and concurrency', () => {
       scope: { kind: 'domains', ids: ['service'] },
       gitEvidencePath,
       evidencePaths: ['src/retry.ts', 'src/service.ts'],
-      reaffirmedDocumentIds: ['service.retry'],
+      confirmedDocumentIds: ['service.retry'],
     })
     // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = dataString(began, 'runId')
     const validated = await transactionCall(root, 'validate', { runId })
     await transactionCall(root, 'commit', { runId, approval: approval(validated) })
 
-    const after = JSON.parse(await fs.readFile(path.join(root, 'context/meta.json'), 'utf8'))
-    expect(after.documents['service.retry']).not.toEqual(original.documents['service.retry'])
-    // service 虽在授权范围内，但未经编辑或明确重新确认，其待审记录必须保留。
-    expect(after.documents.service).toEqual(original.documents.service)
+    const after = JSON.parse(await fs.readFile(path.join(root, 'context/.meta/manifest.json'), 'utf8'))
+    expect(after).toEqual(original)
+    expect((await call(root, 'confirmation.check', {})).data?.summary).toMatchObject({ matched: 2, unmatched: 1 })
   })
 })
 
@@ -1266,4 +1265,97 @@ describe('transaction crash recovery', () => {
     expect(await exists(root, run.gitEvidencePath)).toBe(true)
     expect(await exists(root, '.scratch/locks/context-write')).toBe(true)
   })
+})
+
+describe('immutable confirmation write ownership', () => {
+  it.each(['delete', 'overwrite', 'permissions', 'forge', 'metadata'])('rejects candidate %s without modifying formal evidence', async (mutation) => {
+    const root = await readyRoot()
+    const before = await fs.readFile(path.join(root, 'context/.meta/manifest.json'))
+    const run = await beginUpdate(root)
+    const directory = path.join(root, run.candidatePath, '.meta/confirmations/service')
+    const recordPath = path.join(directory, (await fs.readdir(directory))[0]!)
+    if (mutation === 'delete')
+      await fs.rm(recordPath)
+    if (mutation === 'overwrite')
+      await fs.writeFile(recordPath, '{}')
+    if (mutation === 'permissions')
+      await fs.chmod(recordPath, 0o600)
+    if (mutation === 'forge')
+      await fs.writeFile(path.join(directory, `${'a'.repeat(64)}.json`), '{}')
+    if (mutation === 'metadata')
+      await fs.rm(path.join(root, run.candidatePath, '.meta/manifest.json'))
+    const result = await transactionCall(root, 'validate', { runId: run.runId })
+    expect(result.data?.outcome).toBe('candidate_edit_required')
+    expect(result.diagnostics?.[0]?.code).toMatch(/MUTATION_FORBIDDEN/)
+    expect(await fs.readFile(path.join(root, 'context/.meta/manifest.json'))).toEqual(before)
+  })
+
+  it('revalidation replaces only this run’s obsolete generated record and then becomes idempotent', async () => {
+    const root = await readyRoot()
+    const original = await fs.readdir(path.join(root, 'context/.meta/confirmations/service'))
+    const run = await prepareChanged(root)
+    const directory = path.join(root, run.candidatePath, '.meta/confirmations/service')
+    const first = await fs.readdir(directory)
+    expect(first.length).toBe(original.length + 1)
+    await fs.appendFile(path.join(root, run.candidatePath, SERVICE_DOMAIN.relativePath), '\nSecond review candidate.\n')
+    const second = await transactionCall(root, 'validate', { runId: run.runId })
+    const files = await fs.readdir(directory)
+    expect(files.length).toBe(original.length + 1)
+    expect(files).not.toEqual(first)
+    expect(files).toEqual(expect.arrayContaining(original))
+    const repeated = await transactionCall(root, 'validate', { runId: run.runId })
+    expect(repeated.data?.candidateFingerprint).toBe(second.data?.candidateFingerprint)
+    expect((await transactionCall(root, 'commit', { runId: run.runId, approval: approval(repeated) })).status).toBe('success')
+    expect((await call(root, 'confirmation.check', {})).data?.summary).toMatchObject({ matched: 3 })
+    const next = await beginUpdate(root)
+    expect((await transactionCall(root, 'validate', { runId: next.runId })).data?.outcome).toBe('no_change')
+  })
+
+  it('retries a crash after a confirmation temporary file is written without losing any original record', async () => {
+    const root = await readyRoot()
+    const run = await beginUpdate(root)
+    await fs.writeFile(path.join(root, run.candidatePath, SERVICE_DOMAIN.relativePath), documentSource(changedService))
+    const rename = fs.rename.bind(fs)
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(from).includes('/confirmations/') && String(from).endsWith('.tmp'))
+        throw new Error('injected interruption')
+      return rename(from, to)
+    })
+    await expect(transactionCall(root, 'validate', { runId: run.runId })).rejects.toThrow('injected interruption')
+    spy.mockRestore()
+    const validated = await transactionCall(root, 'validate', { runId: run.runId })
+    expect(validated.status, JSON.stringify(validated)).toBe('success')
+    expect((await transactionCall(root, 'commit', { runId: run.runId, approval: approval(validated) })).status).toBe('success')
+    expect((await fs.readdir(path.join(root, 'context/.meta/confirmations/service'))).length).toBe(2)
+  })
+
+  it('allows deletion without deleting historical confirmations', async () => {
+    const root = await readyRoot()
+    const history = await fs.readdir(path.join(root, 'context/.meta/confirmations/service.retry'))
+    const run = await beginUpdate(root)
+    await fs.rm(path.join(root, run.candidatePath, 'service/manual'), { recursive: true })
+    const validated = await transactionCall(root, 'validate', { runId: run.runId })
+    expect(validated.status, JSON.stringify(validated)).toBe('success')
+    expect((await transactionCall(root, 'commit', { runId: run.runId, approval: approval(validated) })).status).toBe('success')
+    expect(await fs.readdir(path.join(root, 'context/.meta/confirmations/service.retry'))).toEqual(history)
+    expect((await call(root, 'confirmation.check', {})).data?.summary).toMatchObject({ documents: 2, matched: 2 })
+  })
+})
+
+it('preserves confirmations on a legal path move and gives an ID rename its own identity', async () => {
+  const root = await readyRoot()
+  const originalFiles = await fs.readdir(path.join(root, 'context/.meta/confirmations/service.retry'))
+  const move = await beginUpdate(root)
+  await fs.rename(path.join(root, move.candidatePath, SERVICE_GUIDE.relativePath), path.join(root, move.candidatePath, 'service/manual/moved.md'))
+  const moved = await transactionCall(root, 'validate', { runId: move.runId })
+  expect(moved.data?.confirmation).toMatchObject({ newRecordCount: 0 })
+  expect((await transactionCall(root, 'commit', { runId: move.runId, approval: approval(moved) })).status).toBe('success')
+  expect((await call(root, 'confirmation.check', {})).data?.summary).toMatchObject({ matched: 3 })
+  const rename = await beginUpdate(root)
+  await fs.writeFile(path.join(root, rename.candidatePath, 'service/manual/moved.md'), documentSource({ ...SERVICE_GUIDE, id: 'service.renamed' }))
+  const renamed = await transactionCall(root, 'validate', { runId: rename.runId })
+  expect(renamed.data?.confirmation).toMatchObject({ newRecordCount: 1 })
+  expect((await transactionCall(root, 'commit', { runId: rename.runId, approval: approval(renamed) })).status).toBe('success')
+  expect(await fs.readdir(path.join(root, 'context/.meta/confirmations/service.retry'))).toEqual(originalFiles)
+  expect((await call(root, 'confirmation.check', { scope: { kind: 'documents', ids: ['service.renamed'] } })).data?.summary).toMatchObject({ matched: 1 })
 })

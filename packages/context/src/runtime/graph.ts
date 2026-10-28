@@ -1,15 +1,17 @@
-import type { ContextDocument, DocumentLedger, KnowledgeIssue, Meta, Metrics } from './document.js'
+import type { ContextDocument, DocumentLedger, KnowledgeIssue, Meta, MetadataManifest, Metrics } from './document.js'
 import type { SourceFile } from './repository.js'
 import type { JsonObject } from './stable-json.js'
-import { bodyFingerprint, frontMatterFingerprint, parseDocument, parseMeta, placementIssues, sourceFingerprint } from './document.js'
-import { RuntimeFault } from './protocol.js'
+import { bodyFingerprint, frontMatterFingerprint, parseDocument, parseLegacyMetaJson, parseMeta, parseMetadataManifest, placementIssues, sourceFingerprint } from './document.js'
+import { FORMAT, RuntimeFault } from './protocol.js'
 import {
   CONTEXT_ROOT,
   expandSourcePatternSets,
   fingerprintTree,
+  inspectMetadataLayout,
   lstatRepositoryPath,
   MAX_JSON_TEXT_BYTES,
   MAX_MARKDOWN_BYTES,
+  METADATA_DIRECTORY,
   readDirectory,
   readUtf8File,
 } from './repository.js'
@@ -60,6 +62,8 @@ export interface KnowledgeGraph {
   readonly ledgers: ReadonlyMap<string, DocumentLedger>
   /** 已通过格式校验的持久账本。 */
   readonly meta?: Meta
+  /** 新布局的统一入口；普通读取使用当前格式时填充。 */
+  readonly metadata?: MetadataManifest
   /** 本次内部完整问题集合，不能用裁剪后的输出代替安全判断。 */
   readonly issues: readonly KnowledgeIssue[]
   /** 包含文档所有权的源码证据问题。 */
@@ -127,7 +131,7 @@ interface LoadedDocuments {
 }
 
 /** 读取标准目录下的 Markdown 文档，收集解析、类型与位置问题。 */
-async function loadDocuments(root: string, contextPath: string): Promise<LoadedDocuments> {
+async function loadDocuments(root: string, contextPath: string, currentMetadata = false): Promise<LoadedDocuments> {
   // 以稳定文档 ID 为键的知识或账本映射。
   const documents: ContextDocument[] = []
   // 当前读取或选择涉及的领域集合。
@@ -143,6 +147,8 @@ async function loadDocuments(root: string, contextPath: string): Promise<LoadedD
     const actual = `${contextPath}/${entry.name}`
     // 用于公开诊断的正式 context/ 相对路径。
     const canonical = canonicalPath(contextPath, actual)
+    if (currentMetadata && entry.name === METADATA_DIRECTORY)
+      continue
     if (entry.name === 'meta.json') {
       if (entry.kind !== 'file')
         issues.push(issue('META_NOT_REGULAR_FILE', 'context/meta.json must be a regular file.', canonical))
@@ -319,6 +325,8 @@ function emptyGraph(contextPath: string, formalState: 'absent' | 'invalid', issu
  * @param options.requireMeta - 是否要求账本存在且与文档集合一致。
  * @param options.sourcePolicy - 本次调用选择的源码展开范围与容错策略。
  * @param options.selectedDocumentIds - 本次调用显式选择的文档 ID；不自动扩大写入授权。
+ * @param options.format - 可选的统一兼容代号，缺省为当前格式。
+ * @param options.legacy - 仅供显式迁移读取旧账本。
  * @returns 包含文档、账本、证据和三个独立状态轴的只读快照。
  * @throws 可预期的结构和证据问题存入快照；未分类异常继续抛出。
  * @remarks 调用阶段：知识检查、渐进读取、增量分析或候选验证；本函数不写入正式知识。
@@ -327,6 +335,10 @@ export async function loadKnowledge(
   root: string,
   contextPath = CONTEXT_ROOT,
   options: {
+    /** 由新格式调用方明确提供，旧协议不能隐式获得新布局写入资格。 */
+    readonly format?: typeof FORMAT
+    /** 仅供显式迁移读取旧账本，不属于普通能力的回退路径。 */
+    readonly legacy?: true
     /** 仅在候选结构校验时忽略账本，不能用于放宽正式读取。 */
     readonly ignoreMeta?: boolean
     /** 是否要求账本存在且与文档集合一致。 */
@@ -339,6 +351,8 @@ export async function loadKnowledge(
 ): Promise<KnowledgeGraph> {
   // 本次读取是否要求账本存在且与文档匹配。
   const requireMeta = options.requireMeta !== false
+  // 普通能力只使用当前格式；旧格式必须由迁移显式请求。
+  const currentFormat = options.legacy !== true
   // 调用能力要求的源码读取范围与容错策略。
   const sourcePolicy = options.sourcePolicy ?? 'all-strict'
   // 通过 lstat 取得的文件类型、权限和大小，避免隐式跟随链接。
@@ -354,6 +368,25 @@ export async function loadKnowledge(
   if (!info.isDirectory())
     return emptyGraph(contextPath, 'invalid', [issue('CONTEXT_NOT_DIRECTORY', 'The Context root must be a regular directory.', CONTEXT_ROOT)])
 
+  // 新格式入口必须先证明唯一且有效，随后才把 .meta 从文档目录扫描中分离。
+  let metadata: MetadataManifest | undefined
+  if (currentFormat && options.ignoreMeta !== true) {
+    try {
+      if (options.format !== undefined && options.format !== FORMAT)
+        throw new RuntimeFault('FORMAT_UNSUPPORTED', 'The requested compatibility format is unsupported.')
+      // 区分待迁移的旧布局与没有合法入口的损坏树，避免错误引导迁移。
+      const layout = await inspectMetadataLayout(root, contextPath)
+      if (layout !== 'current')
+        throw new RuntimeFault(layout === 'legacy' ? 'MIGRATION_REQUIRED' : 'METADATA_MANIFEST_MISSING', layout === 'legacy' ? 'Migrate legacy Context before current-format maintenance.' : 'Current-format Context requires a metadata manifest.', contextPath)
+      // 文件读取使用实际候选路径，公开诊断仍使用规范 Context 路径。
+      const manifestPath = `${contextPath}/${METADATA_DIRECTORY}/manifest.json`
+      metadata = parseMetadataManifest(canonicalPath(contextPath, manifestPath), await readUtf8File(root, manifestPath, MAX_JSON_TEXT_BYTES))
+    }
+    catch (error) {
+      return { ...emptyGraph(contextPath, 'invalid', faultIssues(error, CONTEXT_ROOT)), metaState: 'invalid' }
+    }
+  }
+
   // 正式目录、文档结构和账本一致性问题。
   const formalIssues: KnowledgeIssue[] = []
   // 当前 Context 文件树的精确指纹，用于快照和游标绑定。
@@ -367,7 +400,7 @@ export async function loadKnowledge(
   // 目录扫描得到的文档和原始结构问题。
   let loaded: LoadedDocuments = { documents: [], domains: [], issues: [], counts: { design: 0, manual: 0, reflections: 0 } }
   try {
-    loaded = await loadDocuments(root, contextPath)
+    loaded = await loadDocuments(root, contextPath, currentFormat)
     formalIssues.push(...loaded.issues)
   }
   catch (error) {
@@ -412,12 +445,12 @@ export async function loadKnowledge(
   // 已经解析或即将写出的持久账本。
   let meta: Meta | undefined
   // 账本是否缺失或通过格式校验的独立状态。
-  let metaState: KnowledgeGraph['metaState'] = 'absent'
+  let metaState: KnowledgeGraph['metaState'] = metadata === undefined ? 'absent' : 'valid'
   // 当前正式或候选目录下 meta.json 的实际相对路径。
   const metaActual = `${contextPath}/meta.json`
   // 账本文件的类型与大小信息。
   let metaInfo
-  if (options.ignoreMeta !== true) {
+  if (options.ignoreMeta !== true && !currentFormat) {
     try {
       metaInfo = await lstatRepositoryPath(root, metaActual)
     }
@@ -438,7 +471,7 @@ export async function loadKnowledge(
         // 从持久文件或未校验输入取得的原始数据。
         let raw: unknown
         try {
-          raw = JSON.parse(text.replace(/^\uFEFF/, ''))
+          raw = parseLegacyMetaJson(text.replace(/^\uFEFF/, ''))
         }
         catch (error) {
           if (!(error instanceof SyntaxError))
@@ -561,6 +594,7 @@ export async function loadKnowledge(
     metaState,
     ...(contextFingerprint === undefined ? {} : { contextFingerprint }),
     ...(sourceDatasetFingerprint === undefined ? {} : { sourceFingerprint: sourceDatasetFingerprint }),
+    ...(metadata === undefined ? {} : { metadata }),
     documents,
     domains,
     sources,
@@ -620,88 +654,6 @@ export function requiresClosure(graph: KnowledgeGraph, seeds: readonly string[])
   }
   return [...reasons.entries()].sort(([left], [right]) => compareCodeUnits(left, right)).map(([id, values]) => ({
     id,
-    reasons: [...values].sort(compareCodeUnits),
-  }))
-}
-
-/**
- * 汇总内容待复核义务及变化或不可用的源码证据，不依赖 Git 历史。
- *
- * @param graph - 当前正式或候选知识快照。
- * @returns 需要源码或内容语义复核的文档 ID，已排序去重。
- * @throws 合法类型输入下不主动抛出业务异常。
- * @remarks 调用阶段：知识检查、渐进读取、增量分析或候选验证；本函数不写入正式知识。
- */
-export function reviewPendingIds(graph: KnowledgeGraph): readonly string[] {
-  // 尚未处理的闭包节点或待复核文档集合。
-  const pending = new Set(graph.sourceIssues.map(problem => problem.documentId))
-  for (const [id, recorded] of Object.entries(graph.meta?.documents ?? {})) {
-    // 本次成功读取源码后为该文档计算的当前指纹。
-    const current = graph.ledgers.get(id)
-    if (recorded.reviewRequired === true || (current !== undefined && recorded.sourceFingerprint !== current.sourceFingerprint))
-      pending.add(id)
-  }
-  return [...pending].sort(compareCodeUnits)
-}
-
-/**
- * 将直接影响扩展到前置依赖、反向依赖和领域成员。
- *
- * @param graph - 当前正式或候选知识快照。
- * @param direct - 直接受影响文档及其原因集合。
- * @returns 包含前置依赖、反向依赖与领域成员的影响闭包。
- * @throws 合法类型输入下不主动抛出业务异常。
- * @remarks 调用阶段：知识检查、渐进读取、增量分析或候选验证；本函数不写入正式知识。
- */
-export function impactClosure(graph: KnowledgeGraph, direct: ReadonlyMap<string, readonly string[]>): readonly {
-  /** 当前条目所属的稳定文档 ID。 */
-  readonly documentId: string
-  /** 条目被选中或判定受影响的可解释原因。 */
-  readonly reasons: readonly string[]
-}[] {
-  // 当前文档进入结果或影响集合的可解释原因。
-  const reasons = new Map<string, Set<string>>()
-  // 尚未处理的闭包节点或待复核文档集合。
-  const pending: string[] = []
-  for (const [id, directReasons] of direct) {
-    reasons.set(id, new Set(directReasons))
-    pending.push(id)
-  }
-  while (pending.length > 0) {
-    // 当前从队列或所有者键解析出的稳定文档身份。
-    const id = pending.shift() as string
-    // 当前通过 ID 找到的文档，作为本次判断的依据。
-    const document = graph.documents.get(id)
-    if (document === undefined)
-      continue
-    // 本轮闭包遍历需要补充的关系目标。
-    const additions: {
-      /** 当前对象的稳定 ID。 */
-      id: string
-      /** 当前条目进入依赖或影响闭包的原因。 */
-      reason: string
-    }[] = []
-    for (const target of document.relations.requires)
-      additions.push({ id: target, reason: `required by impacted ${id}` })
-    for (const candidate of graph.documents.values()) {
-      if (candidate.relations.requires.includes(id))
-        additions.push({ id: candidate.id, reason: `depends on impacted ${id}` })
-      if (candidate.domain === document.domain && candidate.id !== id)
-        additions.push({ id: candidate.id, reason: `shares Domain ${document.domain} with impacted ${id}` })
-    }
-    for (const addition of additions.sort((left, right) => compareCodeUnits(`${left.id}\0${left.reason}`, `${right.id}\0${right.reason}`))) {
-      // 当前阶段已登记的身份、字段或访问状态。
-      const known = reasons.get(addition.id) ?? new Set<string>()
-      // 目标此前是否未进入结果，用于决定是否继续展开。
-      const wasEmpty = known.size === 0
-      known.add(addition.reason)
-      reasons.set(addition.id, known)
-      if (wasEmpty)
-        pending.push(addition.id)
-    }
-  }
-  return [...reasons.entries()].sort(([left], [right]) => compareCodeUnits(left, right)).map(([documentId, values]) => ({
-    documentId,
     reasons: [...values].sort(compareCodeUnits),
   }))
 }

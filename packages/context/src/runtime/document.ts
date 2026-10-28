@@ -2,20 +2,20 @@ import type { SourceFile } from './repository.js'
 import type { JsonObject, JsonValue } from './stable-json.js'
 import { Buffer } from 'node:buffer'
 import { parse as parseYaml } from 'yaml'
-import { isRecord, PROTOCOL, sha256 } from './protocol.js'
-import { aggregateSourceFingerprint, assertSourcePattern, MAX_FRONT_MATTER_BYTES, MAX_MARKDOWN_BYTES } from './repository.js'
+import { FORMAT, isRecord, RuntimeFault, sha256 } from './protocol.js'
+import { aggregateSourceFingerprint, assertSourcePattern, MAX_FRONT_MATTER_BYTES, MAX_JSON_TEXT_BYTES, MAX_MARKDOWN_BYTES } from './repository.js'
 import { compactJson, compareCodeUnits, stableJson } from './stable-json.js'
 
 // 正式 Markdown 文档当前使用的格式版本。
 export const DOCUMENT_SCHEMA = 'plugydown.context.document/v1'
-// 仍支持读取的旧账本格式，不允许记录 reviewRequired。
+// 旧账本里的固定协议标签，仅用于迁移验证。
+const LEGACY_RUNTIME_PROTOCOL = 'plugydown.context.runtime/v1'
+// 历史账本的字段规则只用于显式迁移。
 export const LEGACY_META_SCHEMA = 'plugydown.context.meta/v1'
-// 可持久保存内容待审义务的当前账本格式。
+// 旧 v2 账本允许未完成复核标记，迁移时必须排除。
 export const META_SCHEMA = 'plugydown.context.meta/v2'
-// 三个指纹算法的共同版本；算法变化时必须显式升级。
-export const FINGERPRINT_VERSION = '1'
-// 写入账本的工具格式版本，与插件发布版本独立。
-export const TOOL_VERSION = '0.1.0'
+// 旧账本的固定算法标签，不是新格式的独立版本序列。
+export const LEGACY_FINGERPRINT_VERSION = '1'
 
 // 文档种类白名单，决定路由与物理存放位置。
 export const DOCUMENT_KINDS = ['domain', 'architecture', 'decision', 'guide', 'reference', 'reflection'] as const
@@ -233,6 +233,8 @@ export function parseDocument(sourcePath: string, source: string): DocumentResul
     issues.push({ code: 'DOCUMENT_DOMAIN_INVALID', message: 'Document domain must use lowercase kebab-case.', path: sourcePath })
   if (body.trim().length === 0)
     issues.push({ code: 'DOCUMENT_BODY_EMPTY', message: 'Document body must be non-empty.', path: sourcePath })
+  if (/^(?:<{7,}|>{7,}|\|{7,})(?:[\t ]|\r?$)/m.test(body))
+    issues.push({ code: 'DOCUMENT_CONFLICT_MARKER', message: 'Resolve Git conflict markers before using this Document.', path: sourcePath })
 
   // 当前文档解析出的依赖、关联和替代关系。
   const relations = parseRelations(raw.relations, sourcePath, issues)
@@ -365,7 +367,7 @@ export function sourceFingerprint(document: ContextDocument, files: readonly Sou
   return aggregateSourceFingerprint(document.codePaths, files)
 }
 
-/** 文档的持久账本，分别记录内容一致性、源码审查依据和显式待审义务。 */
+/** 文档与来源的三个摘要；当前计算结果不含持久待审状态。 */
 export interface DocumentLedger {
   /** 规范化文档元数据的 SHA-256 指纹。 */
   readonly frontMatterFingerprint: string
@@ -373,6 +375,10 @@ export interface DocumentLedger {
   readonly bodyFingerprint: string
   /** 源码声明与文件内容的指纹；持久账本中的值表示上次审查依据。 */
   readonly sourceFingerprint: string
+}
+
+/** 仅迁移解析使用的旧账本记录，不能作为当前确认载荷。 */
+export interface LegacyDocumentLedger extends DocumentLedger {
   /** 内容经过指纹修复但尚未语义复核；只能由正式 Update 结清。 */
   readonly reviewRequired?: true
 }
@@ -397,18 +403,18 @@ export interface ConvergenceBaseline extends Metrics {
   readonly perDomain: Readonly<Record<string, Metrics>>
 }
 
-/** Runtime 管理的持久账本；源码基线与规模基线具有不同推进条件。 */
+/** 仅迁移读取的旧账本，普通写入不再生成此结构。 */
 export interface Meta {
   /** 持久数据格式标识；升级需明确处理旧格式。 */
   readonly schema: typeof META_SCHEMA | typeof LEGACY_META_SCHEMA
   /** 账本工具格式版本，不直接等同于插件发布版本。 */
   readonly toolVersion: string
   /** 生成账本时使用的 Runtime 协议标识。 */
-  readonly runtimeProtocol: typeof PROTOCOL
+  readonly runtimeProtocol: typeof LEGACY_RUNTIME_PROTOCOL
   /** 指纹算法版本；算法变化必须显式升级。 */
-  readonly fingerprintVersion: typeof FINGERPRINT_VERSION
+  readonly fingerprintVersion: typeof LEGACY_FINGERPRINT_VERSION
   /** 以稳定文档 ID 为键的文档或账本集合。 */
-  readonly documents: Readonly<Record<string, DocumentLedger>>
+  readonly documents: Readonly<Record<string, LegacyDocumentLedger>>
   /** 上次可证明全仓审查完成时记录的源码基线。 */
   readonly repository?: {
     /** 特定用途的持久基线，不能因局部修复自动推进。 */
@@ -420,6 +426,16 @@ export interface Meta {
     }
   }
   /** 由 Init/Prune 建立的规模基线，Update/Repair 应保留。 */
+  readonly convergence?: ConvergenceBaseline
+}
+
+/** 新布局的唯一格式入口；不保存当前文档索引或确认状态。 */
+export interface MetadataManifest {
+  /** 入口、确认身份及后续 Runtime 调用共用的兼容代号。 */
+  readonly format: typeof FORMAT
+  /** 仅保留的历史源码基线，不由普通确认更新推进。 */
+  readonly repository?: NonNullable<Meta['repository']>
+  /** 与文档新鲜度独立的低频规模基线。 */
   readonly convergence?: ConvergenceBaseline
 }
 
@@ -435,6 +451,18 @@ export type MetaResult
     /** 本次内部完整问题集合，不能用裁剪后的输出代替安全判断。 */
     readonly issues: readonly KnowledgeIssue[]
   }
+
+/** 严格读取旧 JSON 并拒绝重复键；仅供显式迁移使用。 */
+export function parseLegacyMetaJson(text: string): unknown {
+  const raw: unknown = JSON.parse(text)
+  try {
+    parseYaml(text, { uniqueKeys: true })
+  }
+  catch {
+    throw new SyntaxError('Legacy metadata contains duplicate keys.')
+  }
+  return raw
+}
 
 /** 判断计数是否为非负安全整数。 */
 function validCount(value: unknown): value is number {
@@ -453,6 +481,117 @@ function parseMetrics(value: unknown, exact = true): Metrics | undefined {
     bodyBytes: value.bodyBytes as number,
     estimatedTokens: value.estimatedTokens as number,
   }
+}
+
+/** 校验并复制可选的历史仓库基线，不计算或推进其内容。 */
+function parseRepositoryBaseline(value: unknown, sourcePath: string, issues: KnowledgeIssue[]): Meta['repository'] {
+  // 允许保留或推进的全仓源码审查基线。
+  let repository: Meta['repository']
+  if (value !== undefined) {
+    if (!isRecord(value) || JSON.stringify(Object.keys(value)) !== JSON.stringify(['baseline']) || !isRecord(value.baseline)
+      || JSON.stringify(Object.keys(value.baseline).sort(compareCodeUnits)) !== JSON.stringify(['revision', 'sourceFingerprint'])
+      || typeof value.baseline.revision !== 'string' || !GIT_REVISION.test(value.baseline.revision)
+      || typeof value.baseline.sourceFingerprint !== 'string' || !SHA256.test(value.baseline.sourceFingerprint)) {
+      issues.push({ code: 'META_REPOSITORY_INVALID', message: 'Meta repository baseline is invalid.', path: sourcePath })
+    }
+    else {
+      repository = { baseline: { revision: value.baseline.revision, sourceFingerprint: value.baseline.sourceFingerprint } }
+    }
+  }
+
+  return repository
+}
+
+/** 校验并复制可选的规模基线，复用所有层级的严格计数规则。 */
+function parseConvergenceBaseline(value: unknown, sourcePath: string, issues: KnowledgeIssue[]): ConvergenceBaseline | undefined {
+  // Init/Prune 建立的规模基线，其他流程应保持不变。
+  let convergence: ConvergenceBaseline | undefined
+  if (value !== undefined) {
+    // 单个规模统计对象的校验结果。
+    const metric = parseMetrics(value, false)
+    if (!isRecord(value)
+      || JSON.stringify(Object.keys(value).sort(compareCodeUnits)) !== JSON.stringify(['bodyBytes', 'documentCount', 'estimatedTokens', 'frontMatterBytes', 'perDomain', 'source'])
+      || (value.source !== 'init' && value.source !== 'prune')
+      || metric === undefined
+      || !isRecord(value.perDomain)) {
+      issues.push({ code: 'META_CONVERGENCE_INVALID', message: 'Meta convergence baseline is invalid.', path: sourcePath })
+    }
+    else {
+      // 按领域 ID 汇总的独立规模统计。
+      const perDomain: Record<string, Metrics> = {}
+      for (const [id, rawMetrics] of Object.entries(value.perDomain).sort(([left], [right]) => compareCodeUnits(left, right))) {
+        // 当前知识集合的规模统计。
+        const metrics = parseMetrics(rawMetrics)
+        if (!DOMAIN_ID.test(id) || metrics === undefined)
+          issues.push({ code: 'META_CONVERGENCE_DOMAIN_INVALID', message: 'A convergence Domain entry is invalid.', path: sourcePath })
+        else
+          perDomain[id] = metrics
+      }
+      convergence = { source: value.source, ...metric, perDomain }
+    }
+  }
+
+  return convergence
+}
+
+/**
+ * 解析统一格式入口并验证规范字节，禁止重复字段与隐式降级。
+ *
+ * @param sourcePath - 入口的仓库相对路径，用于安全诊断。
+ * @param source - 已严格解码的完整 JSON 文本。
+ * @returns 已复制且通过检查的格式入口，不包含文档当前状态。
+ * @throws 格式未知、字段/基线无效、字节超限或不是规范 JSON 时抛出 RuntimeFault。
+ * @remarks 调用阶段：新布局读取或候选验证；不读写文件，也不迁移旧账本。
+ */
+export function parseMetadataManifest(sourcePath: string, source: string): MetadataManifest {
+  if (Buffer.byteLength(source, 'utf8') > MAX_JSON_TEXT_BYTES)
+    throw new RuntimeFault('METADATA_SIZE_EXCEEDED', 'The metadata manifest exceeds its byte limit.', sourcePath)
+  // JSON.parse 后仍要比较规范字节，避免重复键被解析器静默覆盖。
+  let raw: unknown
+  try {
+    raw = JSON.parse(source) as unknown
+  }
+  catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error
+    throw new RuntimeFault('METADATA_JSON_INVALID', 'The metadata manifest must be valid JSON.', sourcePath)
+  }
+  if (!isRecord(raw) || unknownKeys(raw, ['format', 'repository', 'convergence']).length > 0)
+    throw new RuntimeFault('METADATA_INVALID', 'The metadata manifest has an invalid shape.', sourcePath)
+  if (raw.format !== FORMAT)
+    throw new RuntimeFault('FORMAT_UNSUPPORTED', 'The metadata compatibility format is missing or unsupported.', sourcePath)
+
+  // 基线沿用旧格式的严格校验，验证期间不更新历史值。
+  const issues: KnowledgeIssue[] = []
+  // 原样保留的历史源码基线。
+  const repository = parseRepositoryBaseline(raw.repository, sourcePath, issues)
+  // 独立于确认状态的规模基线。
+  const convergence = parseConvergenceBaseline(raw.convergence, sourcePath, issues)
+  // 首个稳定问题决定失败原因，不输出半有效的入口。
+  const first = issues[0]
+  if (first !== undefined)
+    throw new RuntimeFault(first.code, first.message, first.path)
+  // 只保留统一入口允许承载的字段。
+  const metadata: MetadataManifest = {
+    format: FORMAT,
+    ...(repository === undefined ? {} : { repository }),
+    ...(convergence === undefined ? {} : { convergence }),
+  }
+  if (source !== serializeMetadataManifest(metadata))
+    throw new RuntimeFault('METADATA_NON_CANONICAL', 'The metadata manifest must use canonical JSON without duplicate keys.', sourcePath)
+  return metadata
+}
+
+/**
+ * 序列化新元数据入口，供事务写入或只读校验复用。
+ *
+ * @param metadata - 已通过类型及内容验证的格式入口。
+ * @returns 按码元排序、缩进两空格且末尾一个 LF 的 JSON 文本。
+ * @throws 合法类型输入下不主动抛出业务异常。
+ * @remarks 调用阶段：候选推导和规范字节校验；纯计算，不写入正式目录。
+ */
+export function serializeMetadataManifest(metadata: MetadataManifest): string {
+  return stableJson(metadata as unknown as JsonValue)
 }
 
 /**
@@ -479,13 +618,13 @@ export function parseMeta(sourcePath: string, raw: unknown): MetaResult {
     issues.push({ code: 'META_SCHEMA_INVALID', message: `Meta schema must be ${LEGACY_META_SCHEMA} or ${META_SCHEMA}.`, path: sourcePath })
   if (typeof raw.toolVersion !== 'string' || raw.toolVersion.length === 0)
     issues.push({ code: 'META_TOOL_VERSION_INVALID', message: 'Meta toolVersion must be non-empty.', path: sourcePath })
-  if (raw.runtimeProtocol !== PROTOCOL)
-    issues.push({ code: 'META_RUNTIME_PROTOCOL_INVALID', message: `Meta runtimeProtocol must be ${PROTOCOL}.`, path: sourcePath })
-  if (raw.fingerprintVersion !== FINGERPRINT_VERSION)
-    issues.push({ code: 'META_FINGERPRINT_VERSION_INVALID', message: `Meta fingerprintVersion must be ${FINGERPRINT_VERSION}.`, path: sourcePath })
+  if (raw.runtimeProtocol !== LEGACY_RUNTIME_PROTOCOL)
+    issues.push({ code: 'META_RUNTIME_PROTOCOL_INVALID', message: `Meta runtimeProtocol must be ${LEGACY_RUNTIME_PROTOCOL}.`, path: sourcePath })
+  if (raw.fingerprintVersion !== LEGACY_FINGERPRINT_VERSION)
+    issues.push({ code: 'META_LEGACY_FINGERPRINT_VERSION_INVALID', message: `Meta fingerprintVersion must be ${LEGACY_FINGERPRINT_VERSION}.`, path: sourcePath })
 
   // 以稳定文档 ID 为键的知识或账本映射。
-  const documents: Record<string, DocumentLedger> = {}
+  const documents: Record<string, LegacyDocumentLedger> = {}
   if (!isRecord(raw.documents)) {
     issues.push({ code: 'META_DOCUMENTS_INVALID', message: 'Meta documents must be an object.', path: sourcePath })
   }
@@ -508,48 +647,10 @@ export function parseMeta(sourcePath: string, raw: unknown): MetaResult {
     }
   }
 
-  // 允许保留或推进的全仓源码审查基线。
-  let repository: Meta['repository']
-  if (raw.repository !== undefined) {
-    if (!isRecord(raw.repository) || JSON.stringify(Object.keys(raw.repository)) !== JSON.stringify(['baseline']) || !isRecord(raw.repository.baseline)
-      || JSON.stringify(Object.keys(raw.repository.baseline).sort(compareCodeUnits)) !== JSON.stringify(['revision', 'sourceFingerprint'])
-      || typeof raw.repository.baseline.revision !== 'string' || !GIT_REVISION.test(raw.repository.baseline.revision)
-      || typeof raw.repository.baseline.sourceFingerprint !== 'string' || !SHA256.test(raw.repository.baseline.sourceFingerprint)) {
-      issues.push({ code: 'META_REPOSITORY_INVALID', message: 'Meta repository baseline is invalid.', path: sourcePath })
-    }
-    else {
-      repository = { baseline: { revision: raw.repository.baseline.revision, sourceFingerprint: raw.repository.baseline.sourceFingerprint } }
-    }
-  }
-
-  // Init/Prune 建立的规模基线，其他流程应保持不变。
-  let convergence: ConvergenceBaseline | undefined
-  if (raw.convergence !== undefined) {
-    // 待校验的规模基线原始对象。
-    const value = raw.convergence
-    // 单个规模统计对象的校验结果。
-    const metric = parseMetrics(value, false)
-    if (!isRecord(value)
-      || JSON.stringify(Object.keys(value).sort(compareCodeUnits)) !== JSON.stringify(['bodyBytes', 'documentCount', 'estimatedTokens', 'frontMatterBytes', 'perDomain', 'source'])
-      || (value.source !== 'init' && value.source !== 'prune')
-      || metric === undefined
-      || !isRecord(value.perDomain)) {
-      issues.push({ code: 'META_CONVERGENCE_INVALID', message: 'Meta convergence baseline is invalid.', path: sourcePath })
-    }
-    else {
-      // 按领域 ID 汇总的独立规模统计。
-      const perDomain: Record<string, Metrics> = {}
-      for (const [id, rawMetrics] of Object.entries(value.perDomain).sort(([left], [right]) => compareCodeUnits(left, right))) {
-        // 当前知识集合的规模统计。
-        const metrics = parseMetrics(rawMetrics)
-        if (!DOMAIN_ID.test(id) || metrics === undefined)
-          issues.push({ code: 'META_CONVERGENCE_DOMAIN_INVALID', message: 'A convergence Domain entry is invalid.', path: sourcePath })
-        else
-          perDomain[id] = metrics
-      }
-      convergence = { source: value.source, ...metric, perDomain }
-    }
-  }
+  // 两种布局共用同一组只读基线校验，不为格式迁移创建新语义。
+  const repository = parseRepositoryBaseline(raw.repository, sourcePath, issues)
+  // 使用与新入口一致的规模字段校验。
+  const convergence = parseConvergenceBaseline(raw.convergence, sourcePath, issues)
 
   if (issues.length > 0)
     return { ok: false, issues }
@@ -558,64 +659,11 @@ export function parseMeta(sourcePath: string, raw: unknown): MetaResult {
     meta: {
       schema: raw.$schema as Meta['schema'],
       toolVersion: raw.toolVersion as string,
-      runtimeProtocol: PROTOCOL,
-      fingerprintVersion: FINGERPRINT_VERSION,
+      runtimeProtocol: LEGACY_RUNTIME_PROTOCOL,
+      fingerprintVersion: LEGACY_FINGERPRINT_VERSION,
       documents,
       ...(repository === undefined ? {} : { repository }),
       ...(convergence === undefined ? {} : { convergence }),
     },
   }
-}
-
-/**
- * 将内部账本投影为带格式版本标识的确定性 JSON 对象。
- *
- * @param meta - 已通过格式校验的内部账本。
- * @returns 带持久格式标识、按稳定顺序组织的账本对象。
- * @throws 合法类型输入下不主动抛出业务异常。
- * @remarks 调用阶段：文档读取、候选验证或确定性序列化；纯计算，不读写文件。
- */
-export function metaValue(meta: Meta): JsonObject {
-  // 将每份内部文档账本投影为可序列化 JSON 的映射。
-  const documents: JsonObject = {}
-  for (const [id, entry] of Object.entries(meta.documents).sort(([left], [right]) => compareCodeUnits(left, right)))
-    documents[id] = { ...entry }
-  // 按领域 ID 汇总的独立规模统计。
-  const perDomain: JsonObject = {}
-  if (meta.convergence !== undefined) {
-    for (const [id, metrics] of Object.entries(meta.convergence.perDomain).sort(([left], [right]) => compareCodeUnits(left, right)))
-      perDomain[id] = { ...metrics }
-  }
-  return {
-    $schema: meta.schema,
-    toolVersion: meta.toolVersion,
-    runtimeProtocol: PROTOCOL,
-    fingerprintVersion: FINGERPRINT_VERSION,
-    documents,
-    ...(meta.repository === undefined ? {} : { repository: { baseline: { ...meta.repository.baseline } } }),
-    ...(meta.convergence === undefined
-      ? {}
-      : {
-          convergence: {
-            source: meta.convergence.source,
-            documentCount: meta.convergence.documentCount,
-            frontMatterBytes: meta.convergence.frontMatterBytes,
-            bodyBytes: meta.convergence.bodyBytes,
-            estimatedTokens: meta.convergence.estimatedTokens,
-            perDomain,
-          },
-        }),
-  }
-}
-
-/**
- * 生成可写入候选目录的确定性账本 JSON 文本。
- *
- * @param meta - 已通过格式校验的内部账本。
- * @returns 可写入候选 meta.json 的确定性文本。
- * @throws 合法类型输入下不主动抛出业务异常。
- * @remarks 调用阶段：文档读取、候选验证或确定性序列化；纯计算，不读写文件。
- */
-export function serializeMeta(meta: Meta): string {
-  return stableJson(metaValue(meta) as JsonValue)
 }

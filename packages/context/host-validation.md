@@ -34,3 +34,13 @@ Node 子进程或模拟 callback 的结果代替。六个平台的完整目录�
    不能因 `aaplugin validate` 通过就标为通过。
 
 本次开发的真实宿主会话验收尚未执行；需维护者准备宿主后按此表补充。
+
+
+## 0.8 确认模型专项验收（真实宿主待执行）
+
+自动测试与真实宿主会话分别记录。升级后的会话应发现当前 `.meta/manifest.json`、legacy 根部 meta.json 和
+不完整 Context；提示仅引导 inspect。用统一 format 封套调用 confirmation.check，展示 matched/unmatched/
+unavailable，确认不会把 status=success 解释为全仓通过。使用普通命令行 rebase 后检查第三正文，针对准确
+文档执行无正文改写的确认 Update；检查旧协议明确失败、Migrate 的信任选择和旧活动事务处理提示。
+
+Claude、Codex、Cursor、Antigravity CLI、OpenCode、Pi 的本轮真实会话尚未执行；构建与离线 Hook 测试不替代它们。

@@ -47,10 +47,10 @@ describe('runtime protocol', () => {
       runtimeRequest('repository.inspect', {}),
       runtimeRequest('frontier.query', { depth: 1 }),
       runtimeRequest('graph.validate', {}),
+      runtimeRequest('confirmation.check', {}),
       runtimeRequest('delta.compute', {
         gitEvidencePath: evidence,
         scope: { kind: 'repository' },
-        taskEvidence: { intentKnown: true, scopeComplete: true, newCapabilitySuspected: false, crossDomainContractUncertain: false },
       }),
       runtimeRequest('growth.measure', {}),
       runtimeRequest('feedback.match', { context: 'retry', observedBehavior: 'retry failed', outcomeOrCorrection: 'retry transient failures', reuseBoundary: 'service requests' }),
@@ -64,24 +64,27 @@ describe('runtime protocol', () => {
   })
 
   it.each([
-    [{ protocol: 'unknown/v1', capability: 'repository.inspect', input: {} }, 'PROTOCOL_UNSUPPORTED'],
-    [{ protocol: PROTOCOL, capability: 'unknown', input: {} }, 'CAPABILITY_UNKNOWN'],
-    [{ protocol: PROTOCOL, capability: 'repository.inspect', input: {}, extra: true }, 'REQUEST_FIELD_UNKNOWN'],
-    [{ protocol: PROTOCOL, capability: 'graph.validate', input: { directory: 'candidate' } }, 'REQUEST_FIELD_UNKNOWN'],
-    [{ protocol: PROTOCOL, capability: 'graph.validate', action: 'validate', input: {} }, 'REQUEST_FIELD_INVALID'],
-    [{ protocol: PROTOCOL, capability: 'transaction', input: {} }, 'ACTION_UNKNOWN'],
-    [{ protocol: PROTOCOL, capability: 'transaction', action: 'remove', input: {} }, 'ACTION_UNKNOWN'],
-    [{ protocol: PROTOCOL, capability: 'transaction', action: 'validate', input: { runId: '11111111-1111-4111-8111-111111111111', extra: true } }, 'REQUEST_FIELD_UNKNOWN'],
-    [{ protocol: PROTOCOL, capability: 'transaction', action: 'resume', input: { runId: '11111111-1111-4111-8111-111111111111', disposition: 'discard' } }, 'REQUEST_FIELD_INVALID'],
-    [{ protocol: PROTOCOL, capability: 'transaction', action: 'resume', input: { runId: '11111111-1111-4111-8111-111111111111' }, budget: { items: 1 } }, 'REQUEST_FIELD_INVALID'],
-    [{ protocol: PROTOCOL, capability: 'transaction', action: 'begin', input: { command: 'init', mode: 'deep', dryRun: false, scope: { kind: 'repository' }, gitEvidencePath: 'evidence', evidencePaths: ['src/service.ts'], runId: '11111111-1111-4111-8111-111111111111' } }, 'REQUEST_FIELD_UNKNOWN'],
-    [{ protocol: PROTOCOL, capability: 'transaction', action: 'commit', input: { runId: '11111111-1111-4111-8111-111111111111', approval: { approved: false, candidateFingerprint: '0'.repeat(64), sourceEvidenceFingerprint: '0'.repeat(64), summary: 'reviewed' } } }, 'APPROVAL_INVALID'],
-    [{ protocol: PROTOCOL, capability: 'transaction', action: 'commit', input: { runId: '11111111-1111-4111-8111-111111111111' } }, 'REQUEST_FIELD_MISSING'],
-    [{ protocol: PROTOCOL, capability: 'transaction', action: 'commit', input: { runId: '11111111-1111-4111-8111-111111111111', approval: { approved: true, candidateFingerprint: '0'.repeat(64), sourceEvidenceFingerprint: '0'.repeat(64), summary: '' } } }, 'REQUEST_FIELD_INVALID'],
-    [{ protocol: PROTOCOL, capability: 'frontier.query', input: { depth: 2 } }, 'REQUEST_FIELD_INVALID'],
-    [{ protocol: PROTOCOL, capability: 'frontier.query', input: { depth: 2, selectors: { domainIds: ['Service'] } } }, 'REQUEST_FIELD_INVALID'],
-    [{ protocol: PROTOCOL, capability: 'frontier.query', input: { depth: 2, selectors: { documentIds: ['service..retry'] } } }, 'REQUEST_FIELD_INVALID'],
-    [{ protocol: PROTOCOL, capability: 'feedback.match', input: { context: '', observedBehavior: 'x', outcomeOrCorrection: 'y', reuseBoundary: 'z' } }, 'REQUEST_FIELD_INVALID'],
+    [{ protocol: 'plugydown.context.runtime/v1', format: 1, capability: 'repository.inspect', input: {} }, 'PROTOCOL_UNSUPPORTED'],
+    [{ protocol: PROTOCOL, format: 2, capability: 'repository.inspect', input: {} }, 'FORMAT_UNSUPPORTED'],
+    [{ protocol: PROTOCOL, capability: 'repository.inspect', input: {} }, 'REQUEST_FIELD_MISSING'],
+    [{ protocol: 'unknown/v1', format: 1, capability: 'repository.inspect', input: {} }, 'PROTOCOL_UNSUPPORTED'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'unknown', input: {} }, 'CAPABILITY_UNKNOWN'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'repository.inspect', input: {}, extra: true }, 'REQUEST_FIELD_UNKNOWN'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'graph.validate', input: { directory: 'candidate' } }, 'REQUEST_FIELD_UNKNOWN'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'graph.validate', action: 'validate', input: {} }, 'REQUEST_FIELD_INVALID'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'transaction', input: {} }, 'ACTION_UNKNOWN'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'transaction', action: 'remove', input: {} }, 'ACTION_UNKNOWN'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'transaction', action: 'validate', input: { runId: '11111111-1111-4111-8111-111111111111', extra: true } }, 'REQUEST_FIELD_UNKNOWN'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'transaction', action: 'resume', input: { runId: '11111111-1111-4111-8111-111111111111', disposition: 'discard' } }, 'REQUEST_FIELD_INVALID'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'transaction', action: 'resume', input: { runId: '11111111-1111-4111-8111-111111111111' }, budget: { items: 1 } }, 'REQUEST_FIELD_INVALID'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'transaction', action: 'begin', input: { command: 'init', mode: 'deep', dryRun: false, scope: { kind: 'repository' }, gitEvidencePath: 'evidence', evidencePaths: ['src/service.ts'], runId: '11111111-1111-4111-8111-111111111111' } }, 'REQUEST_FIELD_UNKNOWN'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'transaction', action: 'commit', input: { runId: '11111111-1111-4111-8111-111111111111', approval: { approved: false, candidateFingerprint: '0'.repeat(64), sourceEvidenceFingerprint: '0'.repeat(64), summary: 'reviewed' } } }, 'APPROVAL_INVALID'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'transaction', action: 'commit', input: { runId: '11111111-1111-4111-8111-111111111111' } }, 'REQUEST_FIELD_MISSING'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'transaction', action: 'commit', input: { runId: '11111111-1111-4111-8111-111111111111', approval: { approved: true, candidateFingerprint: '0'.repeat(64), sourceEvidenceFingerprint: '0'.repeat(64), summary: '' } } }, 'REQUEST_FIELD_INVALID'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'frontier.query', input: { depth: 2 } }, 'REQUEST_FIELD_INVALID'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'frontier.query', input: { depth: 2, selectors: { domainIds: ['Service'] } } }, 'REQUEST_FIELD_INVALID'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'frontier.query', input: { depth: 2, selectors: { documentIds: ['service..retry'] } } }, 'REQUEST_FIELD_INVALID'],
+    [{ protocol: PROTOCOL, format: 1, capability: 'feedback.match', input: { context: '', observedBehavior: 'x', outcomeOrCorrection: 'y', reuseBoundary: 'z' } }, 'REQUEST_FIELD_INVALID'],
   ])('rejects strict-envelope or payload violation %#', async (request, code) => {
     // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
@@ -273,7 +276,7 @@ describe('runtime protocol', () => {
   it('keeps product failures structured, stable, and free of absolute paths', async () => {
     // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
-    const response = await handle(root, { protocol: PROTOCOL, capability: 'graph.validate', input: {}, [root]: true })
+    const response = await handle(root, { protocol: PROTOCOL, format: 1, capability: 'graph.validate', input: {}, [root]: true })
     // 序列化响应文本，用于确认不会包含危险路径或环境值。
     const serialized = JSON.stringify(response)
 
@@ -287,7 +290,6 @@ describe('runtime protocol', () => {
     ['delta.compute', undefined, {
       gitEvidencePath: '.scratch/evidence/request',
       scope: { kind: 'paths', paths: ['../private.ts'] },
-      taskEvidence: { intentKnown: true, scopeComplete: true, newCapabilitySuspected: false, crossDomainContractUncertain: false },
     }],
     ['transaction', 'begin', {
       command: 'update',
@@ -309,7 +311,7 @@ describe('runtime protocol', () => {
     // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
     // 当前测试要送入 Runtime 的完整请求封套。
-    const request = { protocol: PROTOCOL, capability, ...(action === undefined ? {} : { action }), input }
+    const request = { protocol: PROTOCOL, format: 1, capability, ...(action === undefined ? {} : { action }), input }
     const response = await handle(root, request)
 
     expect(response.status).toBe('failed')
@@ -324,6 +326,7 @@ describe('runtime protocol', () => {
     // 当前测试要送入 Runtime 的完整请求封套。
     const request = {
       protocol: PROTOCOL,
+      format: 1,
       capability: 'repository.inspect',
       /** 构造会抛错的请求属性，验证外层异常边界不会吞掉未知错误。 */
       get input(): never {

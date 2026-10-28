@@ -225,7 +225,7 @@ describe('repository safety', () => {
 
     // 当前故障场景独占的临时仓库，由测试清理钩子回收。
     const metaRoot = await repository()
-    await fs.truncate(path.join(metaRoot, 'context/meta.json'), 4 * 1024 * 1024 + 1)
+    await fs.truncate(path.join(metaRoot, 'context/.meta/manifest.json'), 4 * 1024 * 1024 + 1)
     expect((await validate(metaRoot)).diagnostics?.some(item => item.code === 'FILE_SIZE_EXCEEDED')).toBe(true)
 
     // 当前故障场景独占的临时仓库，由测试清理钩子回收。
@@ -240,7 +240,6 @@ describe('repository safety', () => {
     const delta = await call(evidenceRoot, 'delta.compute', {
       gitEvidencePath: evidence,
       scope: { kind: 'repository' },
-      taskEvidence: { intentKnown: true, scopeComplete: true, newCapabilitySuspected: false, crossDomainContractUncertain: false },
     })
     expect(delta.status).toBe('failed')
     expect(delta.diagnostics?.some(item => item.code === 'FILE_SIZE_EXCEEDED')).toBe(true)
@@ -252,7 +251,6 @@ describe('repository safety', () => {
     const response = await call(root, 'delta.compute', {
       gitEvidencePath: '.scratch/evidence/request/nested',
       scope: { kind: 'repository' },
-      taskEvidence: { intentKnown: true, scopeComplete: true, newCapabilitySuspected: false, crossDomainContractUncertain: false },
     })
 
     expect(response.status).toBe('failed')
@@ -318,7 +316,6 @@ describe('repository safety', () => {
     const evidencePath = await call(root, 'delta.compute', {
       gitEvidencePath: `.scratch/evidence/${long}`,
       scope: { kind: 'repository' },
-      taskEvidence: { intentKnown: true, scopeComplete: true, newCapabilitySuspected: false, crossDomainContractUncertain: false },
     })
     expect(evidencePath.status).toBe('failed')
     expect(evidencePath.diagnostics?.[0]?.code).toBe('REQUEST_FIELD_INVALID')

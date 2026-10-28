@@ -2,6 +2,7 @@ import type { JsonValue } from './stable-json.js'
 import { Buffer } from 'node:buffer'
 import process from 'node:process'
 import { handleRequest } from './handler.js'
+import { FORMAT } from './protocol.js'
 import { stableJson } from './stable-json.js'
 
 // 单次标准输入请求的最大字节数，防止无界缓冲。
@@ -31,7 +32,8 @@ async function readRequest(): Promise<unknown> {
 /** 构造传输层失败对象，不混用 Runtime 的产品状态。 */
 function transportFailure(code: string): JsonValue {
   return {
-    transport: 'plugydown.context.runtime.transport/v1',
+    transport: 'plugydown.context.runtime.transport',
+    format: FORMAT,
     status: 'failed',
     diagnostics: [{ code, severity: 'error', message: 'The Runtime request could not be transported safely.' }],
   }

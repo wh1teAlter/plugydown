@@ -11,7 +11,7 @@ Plugydown Context 为 AI 编码助手提供可路由、可验证、可收敛的�
 | `init` | 首次建立最小完整的 Domain 与 Document 体系 |
 | `update` | 同步获得授权范围内的持久工程事实 |
 | `prune` | 在保留唯一知识和源码覆盖的前提下收敛知识 |
-| `repair` | 修复 Git 合并后的内容指纹失配，保留文档内容和待复核状态 |
+| `migrate` | 将旧账本显式迁移为不可变确认，保留历史依据和基线 |
 
 产品支持 Claude Code、Codex、Cursor、Antigravity CLI、OpenCode 与 Pi。Investigator 建立工程事实，Reflector 整理可复用的临时反馈，
 Recorder 是 transaction candidate 的唯一语义作者；Main Assistant 负责授权边界和最终批准。
@@ -116,7 +116,7 @@ Pi 原生支持 npm，但本产品保持私有源码包和 Git release 分支发
 
 调用 `node "<绝对 Runtime 路径>"` 时保持 cwd 为业务仓库根。不要假定 hooks 中的 `${PLUGIN_ROOT}` 等变量
 在普通 Skill 正文或任意 shell 中也会展开。Runtime 的唯一调用协议见随 Skill 交付的 `references/runtime.md`。
-SessionStart Hook 是尽力而为的知识发现提示；没有 `context/meta.json` 的新仓库需先主动运行 Init。
+SessionStart Hook 是尽力而为的知识发现提示；没有 `context/` 的新仓库需先主动运行 Init。
 
 Cursor 的模型与工具偏好仅作为说明；OpenCode 配置原生工具与权限，但不强制限定候选目录。私有角色模式不创建
 独立 Agent，也不隔离模型或工具。各平台的授权、Recorder 与 Investigator 分工和 Main Assistant 最终批准规则相同。
@@ -134,51 +134,53 @@ Cursor 的模型与工具偏好仅作为说明；OpenCode 配置原生工具与�
   别的 clone 要么没有它（证据损坏），要么字节不同（文档一直待复核）。monorepo 中声明 `packages/foo/src/**`，而不是包根；
 - 单次调用最多展开 10,000 个源文件、512 MiB；
 - Runtime 只证明字节与批准一致，无法证明复核真的发生——复核由工作流和 Investigator 审查保证；
-- 长期未处理的待复核 Document 会让 repository baseline 停住，定期运行 repository 范围的 `update` 即可；
-- squash 合并可能让 baseline 所在的分支提交从历史中消失。待复核队列只看指纹，不受影响；
-  只是在下一次 repository 范围的 `update` 前移 baseline 之前，新增的未被引用路径只能看到工作区里的部分。
+- `matched` 表示当前完整输入与一次确认一致，不能证明自然语言必然正确；
+- Update 不推进 repository 或 convergence baseline；确认不依赖分支、commit ID 或历史可达性。
 
-## Git merge / rebase 后恢复
+## 普通 Git 协作与快速检查
 
-从 0.7.0 开始，`repair` 为内容指纹失配提供正式事务入口。先完成 Git 合并或 rebase，清除冲突标记；
-有活动 Runtime 事务时先 `resume`。`repository.inspect` 的 `status: success` 仅代表检查执行成功，
-仍须检查 `data.context.state`；`repairable: true` 表示正式结构符合内容指纹修复条件。
+0.8.0 使用 `context/.meta/`：入口只保存统一 `format: 1` 与低频基线，按内容身份分文件保存不可变确认。
+没有持久 `reviewRequired`、latest 指针或待审队列。不同分支新增的确认可以由普通 Git 共存，不需要
+merge driver、hook 或 AI 才能正确判断；不同文档更新不会再争抢同一条当前账本记录。
 
-1. 调用 `repository.inspect`，输入 `{"repair":true,"selectedDocumentIds":["domain.document-id"]}`。
-   `data.repair.items` 按文档列出字段旧值、新值及是否在指定范围内。结果支持 budget/cursor；需要读取完整
-   计划才能确定全部失配范围。未选中的失配文档会阻止事务，不会被自动纳入修复。
-2. 收集新 Git evidence，运行 `transaction.begin`：`command: repair`、`mode: deep`、
-   `scope: {kind: documents, ids: [...]}`、`dryRun: true`、`evidencePaths: []`。
-   `repair_staged` 后直接调用 `transaction.validate`，不要修改候选。验证返回计划摘要和候选指纹，
-   随后清理临时事务；正式文件不变。
-3. 在已有修复授权范围内重新收集 evidence，以 `dryRun: false` 开始新事务。验证后审查候选，使用
-   `candidateFingerprint` 与 `sourceEvidenceFingerprint` 绑定批准，再调用 `transaction.commit`。
-4. 再次 inspect 指定文档并运行 `graph.validate`。内容指纹错误应消失，但文档仍有 `reviewRequired: true`
-   和 `DOCUMENT_REVIEW_PENDING`。正常查询和 `delta.compute` 恢复可用。
-5. 运行获授权的 `update` 对照源码逐篇复核。仍准确的文档通过 `reaffirmedDocumentIds` 确认，需要修改的
-   在候选中修改；验证、审查、批准提交后才清除待复核状态。源码未变、没有 `code.paths` 的文档也不例外。
+解决 Markdown 冲突后，调用 `confirmation.check`，不再执行 Repair。如果最终正文、业务元数据和来源
+恰好匹配某次确认，直接得到 matched；第三份组合正文得到 unmatched，而非结构损坏。需要核对的文档仍
+准确时，Update 通过 `confirmedDocumentIds` 生成新确认，无需为更新 hash 改写文档。确实变化的内容才编辑。
 
-Repair 仅重算指定文档失配的 `bodyFingerprint` / `frontMatterFingerprint`，并记录内容待复核义务。
-它保持所有 Markdown 字节、路径、权限，以及原有 `sourceFingerprint`、repository baseline、convergence
-和其他文档记录。引用源码必须可以安全读取，供事务绑定当前证据；读取成功不代表已经完成语义复核。
-Schema 损坏、缺失账本记录、重复 ID、关系错误和不安全路径仍然阻断，不属于 Repair 的修复范围。
+来源缺失单独报告 unavailable；Update 可直接开始，在候选中修正 `code.paths` 后验证。危险路径、坏记录、
+冲突标记和并发修改仍拒绝。计算 hash、解决 Git 冲突和完成语义审查是三件不同的事。
 
-新 Runtime 读取 Meta v1 与 v2。首次实际 Repair 在同一事务内把 `$schema` 升为 `plugydown.context.meta/v2`，
-以容纳 `reviewRequired: true`；一致的账本返回 `no_change`，不会为了迁移而写文件。新 Init 使用 v2，
-普通 Update 保留已有版本。原有三个指纹算法和 Runtime 协议均不变。旧 Runtime 不识别 v2，团队应先统一
-升级插件，再提交迁移后的账本。插件统一交付 `schemas/meta.schema.json`，根据账本的 `$schema` 字段
-校验 v1/v2：旧账本仍仅允许三个指纹字段，v2 才允许 `reviewRequired`。旧插件版本保留其自带的 Schema。
+```json
+{"protocol":"plugydown.context.runtime","format":1,"capability":"confirmation.check","input":{"scope":{"kind":"repository"},"explain":true}}
+```
 
-候选或源码变化会使旧批准失效；正式 Context 变化需要重新开始事务。`backup_restored` 加上
-`REPAIR_ROLLED_BACK` 表示已恢复原始副本，原来的失配仍然存在，修复没有完成；人工恢复结果须保留现场。
-不要通过手改 hash 或伪造 `sourceFingerprint` 来消除报错。完整请求和恢复规则见随 Skill 交付的
-[Runtime reference](src/skills/context/references/runtime.md)。
+完整 API、计数、分页、Git evidence、批准和恢复规则见 [Runtime reference](src/skills/context/references/runtime.md)。
+只读检查不修改正式文件。全仓 CI 必须消费全部分页并核对范围与计数，不能只看进程退出码或 status=success。
+`exact_basis` 要求所有输入 matched；`content_guard` 允许已确认正文的来源单独漂移，但仍拒绝无效来源和
+第三正文。具体强度由业务仓库明确选择；本插件升级不自动改业务 CI。
+
+## 从 0.7 及更早版本迁移
+
+新版本使用固定协议名加统一 format；旧 `/v1` 请求明确拒绝。先协调客户端和 CI 配对升级，并处理完旧
+Runtime 的活动事务。旧根部 `meta.json` 在 inspect 中显示 legacy，只能通过 Migrate 写入新格式。
+
+Migrate 要求显式选择 `import-trusted` 或 `reconfirm`，支持分页预览和 dry-run。前者原样导入旧元组，排除
+旧 `reviewRequired: true` 记录；后者不导入确认。迁移不重算旧摘要来冒充当前批准，不需要恢复已删除源码，
+不修改 Markdown 字节/路径/权限和既有基线。候选与旧入口在同一次事务切换中生效或恢复。
+
+新旧入口并存、格式未知和损坏数据都不静默回退。发布新插件前须准备业务检查器，避免自动跟随发行分支的
+旧检查器误用新协议。本地源码更新不代表已发布，也不自动迁移任何仓库。
+
+首版按完整文档确认，无自动历史 GC、跨分支撤销系统或语义哈希。发现同字节的旧确认本身错误时，应纠正
+文档/来源并重新审查；仅删除本地记录不能保证其他分支不会带回它，不能宣称已完成全局撤销。
 
 ## 正式知识
 
 ```text
 context/
-├── meta.json
+├── .meta/
+│   ├── manifest.json
+│   └── confirmations/<document-id>/<key>.json
 └── <domain>/
     ├── domain.md
     ├── design/
@@ -209,11 +211,12 @@ context/
 
 ## Runtime
 
-私有 Runtime 只暴露七个 capability：
+私有 Runtime 暴露八个 capability：
 
 - `repository.inspect`
 - `frontier.query`
 - `graph.validate`
+- `confirmation.check`
 - `delta.compute`
 - `growth.measure`
 - `feedback.match`

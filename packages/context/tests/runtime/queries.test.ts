@@ -47,7 +47,7 @@ describe('read queries', () => {
     expect(JSON.stringify(readyResponse)).not.toContain('currentRevision')
     expect(JSON.stringify(readyResponse)).not.toContain('relationCount')
 
-    await fs.writeFile(path.join(root, 'context/meta.json'), '{}')
+    await fs.writeFile(path.join(root, 'context/.meta/manifest.json'), '{}')
     const invalid = await call(root, 'repository.inspect', {})
     expect(invalid.data).toMatchObject({ context: { state: 'invalid' }, meta: { state: 'invalid' } })
     expect(invalid.diagnostics?.length).toBeGreaterThan(0)
@@ -59,9 +59,9 @@ describe('read queries', () => {
     // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = '00000000-0000-4000-8000-000000000001'
     await fs.mkdir(path.join(root, `.scratch/locks/context-write`), { recursive: true })
-    await fs.writeFile(path.join(root, `.scratch/locks/context-write/owner.json`), JSON.stringify({ schema: 'plugydown.context.lock/v1', runId }))
+    await fs.writeFile(path.join(root, `.scratch/locks/context-write/owner.json`), JSON.stringify({ kind: 'plugydown.context.lock', format: 1, runId }))
     await fs.mkdir(path.join(root, `.scratch/runs/${runId}`), { recursive: true })
-    await fs.writeFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), JSON.stringify({ runId, command: 'update', phase: 'staged' }))
+    await fs.writeFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), JSON.stringify({ kind: 'plugydown.context.transaction', format: 1, runId, command: 'update', phase: 'staged' }))
 
     const inspect = await call(root, 'repository.inspect', {})
     expect(inspect.data?.activeRun).toEqual({ runId, command: 'update', phase: 'staged' })
@@ -74,9 +74,9 @@ describe('read queries', () => {
     // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
     const runId = '00000000-0000-4000-8000-000000000002'
     await fs.mkdir(path.join(root, '.scratch/locks/context-write'), { recursive: true })
-    await fs.writeFile(path.join(root, '.scratch/locks/context-write/owner.json'), JSON.stringify({ schema: 'plugydown.context.lock/v1', runId }))
+    await fs.writeFile(path.join(root, '.scratch/locks/context-write/owner.json'), JSON.stringify({ kind: 'plugydown.context.lock', format: 1, runId }))
     await fs.mkdir(path.join(root, `.scratch/runs/${runId}`), { recursive: true })
-    await fs.writeFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), JSON.stringify({ runId, command: '/tmp', phase: '/tmp' }))
+    await fs.writeFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), JSON.stringify({ kind: 'plugydown.context.transaction', format: 1, runId, command: '/tmp', phase: '/tmp' }))
 
     const inspect = await call(root, 'repository.inspect', {})
 
@@ -92,10 +92,10 @@ describe('read queries', () => {
     const runId = '00000000-0000-4000-8000-000000000003'
     await fs.mkdir(path.join(root, '.scratch/locks/context-write'), { recursive: true })
     await fs.mkdir(path.join(root, `.scratch/runs/${runId}`), { recursive: true })
-    await fs.writeFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), JSON.stringify({ runId, command: 'update', phase: 'staged' }))
+    await fs.writeFile(path.join(root, `.scratch/runs/${runId}/manifest.json`), JSON.stringify({ kind: 'plugydown.context.transaction', format: 1, runId, command: 'update', phase: 'staged' }))
 
     // 清单即使合法，也不能把缺少锁格式标识的所有者误判为活动事务。
-    for (const owner of [{ runId }, { schema: 'plugydown.context.lock/v1', runId, extra: 1 }]) {
+    for (const owner of [{ runId }, { kind: 'plugydown.context.lock', format: 1, runId, extra: 1 }]) {
       await fs.writeFile(path.join(root, '.scratch/locks/context-write/owner.json'), JSON.stringify(owner))
       const inspect = await call(root, 'repository.inspect', {})
 
@@ -167,15 +167,14 @@ describe('read queries', () => {
   it('derives targeted source freshness for compact continuation', async () => {
     // 当前测试拥有的隔离仓库根目录，由测试清理钩子回收。
     const root = await ready()
-    const fresh = await call(root, 'repository.inspect', { selectedDocumentIds: ['service.retry', 'missing'] })
+    const fresh = await call(root, 'repository.inspect', { selectedDocumentIds: ['service.retry'] })
     expect(fresh.data?.selected).toEqual([
-      expect.objectContaining({ id: 'missing', state: 'missing' }),
-      expect.objectContaining({ id: 'service.retry', state: 'fresh' }),
+      expect.objectContaining({ documentId: 'service.retry', confirmationState: 'matched' }),
     ])
 
     await fs.writeFile(path.join(root, 'src/retry.ts'), 'changed\n')
     const stale = await call(root, 'repository.inspect', { selectedDocumentIds: ['service.retry'] })
-    expect(stale.data?.selected).toEqual([expect.objectContaining({ id: 'service.retry', state: 'stale' })])
+    expect(stale.data?.selected).toEqual([expect.objectContaining({ documentId: 'service.retry', confirmationState: 'unmatched' })])
   })
 
   it('keeps formal-only reads usable when an unrelated source is unavailable', async () => {
@@ -193,7 +192,7 @@ describe('read queries', () => {
     const selectedClient = await call(root, 'repository.inspect', { selectedDocumentIds: ['client'] })
     expect(selectedClient).toMatchObject({
       status: 'success',
-      data: { context: { state: 'ready', sourceState: 'degraded' }, selected: [{ id: 'client', state: 'source_unavailable' }] },
+      data: { context: { state: 'ready', sourceState: 'degraded' }, selected: [{ documentId: 'client', confirmationState: 'unavailable' }] },
     })
     expect((await call(root, 'graph.validate', {}))).toMatchObject({ status: 'failed' })
   })
@@ -365,5 +364,25 @@ describe('read queries', () => {
       diagnostics: [{ code: 'FEEDBACK_IDENTITY_INVALID', path: '.scratch/feedback' }],
     })
     expect(JSON.stringify(response)).not.toContain('private-deadbeef')
+  })
+})
+
+describe('public confirmation facts', () => {
+  it('binds paged counts to the whole selection and rejects changed snapshots', async () => {
+    const root = await ready()
+    const input = { explain: true }
+    const first = await call(root, 'confirmation.check', input, { budget: { items: 1 } })
+    expect(first).toMatchObject({ status: 'incomplete', data: { summary: { documents: 4, checked: 4, matched: 4, unmatched: 0, unavailable: 0, unchecked: 0 }, recordStore: { state: 'valid', coverage: 'repository' } } })
+    const rest = await call(root, 'confirmation.check', input, { cursor: first.cursor! })
+    expect(rest.status).toBe('success')
+    expect(rest.data?.snapshotFingerprint).toBe(first.data?.snapshotFingerprint)
+    await fs.writeFile(path.join(root, 'src/retry.ts'), 'changed\n')
+    expect((await call(root, 'confirmation.check', input, { cursor: first.cursor! })).diagnostics?.[0]?.code).toBe('CURSOR_STALE')
+  })
+
+  it('reports outside scope as unchecked and supports a path selection with no matching Document', async () => {
+    const root = await ready()
+    expect((await call(root, 'confirmation.check', { scope: { kind: 'documents', ids: ['service.retry'] } })).data?.summary).toEqual({ documents: 4, checked: 1, matched: 1, unmatched: 0, unavailable: 0, unchecked: 3 })
+    expect(await call(root, 'confirmation.check', { scope: { kind: 'paths', paths: ['src/other.ts'] } })).toMatchObject({ status: 'success', data: { sourceState: 'unchecked', items: [], summary: { checked: 0, unchecked: 4 } } })
   })
 })
