@@ -50,6 +50,24 @@
           }
         }
       }
+    },
+    "repairSummary": {
+      "type": "object",
+      "required": [
+        "documentCount",
+        "planFingerprint"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "documentCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "planFingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
     }
   },
   "oneOf": [
@@ -82,6 +100,9 @@
                   "items": {
                     "$ref": "#/$defs/documentId"
                   }
+                },
+                "repair": {
+                  "const": true
                 }
               }
             },
@@ -584,7 +605,8 @@
                   "enum": [
                     "init",
                     "update",
-                    "prune"
+                    "prune",
+                    "repair"
                   ]
                 },
                 "mode": {
@@ -689,7 +711,7 @@
                   "items": {
                     "$ref": "#/$defs/sourcePattern"
                   },
-                  "minItems": 1
+                  "minItems": 0
                 },
                 "reaffirmedDocumentIds": {
                   "type": "array",
@@ -700,7 +722,48 @@
                   },
                   "minItems": 1
                 }
-              }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "command": {
+                        "const": "repair"
+                      }
+                    },
+                    "required": [
+                      "command"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "mode": {
+                        "const": "deep"
+                      },
+                      "scope": {
+                        "properties": {
+                          "kind": {
+                            "const": "documents"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      "reaffirmedDocumentIds": false
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "evidencePaths": {
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    }
+                  }
+                }
+              ]
             },
             "action": {
               "const": "begin"
@@ -966,6 +1029,13 @@
                         "ready",
                         "degraded"
                       ]
+                    },
+                    "repairable": {
+                      "const": true
+                    },
+                    "contentReviewRequiredCount": {
+                      "type": "integer",
+                      "minimum": 1
                     }
                   }
                 },
@@ -1035,7 +1105,8 @@
                       "enum": [
                         "init",
                         "update",
-                        "prune"
+                        "prune",
+                        "repair"
                       ]
                     },
                     "phase": {
@@ -1076,6 +1147,114 @@
                       "sourceFingerprint": {
                         "type": "string",
                         "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "reviewRequired": {
+                        "const": true
+                      }
+                    }
+                  }
+                },
+                "repair": {
+                  "type": "object",
+                  "required": [
+                    "eligible",
+                    "documentCount",
+                    "selectedDocumentCount",
+                    "remainingDocumentCount",
+                    "schemaMigrationRequired",
+                    "planFingerprint",
+                    "items"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "eligible": {
+                      "type": "boolean"
+                    },
+                    "documentCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "selectedDocumentCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "remainingDocumentCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "schemaMigrationRequired": {
+                      "type": "boolean"
+                    },
+                    "planFingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "documentId",
+                          "selected",
+                          "fields"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "documentId": {
+                            "$ref": "#/$defs/documentId"
+                          },
+                          "selected": {
+                            "type": "boolean"
+                          },
+                          "fields": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 3,
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "field",
+                                "before",
+                                "after"
+                              ],
+                              "additionalProperties": false,
+                              "properties": {
+                                "field": {
+                                  "enum": [
+                                    "bodyFingerprint",
+                                    "frontMatterFingerprint",
+                                    "reviewRequired"
+                                  ]
+                                },
+                                "before": {
+                                  "oneOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[a-f0-9]{64}$"
+                                    },
+                                    {
+                                      "const": true
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "after": {
+                                  "oneOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[a-f0-9]{64}$"
+                                    },
+                                    {
+                                      "const": true
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
                       }
                     }
                   }
@@ -2206,6 +2385,9 @@
                 },
                 "nextAction": {
                   "const": "semantic_review"
+                },
+                "repair": {
+                  "$ref": "#/$defs/repairSummary"
                 }
               }
             },
@@ -2456,6 +2638,9 @@
                 "sourceEvidenceFingerprint": {
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
+                },
+                "repair": {
+                  "$ref": "#/$defs/repairSummary"
                 }
               }
             },
@@ -2857,6 +3042,56 @@
                 },
                 "manualRecoveryRequired": {
                   "const": true
+                }
+              }
+            },
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime/v1"
+            },
+            "capability": {
+              "const": "transaction"
+            },
+            "status": {
+              "const": "success"
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "runId",
+                "outcome",
+                "candidatePath",
+                "nextAction"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                },
+                "outcome": {
+                  "const": "repair_staged"
+                },
+                "candidatePath": {
+                  "type": "string",
+                  "pattern": "^\\.scratch/runs/[a-f0-9-]+/candidate/context$"
+                },
+                "nextAction": {
+                  "const": "validate"
                 }
               }
             },
