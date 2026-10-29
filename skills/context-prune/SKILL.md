@@ -20,3 +20,6 @@ Load the Context Operating Skill first and follow its Runtime, status, Role Brie
 
 Prune updates the convergence baseline only. It retains historical confirmation files, even for deleted Documents; it
 does not turn unrelated unmatched inputs into confirmed ones or advance the repository baseline.
+
+Later centralized Compact may evict some historical confirmations under its own maintenance authorization. Prune itself
+does not perform that eviction; independent branch cleanup would reintroduce Git conflicts.

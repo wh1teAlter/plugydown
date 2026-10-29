@@ -1,0 +1,5 @@
+interface:
+  display_name: context-compact
+  short_description: Retain bounded Context confirmations through the repository's single mainline maintenance workflow.
+policy:
+  allow_implicit_invocation: false
