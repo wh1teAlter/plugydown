@@ -84,7 +84,7 @@ review. Light Update may be reviewed directly by the Main Assistant unless uncer
 
 ## Common write contract
 
-Only explicit Init, Update, Prune, or Migrate authorization permits formal writes. They use the same contract:
+Semantic writes require explicit Init, Update, Prune, or Migrate authorization. They use the same contract:
 
 ```text
 resolve authorization and scope
@@ -104,8 +104,20 @@ Never edit live `context/` directly. Any candidate or source change after valida
 Never expand beyond authorized scope without the user's decision. Preserve conflicting copies for manual recovery. The
 command documents own command-specific sequencing: Init is Deep, Update chooses Light/Deep from blockers and evidence,
 and Prune and Migrate are Deep. Migration requires an explicit trust strategy and preserves baselines.
-Only semantically reviewed new/changed or explicitly confirmed Documents receive new records. Historical records are
-immutable; no persistent reviewRequired, current pointer or replacement pending flag is written.
+Only semantically reviewed new/changed or explicitly confirmed Documents receive new records. Ordinary commands retain
+historical records unchanged; no persistent reviewRequired, current pointer or replacement pending flag is written.
+
+## Central confirmation retention
+
+`confirmation.retention` previews a bounded plan without writing. Only the separately authorized `compact` command may
+evict records, through the repository's single mainline maintenance workflow. Ordinary Update, Prune and development
+branches continue to append/retain records. Do not infer coordination from a branch name.
+
+Compact changes no document content, source mapping, baseline or surviving record. Its `retention_review` is mechanical:
+preserve current exact/content match facts and one real record per retired identity. A repository-authorized CI policy
+may approve this result without a Recorder or model. This exception does not grant semantic confirmation or permission
+to push, merge or configure CI during ordinary tasks. Follow the Compact command and shipped integration guide.
+Existing format=1 data remains readable and writable by 0.8 clients.
 
 ## Ordinary task completion
 
