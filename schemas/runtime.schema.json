@@ -235,6 +235,48 @@
           }
         }
       ]
+    },
+    "retentionSummary": {
+      "type": "object",
+      "required": [
+        "beforeCount",
+        "afterCount",
+        "removedCount",
+        "activeIdentityCount",
+        "retiredIdentityCount",
+        "triggered",
+        "planFingerprint"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "beforeCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "afterCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeIdentityCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retiredIdentityCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "triggered": {
+          "type": "boolean"
+        },
+        "planFingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
     }
   },
   "oneOf": [
@@ -784,7 +826,8 @@
                     "init",
                     "update",
                     "prune",
-                    "migrate"
+                    "migrate",
+                    "compact"
                   ]
                 },
                 "mode": {
@@ -999,6 +1042,38 @@
                       "properties": {
                         "confirmedDocumentIds": {}
                       }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "command": {
+                        "const": "compact"
+                      }
+                    },
+                    "required": [
+                      "command"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "mode": {
+                        "const": "deep"
+                      },
+                      "scope": {
+                        "properties": {
+                          "kind": {
+                            "const": "repository"
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "not": {
+                      "required": [
+                        "confirmedDocumentIds"
+                      ]
                     }
                   }
                 }
@@ -1300,6 +1375,33 @@
               "const": 1
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "input",
+            "format"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime"
+            },
+            "capability": {
+              "const": "confirmation.retention"
+            },
+            "input": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {}
+            },
+            "format": {
+              "const": 1
+            }
+          }
         }
       ]
     },
@@ -1329,7 +1431,8 @@
                 "growth.measure",
                 "feedback.match",
                 "transaction",
-                "unknown"
+                "unknown",
+                "confirmation.retention"
               ]
             },
             "status": {
@@ -1510,7 +1613,8 @@
                         "init",
                         "update",
                         "prune",
-                        "migrate"
+                        "migrate",
+                        "compact"
                       ]
                     },
                     "phase": {
@@ -2736,12 +2840,44 @@
                   "pattern": "^[a-f0-9]{64}$"
                 },
                 "nextAction": {
-                  "const": "semantic_review"
+                  "enum": [
+                    "semantic_review",
+                    "retention_review"
+                  ]
                 },
                 "confirmation": {
                   "$ref": "#/$defs/confirmationSummary"
+                },
+                "retention": {
+                  "$ref": "#/$defs/retentionSummary"
                 }
-              }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "required": [
+                      "retention"
+                    ],
+                    "properties": {
+                      "retention": {}
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "nextAction": {
+                        "const": "retention_review"
+                      }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "nextAction": {
+                        "const": "semantic_review"
+                      }
+                    }
+                  }
+                }
+              ]
             },
             "diagnostics": {
               "$ref": "#/$defs/diagnostics"
@@ -3013,6 +3149,9 @@
                 },
                 "confirmation": {
                   "$ref": "#/$defs/confirmationSummary"
+                },
+                "retention": {
+                  "$ref": "#/$defs/retentionSummary"
                 }
               }
             },
@@ -3690,6 +3829,89 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 4096
+            },
+            "format": {
+              "const": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "protocol",
+            "capability",
+            "status",
+            "data",
+            "format"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": {
+              "const": "plugydown.context.runtime"
+            },
+            "capability": {
+              "const": "confirmation.retention"
+            },
+            "status": {
+              "enum": [
+                "success"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "contextFingerprint",
+                "snapshotFingerprint",
+                "retention"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "contextFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "snapshotFingerprint": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "retention": {
+                  "$ref": "#/$defs/retentionSummary"
+                }
+              }
+            },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "severity",
+                  "message"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  },
+                  "severity": {
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
             },
             "format": {
               "const": 1
