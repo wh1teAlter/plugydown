@@ -1,0 +1,55 @@
+name: Context retention guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+jobs:
+  retention-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a fixed official distribution
+        env:
+          DISTRIBUTION: ${{ vars.CONTEXT_DISTRIBUTION_REVISION }}
+        run: '[[ "$DISTRIBUTION" =~ ^[a-f0-9]{40}$ ]]'
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/checkout@v5
+        with:
+          repository: wh1teAlter/plugydown
+          ref: ${{ vars.CONTEXT_DISTRIBUTION_REVISION }}
+          path: .scratch/evidence/context-distribution
+          persist-credentials: false
+      - name: Check ownership and actual merge-result facts
+        env:
+          EXPECTED_ACTOR: ${{ vars.CONTEXT_MAINTENANCE_ACTOR }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs'
+          import { execFileSync } from 'node:child_process'
+          import { resolve } from 'node:path'
+          import { auditContribution, verifyRetention, verifyRetentionMerge } from './.scratch/evidence/context-distribution/integrations/retention.mjs'
+          const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
+          const options = { root: process.cwd(), runtime: resolve('.scratch/evidence/context-distribution/runtime/context/main.mjs') }
+          if (event.pull_request) {
+            const pr = event.pull_request
+            const owned = process.env.EXPECTED_ACTOR && pr.user.login === process.env.EXPECTED_ACTOR && pr.head.repo?.full_name === process.env.GITHUB_REPOSITORY && pr.head.ref.startsWith('context-retention/')
+            const pinned = { ...options, base: pr.base.sha, head: pr.head.sha }
+            console.log(JSON.stringify(owned ? await verifyRetention(pinned) : auditContribution(pinned)))
+            const merged = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+            console.log(JSON.stringify(await verifyRetentionMerge({ ...options, base: pr.base.sha, head: merged })))
+          } else if (event.merge_group) {
+            console.log(JSON.stringify(await verifyRetentionMerge({ ...options, base: event.merge_group.base_sha, head: event.merge_group.head_sha })))
+          } else {
+            throw new Error('Unsupported guard event')
+          }
+          JS
