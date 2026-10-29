@@ -1,13 +1,14 @@
 import type { RuntimeRequest, RuntimeResponse } from './protocol.js'
 import { deltaCompute } from './delta.js'
 import { failureResponse, parseRequest, requestCapability, RuntimeFault } from './protocol.js'
-import { confirmationCheck, feedbackMatch, frontierQuery, graphValidate, growthMeasure, repositoryInspect } from './queries.js'
+import { confirmationCheck, confirmationRetention, feedbackMatch, frontierQuery, graphValidate, growthMeasure, repositoryInspect } from './queries.js'
 import { transaction } from './transaction.js'
 
 /** 将已通过协议校验的请求分派到对应的只读能力或事务入口。 */
 async function dispatch(root: string, request: RuntimeRequest): Promise<RuntimeResponse> {
   switch (request.capability) {
     case 'confirmation.check': return confirmationCheck(root, request)
+    case 'confirmation.retention': return confirmationRetention(root)
     case 'repository.inspect': return repositoryInspect(root, request)
     case 'frontier.query': return frontierQuery(root, request)
     case 'graph.validate': return graphValidate(root)

@@ -10,6 +10,8 @@ requires:
 Load the Context Operating Skill and Runtime reference. Migrate is a one-time format conversion, not a recurring step
 following rebase. Finish any Git operation and use the compatible old Runtime to resolve old active transactions first.
 
+The 0.8 to 0.9 plugin upgrade keeps format=1 and does not use Migrate.
+
 1. Call `repository.inspect` with `migration: true`; follow the complete paged plan. Only structurally valid legacy
    Context qualifies. Content fingerprint mismatch is allowed; duplicate IDs, unsafe paths, broken relations, conflict
    markers, malformed ledgers and simultaneous old/new entries are not.

@@ -111,6 +111,8 @@ export async function verifyDelivery(packageRoot: string, platform: keyof typeof
   for (const name of ['runtime', 'document', 'meta', 'confirmation']) {
     assert.deepEqual(await fs.readFile(path.join(unit, `schemas/${name}.schema.json`)), await fs.readFile(path.join(packageRoot, `public/schemas/${name}.schema.json`)))
   }
+  for (const name of ['retention.mjs', 'retention.md', 'retention-proposal.yml', 'retention-guard.yml'])
+    assert.deepEqual(await fs.readFile(path.join(unit, 'integrations', name)), await fs.readFile(path.join(packageRoot, 'public/integrations', name)))
   // 交付单元公开的 Skill 目录集合。
   const skills = Object.keys(files).filter(file => file.endsWith('/SKILL.md'))
   assert(skills.length > 0)

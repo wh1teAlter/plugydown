@@ -12,7 +12,7 @@ import type {
 } from './protocol.js'
 import type { JsonObject, JsonValue } from './stable-json.js'
 import { Buffer } from 'node:buffer'
-import { checkConfirmations, readConfirmationStore, selectDocumentIds } from './confirmation.js'
+import { checkConfirmations, currentConfirmation, readConfirmationStore, selectDocumentIds } from './confirmation.js'
 import { bodyFingerprint } from './document.js'
 import { documentMetadata, graphMetrics, loadKnowledge, requiresClosure } from './graph.js'
 import { planLegacyMigration } from './migration.js'
@@ -43,10 +43,11 @@ import {
   readUtf8File,
   RUNS_ROOT,
 } from './repository.js'
+import { planRetention } from './retention.js'
 import { compactJson, compareCodeUnits } from './stable-json.js'
 
 // 检查活动事务时认可的工作流命令集合。
-const TRANSACTION_COMMANDS = new Set(['init', 'update', 'prune', 'migrate'])
+const TRANSACTION_COMMANDS = new Set(['init', 'update', 'prune', 'migrate', 'compact'])
 // 检查活动事务时认可的持久阶段集合。
 const TRANSACTION_PHASES = new Set(['staged', 'validated', 'committing', 'committed', 'restored', 'recovery_required', 'failed'])
 
@@ -104,6 +105,29 @@ async function activeRun(root: string): Promise<{
       return { diagnostics: [diagnostic('ACTIVE_RUN_INVALID', 'The active transaction could not be inspected safely.', 'warning', LOCK_ROOT)] }
     throw error
   }
+}
+
+/**
+ * 在完整一致快照上只读预览集中保留结果，不返回无界身份列表。
+ * @param root - 业务仓库根目录。
+ * @returns 固定大小的保留摘要与快照身份，不创建运行或写锁。
+ * @throws 来源不可用、结构或记录损坏、采样变化时返回上层可封装的 RuntimeFault。
+ * @remarks 调用阶段：主线自动任务判断是否需要 compact；不是语义批准。
+ */
+export async function confirmationRetention(root: string): Promise<RuntimeResponse> {
+  // 两轮采样已经证明图、记录及当前来源属于同一读取快照。
+  const snapshot = await checkConfirmations(root)
+  if (snapshot.graph.sourceState !== 'ready')
+    throw new RuntimeFault('RETENTION_SOURCE_UNAVAILABLE', 'Retention requires complete current source evidence.')
+  const current = new Map([...snapshot.graph.documents.keys()].map(id => [id, currentConfirmation(snapshot.graph, id)!]))
+  const plan = planRetention(snapshot.store, current)
+  return runtimeResponse('confirmation.retention', 'success', {
+    data: {
+      contextFingerprint: snapshot.graph.contextFingerprint!,
+      snapshotFingerprint: snapshot.snapshotFingerprint,
+      retention: { ...plan.summary },
+    },
+  })
 }
 
 /**
@@ -185,18 +209,19 @@ export async function confirmationCheck(root: string, request: RuntimeRequest): 
   const input = request.input as ConfirmationCheckInput
   if (input.scope.kind === 'paths')
     input.scope.paths.forEach(assertSourcePattern)
-  // 选择文档前的结构与必要路径来源快照。
-  const initial = await loadKnowledge(root, undefined, { sourcePolicy: input.scope.kind === 'paths' ? 'all-tolerant' : 'formal-only' })
-  requireFormalReady(initial)
-  // 本次检查的固定文档身份集合。
-  const ids = selectDocumentIds(initial, input.scope)
+  // 全仓检查直接使用两轮完整快照；仅局部选择需要额外的路由快照。
+  const initial = input.scope.kind === 'repository' ? undefined : await loadKnowledge(root, undefined, { sourcePolicy: input.scope.kind === 'paths' ? 'all-tolerant' : 'formal-only' })
+  if (initial !== undefined)
+    requireFormalReady(initial)
+  const selected = initial === undefined ? undefined : selectDocumentIds(initial, input.scope)
   // 经过两轮读取核对的确认与来源事实。
-  const snapshot = await checkConfirmations(root, ids)
+  const snapshot = await checkConfirmations(root, selected)
+  const ids = selected ?? [...snapshot.graph.documents.keys()].sort(compareCodeUnits)
   // 再次核对路径展开，拒绝选定期间出现或消失的文件。
   const selectionCheck = input.scope.kind === 'paths' ? await loadKnowledge(root, undefined, { sourcePolicy: 'all-tolerant' }) : undefined
-  if (selectionCheck !== undefined && (selectionCheck.contextFingerprint !== initial.contextFingerprint || selectionCheck.sourceFingerprint !== initial.sourceFingerprint))
+  if (selectionCheck !== undefined && (selectionCheck.contextFingerprint !== initial!.contextFingerprint || selectionCheck.sourceFingerprint !== initial!.sourceFingerprint))
     throw new RuntimeFault('CHECK_SNAPSHOT_CHANGED', 'Sources changed while resolving the path selection.')
-  if (snapshot.graph.contextFingerprint !== initial.contextFingerprint)
+  if (initial !== undefined && snapshot.graph.contextFingerprint !== initial.contextFingerprint)
     throw new RuntimeFault('CHECK_SNAPSHOT_CHANGED', 'Context changed while selecting Documents.')
   // 规范请求摘要，不无界回显调用方范围列表。
   const requestFingerprint = sha256(compactJson(request.input as unknown as JsonValue))
@@ -207,7 +232,7 @@ export async function confirmationCheck(root: string, request: RuntimeRequest): 
   // 将下一位置绑定到同一完整快照的续读令牌。
   const cursorFor = (next: CursorPosition): string => encodeCursor(request.capability, request.input, snapshot.graph.contextFingerprint!, fingerprint, next)
   // 完整仓库与请求范围的覆盖计数，不是当前页条数。
-  const counts = { documents: initial.documents.size, checked: ids.length, matched: 0, unmatched: 0, unavailable: 0, unchecked: initial.documents.size - ids.length }
+  const counts = { documents: snapshot.graph.documents.size, checked: ids.length, matched: 0, unmatched: 0, unavailable: 0, unchecked: snapshot.graph.documents.size - ids.length }
   for (const item of snapshot.items) {
     if (item.confirmationState !== 'unchecked')
       counts[item.confirmationState] += 1

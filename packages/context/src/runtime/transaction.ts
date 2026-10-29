@@ -2,8 +2,10 @@ import type { ConfirmationRecord } from './confirmation.js'
 import type { ContextDocument, ConvergenceBaseline, DocumentLedger, MetadataManifest } from './document.js'
 import type { KnowledgeGraph } from './graph.js'
 import type { Diagnostic, RuntimeRequest, RuntimeResponse, Scope, TransactionApproval, TransactionBeginInput, TransactionCommand, TransactionCommitInput, TransactionMode, TransactionResumeInput, TransactionValidateInput } from './protocol.js'
-import type { GitEvidence, SourceExpansionResult } from './repository.js'
+import type { GitEvidence, SourceExpansionResult, TreeFile } from './repository.js'
+import type { RetentionSummary } from './retention.js'
 import type { JsonValue } from './stable-json.js'
+import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -13,6 +15,7 @@ import { graphMetrics, loadKnowledge } from './graph.js'
 import { planLegacyMigration } from './migration.js'
 import { diagnostic, FORMAT, isRecord, RuntimeFault, sha256, transactionResponse } from './protocol.js'
 import { assertGitEvidencePath, assertSourcePattern, CONTEXT_ROOT, declarationMatches, expandSourcePatternSets, filesystemOperation, fingerprintTree, LOCK_KIND, LOCK_ROOT, lstatRepositoryPath, MAX_JSON_TEXT_BYTES, readGitEvidence, readLockOwner, readTree, readUtf8File, resolveRepositoryPath, resolveRepositoryRoot, RUNS_ROOT, SCRATCH_ROOT, throwFilesystemFault } from './repository.js'
+import { planRetention } from './retention.js'
 import { compareCodeUnits, stableJson } from './stable-json.js'
 
 // 事务清单的持久格式标识。
@@ -38,8 +41,24 @@ export type TransactionPhase
     | 'recovery_required'
     | 'failed'
 
+/** 集中清理在 begin 冻结的删除计划与来源、权限证据。 */
+interface CompactBasis {
+  /** 仅可从候选删除的完整确认 key。 */
+  readonly removedKeys: readonly string[]
+  /** begin 冻结的完整来源证据，不因重新验证推进。 */
+  readonly sourceEvidenceFingerprint: string
+  /** 原始树的路径及 POSIX 权限摘要。 */
+  readonly originalModesFingerprint: string
+  /** 计划保留路径的 POSIX 权限摘要，供切换与恢复复验。 */
+  readonly retainedModesFingerprint: string
+  /** 同一冻结计划的公开统计。 */
+  readonly summary: RetentionSummary
+}
+
 /** 事务建立时冻结的身份、授权和快照，所有后续阶段共享这些事实。 */
 interface ManifestBase {
+  /** 仅 compact 使用；旧 Runtime 会拒绝未知命令，不接管清理事务。 */
+  readonly compact?: CompactBasis
   /** 持久事务清单格式标识。 */
   readonly kind: typeof TRANSACTION_KIND
   /** 与公开协议共用的兼容代号。 */
@@ -158,6 +177,7 @@ function validatedPair(manifest: ValidatedManifest): ValidatedPair {
 function baseFacts(manifest: TransactionManifest): ManifestBase {
   return {
     kind: manifest.kind,
+    ...(manifest.compact === undefined ? {} : { compact: manifest.compact }),
     format: manifest.format,
     derivedConfirmationKeys: manifest.derivedConfirmationKeys,
     derivedMetadataFingerprints: manifest.derivedMetadataFingerprints,
@@ -293,17 +313,34 @@ function parseRecovery(value: unknown): { readonly intent: 'restore_backup' } | 
   throw new RuntimeFault('TRANSACTION_MANIFEST_INVALID', 'The transaction recovery fact is invalid.')
 }
 
+/** 严格解析集中清理的冻结证据，不接受额外字段或不一致计数。 */
+function parseCompactBasis(value: unknown): CompactBasis {
+  if (!isRecord(value) || !exactKeys(value, ['removedKeys', 'sourceEvidenceFingerprint', 'originalModesFingerprint', 'retainedModesFingerprint', 'summary'])
+    || !validHashes(value.removedKeys)
+    || ![value.sourceEvidenceFingerprint, value.originalModesFingerprint, value.retainedModesFingerprint].every(item => typeof item === 'string' && HASH.test(item))
+    || !isRecord(value.summary)
+    || !exactKeys(value.summary, ['beforeCount', 'afterCount', 'removedCount', 'activeIdentityCount', 'retiredIdentityCount', 'triggered', 'planFingerprint'])
+    || !['beforeCount', 'afterCount', 'removedCount', 'activeIdentityCount', 'retiredIdentityCount'].every(key => Number.isSafeInteger((value.summary as Record<string, unknown>)[key]) && Number((value.summary as Record<string, unknown>)[key]) >= 0)
+    || typeof value.summary.triggered !== 'boolean'
+    || typeof value.summary.planFingerprint !== 'string' || !HASH.test(value.summary.planFingerprint)
+    || value.summary.removedCount !== value.removedKeys.length
+    || Number(value.summary.beforeCount) !== Number(value.summary.afterCount) + Number(value.summary.removedCount)) {
+    throw new RuntimeFault('TRANSACTION_MANIFEST_INVALID', 'The compact basis is invalid.')
+  }
+  return value as unknown as CompactBasis
+}
+
 /** 严格解析事务清单并检查阶段、快照与批准的交叉约束。 */
 function parseManifest(value: unknown): TransactionManifest {
   if (!isRecord(value) || !exactKeys(
     value,
     ['kind', 'format', 'derivedConfirmationKeys', 'derivedMetadataFingerprints', 'runId', 'command', 'mode', 'dryRun', 'scope', 'phase', 'gitEvidencePath', 'evidencePaths', 'snapshot'],
-    ['migrationStrategy', 'confirmedDocumentIds', 'candidateFingerprint', 'sourceEvidenceFingerprint', 'approval', 'recovery'],
+    ['migrationStrategy', 'confirmedDocumentIds', 'candidateFingerprint', 'sourceEvidenceFingerprint', 'approval', 'recovery', 'compact'],
   )
   || value.kind !== TRANSACTION_KIND || value.format !== FORMAT
   || !validHashes(value.derivedConfirmationKeys) || !validHashes(value.derivedMetadataFingerprints)
   || typeof value.runId !== 'string' || !UUID.test(value.runId)
-  || (value.command !== 'init' && value.command !== 'update' && value.command !== 'prune' && value.command !== 'migrate')
+  || (value.command !== 'init' && value.command !== 'update' && value.command !== 'prune' && value.command !== 'migrate' && value.command !== 'compact')
   || (value.mode !== 'light' && value.mode !== 'deep')
   || typeof value.dryRun !== 'boolean'
   || !validScope(value.scope)
@@ -336,6 +373,11 @@ function parseManifest(value: unknown): TransactionManifest {
   }
   if (value.confirmedDocumentIds !== undefined && value.command !== 'update')
     throw new RuntimeFault('TRANSACTION_MANIFEST_INVALID', 'Only Update can confirm existing Documents.')
+  if (value.command === 'compact'
+    ? value.mode !== 'deep' || value.scope.kind !== 'repository' || value.snapshot.contextState !== 'present' || value.compact === undefined
+    : value.compact !== undefined) {
+    throw new RuntimeFault('TRANSACTION_MANIFEST_INVALID', 'Only a deep repository compact run carries a compact basis.')
+  }
   if (new Set(value.evidencePaths as string[]).size !== value.evidencePaths.length)
     throw new RuntimeFault('TRANSACTION_MANIFEST_INVALID', 'Transaction evidence paths must be unique.')
   try {
@@ -363,6 +405,7 @@ function parseManifest(value: unknown): TransactionManifest {
   // 已通过交叉校验的事务基础事实。
   const base: ManifestBase = {
     kind: TRANSACTION_KIND,
+    ...(value.command === 'compact' ? { compact: parseCompactBasis(value.compact) } : {}),
     format: FORMAT,
     derivedConfirmationKeys: value.derivedConfirmationKeys as string[],
     derivedMetadataFingerprints: value.derivedMetadataFingerprints as string[],
@@ -465,6 +508,8 @@ async function atomicWriteJson(root: string, relative: string, value: JsonValue,
 
 /** 原子持久化事务当前阶段及其事实。 */
 async function writeManifest(root: string, manifest: TransactionManifest): Promise<void> {
+  if (Buffer.byteLength(stableJson(manifest as unknown as JsonValue)) > MAX_JSON_TEXT_BYTES)
+    throw new RuntimeFault('TRANSACTION_MANIFEST_TOO_LARGE', 'The transaction manifest exceeds its read limit.')
   await atomicWriteJson(root, manifestPath(manifest.runId), manifest as unknown as JsonValue)
 }
 
@@ -624,6 +669,10 @@ async function transactionSourceFacts(root: string, graph: KnowledgeGraph, decla
 
 /** 校验工作流前置状态和冻结授权，Repair 仅放行受限内容失配。 */
 async function validateBeginInput(input: TransactionBeginInput, live: KnowledgeGraph, git: GitEvidence): Promise<void> {
+  if (input.command === 'compact' && (input.mode !== 'deep' || input.scope.kind !== 'repository'
+    || live.sourceState !== 'ready' || git.midOperation || git.hasUnmergedPaths || git.changes.length > 0)) {
+    throw new RuntimeFault('COMPACT_PRECONDITION_FAILED', 'Compact requires deep repository scope, complete sources and a clean checkout outside Git operations.')
+  }
   if (input.command === 'migrate') {
     if (input.mode !== 'deep' || input.scope.kind !== 'repository' || input.migrationStrategy === undefined)
       throw new RuntimeFault('TRANSACTION_SCOPE_INVALID', 'Migration requires deep repository scope and an explicit strategy.')
@@ -724,6 +773,8 @@ async function transactionBegin(root: string, input: TransactionBeginInput): Pro
     await readConfirmationStore(root, FORMAT)
   // 事务开始时显式证据的指纹，后续必须保持一致。
   const evidenceFingerprint = await declaredEvidenceFingerprint(root, input.evidencePaths)
+  // 在获取锁和生成候选前固定整个机械计划，后续来源变化必须重新 begin。
+  const compact = input.command === 'compact' ? await compactBasis(root, live, input.evidencePaths) : undefined
   // 当前事务的 UUID，也是其运行目录和写锁的所有权标识。
   const runId = randomUUID()
   // 原子竞争写锁后的实际所有者状态。
@@ -753,6 +804,7 @@ async function transactionBegin(root: string, input: TransactionBeginInput): Pro
     await filesystemOperation(() => fs.mkdir(directory), runPath(runId))
     manifest = {
       kind: TRANSACTION_KIND,
+      ...(compact === undefined ? {} : { compact }),
       format: FORMAT,
       derivedConfirmationKeys: [],
       derivedMetadataFingerprints: [],
@@ -1190,6 +1242,148 @@ async function recoverDerivedTemps(root: string, manifest: TransactionManifest):
   }
 }
 
+/** 提取唯一允许淘汰的记录身份；其他文件不属于删除集合。 */
+function compactRecordKey(relative: string): string | undefined {
+  return /^\.meta\/confirmations\/[a-z0-9.-]+\/([a-f0-9]{64})\.json$/.exec(relative)?.[1]
+}
+
+/** 给 compact 单独绑定原有权限，保持旧格式的公开树指纹算法。 */
+function compactModes(files: readonly TreeFile[], treePath: string): string {
+  return sha256(stableJson(files.map(file => ({ path: file.path.slice(treePath.length + 1), mode: file.mode }))))
+}
+
+/** 重新从完整原始记录与当前来源计算机械计划，不接受候选自行声明的保留集。 */
+async function compactBasis(root: string, graph: KnowledgeGraph, evidencePaths: readonly string[]): Promise<CompactBasis> {
+  if (graph.formalState !== 'ready')
+    throw new RuntimeFault('COMPACT_CONTEXT_INVALID', 'Compact requires valid current Context.')
+  // 从当前源码实际读取的完整证据，不能用存储中的历史来源摘要替代。
+  const sources = await transactionSourceFacts(root, graph, evidencePaths)
+  if (sources.expansion.issues.length > 0)
+    throw new RuntimeFault('COMPACT_SOURCE_UNAVAILABLE', 'Compact requires complete current sources.')
+  // 覆盖每个活跃文档，使来源缺失不能被误分类为退休身份。
+  const current = new Map<string, ConfirmationRecord>()
+  for (const id of graph.documents.keys()) {
+    // 当前文档的实际三项输入摘要。
+    const ledger = sources.ledgers.get(id)
+    if (ledger === undefined)
+      throw new RuntimeFault('COMPACT_SOURCE_UNAVAILABLE', 'Every active Document needs complete source evidence.')
+    current.set(id, { documentId: id, ...ledger })
+  }
+  // 只从已验证的完整历史选择子集。
+  const plan = planRetention(await readConfirmationStore(root, FORMAT), current)
+  // 独立保存权限约束，避免改变 0.8 的公开树指纹算法。
+  const files = await readTree(root, CONTEXT_ROOT)
+  // 计划允许缺失的身份，仅用于计算目标权限快照。
+  const removed = new Set(plan.removedKeys)
+  return {
+    removedKeys: plan.removedKeys,
+    sourceEvidenceFingerprint: sources.sourceEvidenceFingerprint,
+    originalModesFingerprint: compactModes(files, CONTEXT_ROOT),
+    retainedModesFingerprint: compactModes(files.filter(file => !removed.has(compactRecordKey(file.path.slice(CONTEXT_ROOT.length + 1)) ?? '')), CONTEXT_ROOT),
+    summary: plan.summary,
+  }
+}
+
+/** 核对完整候选；只允许已冻结记录缺失，所有其他文件必须与原树逐字节、逐权限相等。 */
+async function assertCompactCandidate(root: string, manifest: TransactionManifest, complete: boolean): Promise<readonly TreeFile[]> {
+  // 由 begin 冻结并在当前阶段重新推导核对的机械计划。
+  const basis = manifest.compact!
+  // 当前 run 独占的候选根目录。
+  const destination = candidatePath(manifest.runId)
+  // 正式原树仍是完整历史和存活文件字节的唯一来源。
+  const before = await readTree(root, CONTEXT_ROOT)
+  // 实际候选可能处于部分删除后的可恢复状态。
+  const after = await readTree(root, destination)
+  if (compactModes(before, CONTEXT_ROOT) !== basis.originalModesFingerprint)
+    throw new RuntimeFault('COMPACT_BASIS_CHANGED', 'Original permissions changed; abandon and begin a fresh compact run.')
+  // 遍历原树时逐项扣除，剩余条目就是未经允许的新增。
+  const candidate = new Map(after.map(file => [file.path.slice(destination.length + 1), file]))
+  // 任何缺失记录都必须在此允许集合内。
+  const removed = new Set(basis.removedKeys)
+  for (const file of before) {
+    // 两个根目录之间以相同的 Context 相对路径对齐。
+    const relative = file.path.slice(CONTEXT_ROOT.length + 1)
+    // 与原始文件对应的实际候选条目。
+    const next = candidate.get(relative)
+    // 完成阶段还要确认计划目标确实已删除，而非仅允许其缺失。
+    const removable = removed.has(compactRecordKey(relative) ?? '')
+    if (next === undefined ? !removable : next.mode !== file.mode || !next.bytes.equals(file.bytes) || (complete && removable))
+      throw new RuntimeFault('COMPACT_CANDIDATE_CHANGED', 'Compact only permits its planned confirmation deletions.', `context/${relative}`)
+    candidate.delete(relative)
+  }
+  if (candidate.size !== 0 || (complete && compactModes(after, destination) !== basis.retainedModesFingerprint))
+    throw new RuntimeFault('COMPACT_CANDIDATE_CHANGED', 'Compact cannot add files or change retained permissions.')
+  return before
+}
+
+/** 重证 compact 的冻结计划、候选和完整来源，用于最终验证、批准及恢复前拒旧。 */
+async function compactValidatedFacts(root: string, manifest: TransactionManifest): Promise<ValidatedFacts> {
+  // 原树结构与当前来源分开读取，后者必须匹配冻结证据。
+  const live = await loadKnowledge(root, undefined, { sourcePolicy: 'formal-only' })
+  // 重新计算而非信任候选提供的删除集合。
+  const basis = await compactBasis(root, live, manifest.evidencePaths)
+  if (stableJson(basis as unknown as JsonValue) !== stableJson(manifest.compact as unknown as JsonValue))
+    throw new RuntimeFault('COMPACT_BASIS_CHANGED', 'Compact inputs changed; abandon and begin from the new mainline snapshot.')
+  await assertCompactCandidate(root, manifest, true)
+  // 删除后的正式形状仍需完整解析和记录校验。
+  const graph = await loadKnowledge(root, candidatePath(manifest.runId), { sourcePolicy: 'formal-only' })
+  if (graph.formalState !== 'ready' || graph.contextFingerprint === undefined)
+    throw new RuntimeFault('CANDIDATE_INVALID', 'The retained Context must remain structurally valid.')
+  await readConfirmationStore(root, FORMAT, candidatePath(manifest.runId))
+  // 再次采样，拒绝多个 await 之间改变的源码或文件集合。
+  const sources = await transactionSourceFacts(root, graph, manifest.evidencePaths)
+  if (sources.expansion.issues.length > 0 || sources.sourceEvidenceFingerprint !== basis.sourceEvidenceFingerprint
+    || await fingerprintTree(root, candidatePath(manifest.runId)) !== graph.contextFingerprint) {
+    throw new RuntimeFault('COMPACT_BASIS_CHANGED', 'Sources or candidate changed during compact validation.')
+  }
+  await assertCompactCandidate(root, manifest, true)
+  return { graph, candidateFingerprint: graph.contextFingerprint, sourceEvidenceFingerprint: sources.sourceEvidenceFingerprint }
+}
+
+/** 在现有候选中幂等删除冻结目标，随后使用同一验证和终态清理机制。 */
+async function validateCompact(root: string, manifest: TransactionManifest): Promise<RuntimeResponse> {
+  // 只从原树重新建立计划，候选不能自己宣告哪些记录可以删除。
+  const live = await loadKnowledge(root, undefined, { sourcePolicy: 'formal-only' })
+  // 本次实际推导必须与 begin 冻结值完全一致。
+  const actual = await compactBasis(root, live, manifest.evidencePaths)
+  if (stableJson(actual as unknown as JsonValue) !== stableJson(manifest.compact as unknown as JsonValue))
+    throw new RuntimeFault('COMPACT_BASIS_CHANGED', 'Compact inputs changed; abandon and begin again.')
+  // 允许已登记删除部分完成，以便幂等验证。
+  const before = await assertCompactCandidate(root, manifest, false)
+  // 物理删除只遍历原树中与计划匹配的记录。
+  const removed = new Set(actual.removedKeys)
+  for (const file of before) {
+    // 原树与候选中的同一路径。
+    const relative = file.path.slice(CONTEXT_ROOT.length + 1)
+    if (!removed.has(compactRecordKey(relative) ?? ''))
+      continue
+    // 所有删除都局限于当前 run 的候选目录。
+    const target = `${candidatePath(manifest.runId)}/${relative}`
+    if (await lstatRepositoryPath(root, target) !== undefined) {
+      // 沿用 Runtime 的路径安全解析，拒绝链接与越界。
+      const absolute = await resolveRepositoryPath(root, target)
+      await filesystemOperation(() => fs.rm(absolute), target)
+    }
+  }
+  // 完成删除后再证明候选、来源及权限，供批准绑定。
+  const facts = await compactValidatedFacts(root, manifest)
+  await assertPreSwitchSnapshotFresh(root, manifest)
+  if (facts.candidateFingerprint === manifest.snapshot.contextFingerprint) {
+    await cleanupTerminalArtifacts(root, manifest)
+    return transactionResponse({ outcome: 'no_change', runId: manifest.runId, contextFingerprint: facts.candidateFingerprint })
+  }
+  // 仅保存已复验的双指纹，不产生新的语义确认。
+  const validated: TransactionManifest = { ...baseFacts(manifest), phase: 'validated', candidateFingerprint: facts.candidateFingerprint, sourceEvidenceFingerprint: facts.sourceEvidenceFingerprint }
+  await writeManifest(root, validated)
+  // 公开摘要不包含无界记录列表或机器路径。
+  const result = { runId: manifest.runId, candidateFingerprint: facts.candidateFingerprint, sourceEvidenceFingerprint: facts.sourceEvidenceFingerprint, retention: { ...actual.summary } }
+  if (manifest.dryRun) {
+    await cleanupTerminalArtifacts(root, validated)
+    return transactionResponse({ outcome: 'validated', ...result })
+  }
+  return transactionResponse({ outcome: 'ready_for_review', ...result })
+}
+
 /** 校验候选与授权、推导确认并绑定源码证据；dry-run 在此安全结束。 */
 async function transactionValidate(root: string, input: TransactionValidateInput): Promise<RuntimeResponse> {
   // 已解析的事务阶段、冻结输入和恢复事实。
@@ -1211,6 +1405,8 @@ async function transactionValidate(root: string, input: TransactionValidateInput
 
   try {
     await recoverDerivedTemps(root, manifest)
+    if (manifest.command === 'compact')
+      return await validateCompact(root, manifest)
     // 是否执行历史转换；迁移不确认当前源码。
     const migration = manifest.command === 'migrate' ? await planLegacyMigration(root, manifest.migrationStrategy) : undefined
     // 正式 Context 快照；只读，不由候选编写者修改。
@@ -1311,6 +1507,8 @@ async function validatedFacts(root: string, manifest: TransactionManifest): Prom
   /** 当前候选引用源码与显式证据的整体 SHA-256 指纹。 */
   readonly sourceEvidenceFingerprint: string
 }> {
+  if (manifest.command === 'compact')
+    return compactValidatedFacts(root, manifest)
   // 本次调用读取的知识快照，后续判断都以它为依据。
   const graph = await loadKnowledge(root, candidatePath(manifest.runId), { sourcePolicy: 'formal-only' })
   if (graph.formalState !== 'ready' || graph.contextFingerprint === undefined)
@@ -1390,10 +1588,24 @@ function isBackupFact(manifest: TransactionManifest, fact: TreeFact): boolean {
 
 /** 并行读取三个目录副本，供恢复决策使用。 */
 async function readRecoveryFacts(root: string, manifest: TransactionManifest): Promise<RecoveryFacts> {
+  /** compact 的可信副本还需匹配冻结权限，避免只凭旧版字节指纹恢复。 */
+  const read = async (treePath: string): Promise<TreeFact> => {
+    const fact = await treeFact(root, treePath)
+    if (manifest.compact !== undefined && fact.state === 'valid') {
+      const expected = fact.fingerprint === manifest.snapshot.contextFingerprint
+        ? manifest.compact.originalModesFingerprint
+        : 'candidateFingerprint' in manifest && fact.fingerprint === manifest.candidateFingerprint
+          ? manifest.compact.retainedModesFingerprint
+          : undefined
+      if (expected !== undefined && compactModes(await readTree(root, treePath), treePath) !== expected)
+        return { state: 'invalid' }
+    }
+    return fact
+  }
   const [live, candidate, backup] = await Promise.all([
-    treeFact(root, CONTEXT_ROOT),
-    treeFact(root, candidatePath(manifest.runId)),
-    treeFact(root, backupPath(manifest.runId)),
+    read(CONTEXT_ROOT),
+    read(candidatePath(manifest.runId)),
+    read(backupPath(manifest.runId)),
   ])
   return { live, candidate, backup }
 }
@@ -1423,6 +1635,8 @@ async function finalizeCommitted(
   const live = await treeFact(root, CONTEXT_ROOT)
   if (!isCandidateFact(manifest, live))
     throw new RuntimeFault('FINAL_VERIFICATION_FAILED', 'Committed Context does not match the approved candidate.')
+  if (manifest.compact !== undefined && compactModes(await readTree(root, CONTEXT_ROOT), CONTEXT_ROOT) !== manifest.compact.retainedModesFingerprint)
+    throw new RuntimeFault('FINAL_VERIFICATION_FAILED', 'Committed permissions do not match the compact plan.')
   // 本次调用读取的知识快照，后续判断都以它为依据。
   const graph = await loadKnowledge(root, undefined, { sourcePolicy: 'formal-only' })
   if (graph.formalState !== 'ready' || graph.contextFingerprint !== manifest.candidateFingerprint)
@@ -1728,7 +1942,7 @@ async function resumeValidated(root: string, manifest: ValidatedManifest): Promi
     await cleanupTerminalArtifacts(root, manifest)
     return response
   }
-  return transactionResponse({ outcome: 'ready_for_review', runId: manifest.runId, candidateFingerprint, sourceEvidenceFingerprint })
+  return transactionResponse({ outcome: 'ready_for_review', runId: manifest.runId, candidateFingerprint, sourceEvidenceFingerprint, ...(manifest.compact === undefined ? {} : { retention: { ...manifest.compact.summary } }) })
 }
 
 /** 重新证明清单记录的终态与当前副本一致后才清理现场。 */

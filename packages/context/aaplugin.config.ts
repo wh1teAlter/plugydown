@@ -68,6 +68,8 @@ export default defineConfig({
     dir: 'public',
     copy: [
       { from: 'schemas', to: 'schemas' },
+      // 与宿主平台无关的仓库 CI 适配器，所有交付单元使用同一份资源。
+      { from: 'integrations', to: 'integrations' },
     ],
   },
   build: {

@@ -12,9 +12,23 @@ Plugydown Context 为 AI 编码助手提供可路由、可验证、可收敛的�
 | `update` | 同步获得授权范围内的持久工程事实 |
 | `prune` | 在保留唯一知识和源码覆盖的前提下收敛知识 |
 | `migrate` | 将旧账本显式迁移为不可变确认，保留历史依据和基线 |
+| `compact` | 由单一主线维护流程淘汰部分历史确认，保留当前判断及存活文件原字节 |
 
 产品支持 Claude Code、Codex、Cursor、Antigravity CLI、OpenCode 与 Pi。Investigator 建立工程事实，Reflector 整理可复用的临时反馈，
 Recorder 是 transaction candidate 的唯一语义作者；Main Assistant 负责授权边界和最终批准。
+
+## 0.9 与确认保留
+
+0.9 继续使用 0.8 的 `format: 1` 和四字段确认文件，不需要迁移；0.8 客户端仍能读写。
+普通 Update/Prune 只追加或保留记录。集中 `compact` 才能清理：活跃文档保留至多 10 条，
+已删除的文档 ID 留 1 条真实记录；自动维护在某个 ID 超过 20 条时批量触发。
+
+上限在主线清理后成立，未合入主线的开发分支可暂时超出。清理不改变当前精确匹配、正文已确认及来源状态，
+不新增语义确认。回到被淘汰的历史版本可能需要再次核对。
+
+安装插件不会自动改 Git 配置或启用仓库自动化。需要接入单一维护 PR 生产者及 PR/合并队列校验，
+参见 [接入说明](public/integrations/retention.md) 和随交付提供的 `integrations/` 模板。
+维护 PR 仍遵守已有检查、审批及分支保护。
 
 ## 安装
 

@@ -1,3 +1,4 @@
+import type { RetentionSummary } from './retention.js'
 import type { JsonObject, JsonValue } from './stable-json.js'
 import { Buffer } from 'node:buffer'
 import { createHash, timingSafeEqual } from 'node:crypto'
@@ -15,6 +16,7 @@ export const READ_CAPABILITIES = [
   'frontier.query',
   'graph.validate',
   'confirmation.check',
+  'confirmation.retention',
   'delta.compute',
   'growth.measure',
   'feedback.match',
@@ -154,7 +156,7 @@ export interface FeedbackMatchInput {
 }
 
 /** 事务所属的 Init、Update、Prune 或 Migrate 工作流。 */
-export type TransactionCommand = 'init' | 'update' | 'prune' | 'migrate'
+export type TransactionCommand = 'init' | 'update' | 'prune' | 'migrate' | 'compact'
 /** 宿主选择的语义审查深度，不代表 Runtime 调用了模型。 */
 export type TransactionMode = 'light' | 'deep'
 
@@ -434,6 +436,8 @@ export type TransactionOutcome
   }
   | {
     readonly outcome: 'ready_for_review'
+    /** 仅集中清理返回；普通事务响应不变。 */
+    readonly retention?: RetentionSummary
     /** Runtime 生成的事务 UUID，也是运行目录和写锁所有权标识。 */
     readonly runId: string
     /** 已验证候选完整目录树的 SHA-256 指纹。 */
@@ -476,6 +480,8 @@ export type TransactionOutcome
   }
   | {
     readonly outcome: 'validated'
+    /** 仅集中清理 dry-run 返回的机械摘要。 */
+    readonly retention?: RetentionSummary
     /** Runtime 生成的事务 UUID，也是运行目录和写锁所有权标识。 */
     readonly runId: string
     /** 已验证候选完整目录树的 SHA-256 指纹。 */
@@ -575,7 +581,7 @@ export function transactionResponse(
     format: FORMAT,
     capability: 'transaction',
     status,
-    data: { ...result, ...derived } as JsonObject,
+    data: { ...result, ...derived, ...(result.outcome === 'ready_for_review' && result.retention !== undefined ? { nextAction: 'retention_review' } : {}) } as JsonObject,
     ...(sorted === undefined || sorted.length === 0 ? {} : { diagnostics: sorted }),
   }
 }
@@ -824,12 +830,14 @@ function parseTransactionInput(action: TransactionAction, value: unknown): Trans
     // 当前协议对象需要校验的业务字段集合。
     const fields = ['command', 'mode', 'dryRun', 'scope', 'gitEvidencePath', 'evidencePaths'] as const
     assertExactKeys(value, [...fields, 'confirmedDocumentIds', 'migrationStrategy'], fields, 'transaction.begin input')
-    if (value.command !== 'init' && value.command !== 'update' && value.command !== 'prune' && value.command !== 'migrate')
+    if (value.command !== 'init' && value.command !== 'update' && value.command !== 'prune' && value.command !== 'migrate' && value.command !== 'compact')
       throw new RuntimeFault('REQUEST_FIELD_INVALID', 'transaction.begin command is unknown.')
     if (value.mode !== 'light' && value.mode !== 'deep')
       throw new RuntimeFault('REQUEST_FIELD_INVALID', 'transaction.begin mode must be light or deep.')
     if (value.command === 'migrate' ? !['import-trusted', 'reconfirm'].includes(String(value.migrationStrategy)) : value.migrationStrategy !== undefined)
       throw new RuntimeFault('REQUEST_FIELD_INVALID', 'Only migrate requires an explicit migrationStrategy.')
+    if (value.command === 'compact' && (value.mode !== 'deep' || !isRecord(value.scope) || value.scope.kind !== 'repository' || value.confirmedDocumentIds !== undefined))
+      throw new RuntimeFault('REQUEST_FIELD_INVALID', 'Compact requires deep repository scope without confirmations.')
     return {
       command: value.command,
       ...(value.command === 'migrate' ? { migrationStrategy: value.migrationStrategy as 'import-trusted' | 'reconfirm' } : {}),
@@ -942,6 +950,7 @@ export function parseRequest(raw: unknown): RuntimeRequest {
       input = parseFrontierInput(raw.input)
       break
     case 'graph.validate':
+    case 'confirmation.retention':
       input = emptyInput(raw.input, capability)
       break
     case 'confirmation.check':
